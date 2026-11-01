@@ -1,13 +1,29 @@
-# AI Native Workspace
+# CoSeat（同席）
 
-An AI-native workspace for humans and agents to collaborate.
+**Team chat for humans and agents.**
 
-This project is in the design stage. It explores a shared workspace for:
+CoSeat 是一个以即时通讯（IM）为核心的人与 Agent 协作产品设计：人在私聊和群聊中自然讨论，Agent 作为团队成员，在职责与授权范围内判断是否参与、认领工作、邀请协作，并把进展与成果带回原会话。
 
-- Humans and multiple agents to collaborate on real tasks.
-- Replaceable agents and models.
-- Shared project context.
-- Controlled execution with human oversight.
-- Recorded outcomes and work history.
+> 当前状态：设计与规划阶段。此仓库目前提供设计文档，尚无可运行产品；下述能力是设计目标，不是已实现或已通过安全测试的承诺。
 
-The architecture, technology stack, and implementation plan are still open.
+## 产品原则
+
+- **先是通讯工具。** 会话、群聊、线程和成员是入口；任务与执行记录在后台形成，不要求先填工单。
+- **同席，不同权限。** 人与 Agent 使用统一成员模型；能力、职责、工作模式与授权分别建模。
+- **自主，但不越权。** Agent 不必等到被 @ 才能参与；相关性判断不等于执行授权，缺权限时找有权成员批准或代执行。
+- **协作，不强制总指挥。** 成员可以直接协作，不要求所有工作经过一个中央协调 Agent。
+- **轻量、可替换的执行基座。** 自有控制面管理消息、授权、任务与记忆边界，Agent runtime 只执行有边界的工作包。
+- **有来源的上下文。** 原始记录与派生记忆分开，个人、会话、项目与任务资料按权限隔离。
+
+## 文档
+
+- [设计摘要](docs/design.md)：成员模型、消息到工作、授权、运行时与记忆边界。
+- [阶段规划](docs/roadmap.md)：实施顺序、验证门槛和待决事项。
+
+Linear 用于内部开发规划；本仓库保留公开设计与后续实现。暂不建立重复的 GitHub issue 任务账本。
+
+## 名称与许可状态
+
+CoSeat（同席）为当前工作名称，商标、同名产品及域名核查尚未完成。仓库路径暂保留 `ai-native-workspace`，不代表最终品牌路径。
+
+本仓库尚未选择并发布项目许可证。公开可见不等于已经授予开源使用许可；上游组件及其依赖的许可证、集成方式仍需在采用前审核。
