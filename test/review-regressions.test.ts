@@ -1,10 +1,74 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { DEV } from '../src/dev-fixture.js';
 import { requestJson } from '../src/http.js';
 import { CoSeatTools } from '../src/worker/coseat-tools.js';
 import { fakeExecution } from '../src/worker/fake.js';
 import { environment, gate, scope, waitFor } from './helpers.js';
+
+test('cancel resumes reconciliation after dispatcher polling failed, without another user click', async t => {
+  const hold = gate(), started = gate();
+  const env = await environment(async () => { started.release(); await hold.promise; });
+  t.after(async () => { hold.release(); await env.dispose(); });
+  const originalEvents = env.runtimeClient.events.bind(env.runtimeClient);
+  let first = true;
+  env.runtimeClient.events = async (...args) => {
+    if (first) { first = false; await started.promise; throw new Error('temporary_poll_failure'); }
+    return originalEvents(...args);
+  };
+  await env.post();
+  const run = await waitFor(() => [...env.state.runs.values()].find(r => r.status === 'unknown'));
+  await env.app.drain();
+  const response = await requestJson<{ status: string }>(env.url, DEV.humanToken, `/runs/${run.id}/cancel`, {});
+  assert.equal(response.status, 'cancel_requested');
+  hold.release();
+  await waitFor(() => env.runtime.status(run.sessionId!).status === 'stopped' ? true : undefined);
+  await waitFor(() => run.status === 'stopped' ? true : undefined, 1000);
+  assert.equal(run.events.find(e => e.kind === 'stopped')?.data.executionSettled, true);
+  assert.equal(run.error, undefined);
+});
+
+test('concurrent cancellation shares one RPC and one in-flight event read with the dispatcher', async t => {
+  const hold = gate();
+  const env = await environment(async () => { await hold.promise; });
+  t.after(async () => { hold.release(); await env.dispose(); });
+  let cancellations = 0, activeReads = 0, maxReads = 0;
+  const originalCancel = env.runtimeClient.cancel.bind(env.runtimeClient);
+  const originalEvents = env.runtimeClient.events.bind(env.runtimeClient);
+  env.runtimeClient.cancel = async id => { cancellations++; await delay(10); return originalCancel(id); };
+  env.runtimeClient.events = async (...args) => {
+    activeReads++; maxReads = Math.max(maxReads, activeReads);
+    try { await delay(10); return await originalEvents(...args); } finally { activeReads--; }
+  };
+  await env.post();
+  const run = await waitFor(() => [...env.state.runs.values()].find(r => r.status === 'running'));
+  await Promise.all(Array.from({ length: 6 }, () => requestJson(env.url, DEV.humanToken, `/runs/${run.id}/cancel`, {})));
+  assert.equal(cancellations, 1);
+  assert.equal(maxReads, 1);
+  assert.equal(run.status, 'cancel_requested');
+  hold.release(); await waitFor(() => run.status === 'stopped' ? true : undefined);
+  assert.equal(cancellations, 1);
+  assert.equal(maxReads, 1);
+});
+
+test('cancellation reconciliation expires as unknown when no stop evidence can be read', async t => {
+  const hold = gate();
+  const env = await environment(async () => { await hold.promise; }, true, 100);
+  t.after(async () => { hold.release(); await env.dispose(); });
+  await env.post();
+  const run = await waitFor(() => [...env.state.runs.values()].find(r => r.status === 'running'));
+  let reads = 0;
+  env.runtimeClient.events = async () => { reads++; throw new Error('offline'); };
+  await waitFor(() => run.status === 'unknown' ? true : undefined); await env.app.drain();
+  await requestJson(env.url, DEV.humanToken, `/runs/${run.id}/cancel`, {});
+  await waitFor(() => run.status === 'unknown' ? true : undefined, 1000); await env.app.drain();
+  assert.equal(run.error, 'runtime_stop_unconfirmed');
+  assert.equal(run.events.some(e => e.kind === 'stopped'), false);
+  const readsAtExpiry = reads; await delay(60); assert.equal(reads, readsAtExpiry);
+  hold.release(); await waitFor(() => env.runtime.status(run.sessionId!).status === 'stopped' ? true : undefined);
+  assert.equal(run.status, 'unknown'); // An unread remote outcome cannot be claimed locally.
+});
 
 test('cancel while capabilities are pending confirms no runtime session was created', async t => {
   const env = await environment();

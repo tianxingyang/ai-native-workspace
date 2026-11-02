@@ -1,13 +1,58 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { ApiError, PROTOCOL_VERSION, requireCondition, scopeValue, stringValue, terminal, type Run } from '../contracts.js';
+import { ApiError, PROTOCOL_VERSION, requireCondition, scopeValue, stringValue, terminal, type CancelReceipt, type Run } from '../contracts.js';
 import { bearer, jsonBody, respond, server } from '../http.js';
 import { ControlState } from './state.js';
 import { RuntimeClient } from './runtime-client.js';
 
-export function controlService(state: ControlState, runtime: RuntimeClient, options: { autoDispatch?: boolean } = {}) {
+export function controlService(state: ControlState, runtime: RuntimeClient, options: { autoDispatch?: boolean; cancellationReconcileMs?: number } = {}) {
   const jobs = new Set<Promise<void>>();
   const creatingSessions = new Set<string>();
+  const pollers = new Map<string, Promise<void>>();
+  const reads = new Map<string, Promise<void>>();
+  const cancellations = new Map<string, Promise<CancelReceipt>>();
+  const cancellationDeadlines = new Map<string, number>();
+  const cancellationReconcileMs = options.cancellationReconcileMs ?? 5000;
+  requireCondition(Number.isInteger(cancellationReconcileMs) && cancellationReconcileMs >= 25 && cancellationReconcileMs <= 60000, 500, 'invalid_cancellation_reconcile_budget');
   let shuttingDown = false;
+  const readEvents = (run: Run): Promise<void> => {
+    const prior = reads.get(run.id);
+    if (prior) return prior;
+    const read = (async () => {
+      const { events } = await runtime.events(run.sessionId!, run.events.length);
+      for (const event of events) state.recordEvent(run, event);
+      if (terminal(run.status)) delete run.error;
+    })().finally(() => reads.delete(run.id));
+    reads.set(run.id, read);
+    return read;
+  };
+  const cancelOnce = (run: Run): Promise<CancelReceipt> => {
+    const prior = cancellations.get(run.id);
+    if (prior) return prior;
+    // Retain even an uncertain response: reconciliation only reads; it never replays cancellation.
+    const request = runtime.cancel(run.sessionId!).catch(() => ({ accepted: false, stopped: false }));
+    cancellations.set(run.id, request);
+    return request;
+  };
+  const ensurePolling = (run: Run): Promise<void> => {
+    const prior = pollers.get(run.id);
+    if (prior) return prior;
+    const ordinaryDeadline = Date.now() + run.work.budget.maxDurationMs + 5000;
+    const job = (async () => {
+      while (!terminal(run.status) && !shuttingDown && Date.now() < (cancellationDeadlines.get(run.id) ?? ordinaryDeadline)) {
+        try { await readEvents(run); }
+        catch {
+          if (!cancellationDeadlines.has(run.id)) {
+            run.status = 'unknown'; run.error = 'runtime_outcome_unknown'; return;
+          }
+          // Cancellation remains fenced while bounded read-only retries seek actual stop evidence.
+        }
+        if (!terminal(run.status)) await delay(25);
+      }
+      if (!terminal(run.status)) { run.status = 'unknown'; run.error = 'runtime_stop_unconfirmed'; }
+    })().finally(() => { pollers.delete(run.id); jobs.delete(job); });
+    pollers.set(run.id, job); jobs.add(job);
+    return job;
+  };
   const dispatch = (run: Run) => {
     const job = (async () => {
       try {
@@ -21,18 +66,12 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
         const session = await runtime.createSession(run.work);
         run.sessionId = session.sessionId;
         creatingSessions.delete(run.id);
-        if (run.status === 'cancel_requested') await runtime.cancel(session.sessionId);
+        if (run.status === 'cancel_requested') await cancelOnce(run);
         else {
           state.currentRun(run.memberId, run.id, 'read');
           await runtime.submitInput(session.sessionId, { id: `${run.id}:1`, text: 'Research the authorized source message using the supplied synthetic evidence.', contextRevision: run.work.contextRevision });
         }
-        const deadline = Date.now() + run.work.budget.maxDurationMs + 5000;
-        while (!terminal(run.status) && !shuttingDown && Date.now() < deadline) {
-          const { events } = await runtime.events(session.sessionId, run.events.length);
-          for (const event of events) state.recordEvent(run, event);
-          if (!terminal(run.status)) await delay(25);
-        }
-        if (!terminal(run.status)) { run.status = 'unknown'; run.error = 'runtime_stop_unconfirmed'; }
+        await ensurePolling(run);
       } catch (error) {
         if (terminal(run.status)) return;
         // Network errors cannot prove failure or cancellation of remote execution.
@@ -103,13 +142,12 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
         run.status = 'stopped';
         run.stopEvidence = { scope: 'runtime_session_not_created', executionStarted: false };
       }
+      if (!terminal(run.status) && !cancellationDeadlines.has(run.id)) cancellationDeadlines.set(run.id, Date.now() + cancellationReconcileMs);
       // Freeze publication before the remote RPC; do not treat its acceptance as stopped.
-      const receipt = run.sessionId && !terminal(run.status) ? await runtime.cancel(run.sessionId).catch(() => ({ accepted: false, stopped: false })) : { accepted: stoppedBeforeSession || !terminal(run.status), stopped: run.status === 'stopped' };
+      const receipt = run.sessionId && !terminal(run.status) ? await cancelOnce(run) : { accepted: stoppedBeforeSession || !terminal(run.status), stopped: run.status === 'stopped' };
       if (run.sessionId && !terminal(run.status)) {
-        try {
-          const { events } = await runtime.events(run.sessionId, run.events.length);
-          for (const event of events) state.recordEvent(run, event);
-        } catch { /* Keep publication fenced; the dispatcher may reconcile on its next poll. */ }
+        try { await readEvents(run); } catch { /* Bounded reconciliation below owns further reads. */ }
+        if (!terminal(run.status)) void ensurePolling(run);
       }
       const cancellationOutcome = run.stopEvidence ? 'stopped_before_session' : run.status === 'completed' ? 'too_late_completed' : run.status === 'stopped' ? 'stopped' : run.status === 'failed' ? 'already_failed' : 'unconfirmed';
       respond(response, 202, { status: run.status, cancellation: receipt, cancellationOutcome, stopEvidence: run.stopEvidence ?? null, publishedReceiptId: run.receiptId ?? null }); return;

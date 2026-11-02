@@ -25,14 +25,14 @@ export function gate() {
   const promise = new Promise<void>(resolve => { release = resolve; });
   return { promise, release };
 }
-export async function environment(execute: Execute = fakeExecution(), autoDispatch = true) {
+export async function environment(execute: Execute = fakeExecution(), autoDispatch = true, cancellationReconcileMs = 5000) {
   const state = new ControlState({ members: structuredClone(members), grants: developmentGrants(), tokens: { [DEV.humanToken]: 'alex', [DEV.agentToken]: 'sam', [DEV.strangerToken]: 'guest' }, memberships: { alex: [scope], sam: [scope], guest: [] }, researchMemberId: 'sam', sources: fixtureSources });
   const config = { provider: 'test', version: '0.1.0', memberId: 'sam', controlUrl: '', memberToken: DEV.agentToken, execute };
   const runtime = new LocalRuntime(config);
   const worker = workerService(runtime, DEV.runtimeToken);
   const workerUrl = await listen(worker);
   const runtimeClient = new RuntimeClient(workerUrl, DEV.runtimeToken);
-  const app = controlService(state, runtimeClient, { autoDispatch });
+  const app = controlService(state, runtimeClient, { autoDispatch, cancellationReconcileMs });
   const url = await listen(app.service);
   config.controlUrl = url;
   return {

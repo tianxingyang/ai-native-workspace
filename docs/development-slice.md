@@ -103,6 +103,8 @@ CoSeat→Worker 控制令牌与 Agent→CoSeat 成员令牌分开。当前是显
 
 初次认领仍由参与策略或 `POST /tools/claim` 原子创建；Worker 的 `claim_task` 只使用确认接口。取消接口会补读执行端事件并对账：已完成且已有发布回执时返回 `completed / too_late_completed`；等待 capabilities、尚未发出创建会话请求时返回 `stopped_before_session` 和控制面“未启动”证据，不伪造 runtime 停止事件。创建请求已在途或结果不明时，不能用缺少 session ID 推断未启动。
 
+取消会启动或复用每个 Run 唯一的后台事件轮询，即使原派发轮询已经失败退出，也会继续读取最终停止事件，无需再次点击取消。并发请求共享取消 RPC 与正在进行的事件读取；读取重试不会重发取消。对账窗口从首次取消开始，默认 5 秒，重复请求不会延长；已开始的 HTTP 请求另受 5 秒超时限制。窗口耗尽仍无证据时标记 `unknown / runtime_stop_unconfirmed` 并停止后台重试，保持发布封锁，不假报已停止。此机制仅在当前控制进程内有效，不是持久恢复系统。
+
 ## 可复现证据与限制
 
 2026-11-02 在 Windows / Node 24.14.0 / npm 11.9.0 执行。`package-lock.json` 固定传递依赖，安装关闭 lifecycle scripts。

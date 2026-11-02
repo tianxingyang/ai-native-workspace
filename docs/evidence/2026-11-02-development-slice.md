@@ -5,7 +5,7 @@
 | 命令 | 结果 |
 | --- | --- |
 | `npm install --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org --cache .npm-cache` | 成功；122 packages；固定直接版本及 lockfile |
-| `npm test`（包含 TypeScript build，审查修复后） | **22 passed, 0 failed, 0 skipped** |
+| `npm test`（包含 TypeScript build，取消恢复修复后） | **25 passed, 0 failed, 0 skipped** |
 | `npm run demo -- --pi-mock` | 成功；control PID 16172，worker PID 9596；Run completed，四轮 SDK 模拟模型循环 |
 | `git diff --check` | 通过 |
 
@@ -26,3 +26,13 @@ Alex 连续发送三条群聊消息：午饭闲聊、调研请求、继续讨论
 同时重跑 `npm run demo` 和 `npm run demo -- --pi-mock`，两种双进程演示均完成并关闭服务。真实模型调用仍未运行。
 
 修复后的 fake 演示 PID：23252 / 25968，Run `a1a26ebd-b686-4b94-9784-56b950ac2082`；pi-mock 演示 PID：29168 / 31092，Run `00f48104-0275-4cfe-99c9-f75a0394f1ff`。最后一次完整测试 22/22 通过，耗时约 5.1 秒。
+
+## 取消恢复审查回归
+
+在 `357d280` 原实现上新增确定性用例：首次事件轮询临时失败，使控制端进入 unknown 并退出派发；随后只取消一次，Worker 延迟停止。Worker 确实停止后控制端仍不收敛，测试以 `condition_not_reached` 失败，验证发现成立。
+
+修复采用共享轮询任务、共享在途读取和取消 RPC 去重，并增加有界只读对账。新增三个用例通过：上述失败路径无需第二次取消即可收敛；六个并发取消只发出一次取消 RPC，最大并行事件读取数为 1；持续读取失败后有界退出为 unknown，不产生停止证据且不继续后台轮询。原有 22 项测试仍通过。
+
+完整 `npm test`：25/25 通过，0 失败、0 跳过，约 5.46 秒。`npm run demo`：PID 34924 / 7660，Run `549fd103-1c17-4996-b843-1ba9b632ea69` completed。`npm run demo -- --pi-mock`：PID 7704 / 36708，Run `4a09edb1-5e0b-4a02-8bd3-b7e1735cbce7` completed。两种演示均关闭服务，未运行真实模型、未部署。
+
+剩余限制：对账窗口耗尽或服务重启后仍可能保留 unknown，需要后续显式核对；不重放不确定的取消 RPC。本次没有扩展为持久恢复系统。
