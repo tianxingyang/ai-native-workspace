@@ -1,12 +1,12 @@
 {
-  "version": 1,
+  "version": 2,
   "mode": "private-mock",
   "port": 4317,
   "databasePath": "/var/lib/coseat/control.sqlite",
   "researchMemberId": "agent-trial",
   "members": [
-    { "id": "owner-trial", "kind": "human", "name": "Trial owner", "tokenEnv": "COSEAT_OWNER_TOKEN", "scopes": [{ "conversationId": "trial-room", "threadId": "research" }] },
-    { "id": "agent-trial", "kind": "agent", "name": "Trial agent", "tokenEnv": "COSEAT_AGENT_TOKEN", "scopes": [{ "conversationId": "trial-room", "threadId": "research" }] }
+    { "id": "owner-trial", "kind": "human", "name": "Trial owner", "tokenEnv": "COSEAT_OWNER_TOKEN", "tokenExpiresAt": 0, "scopes": [{ "conversationId": "trial-room", "threadId": "research" }] },
+    { "id": "agent-trial", "kind": "agent", "name": "Trial agent", "tokenEnv": "COSEAT_AGENT_TOKEN", "tokenExpiresAt": 0, "scopes": [{ "conversationId": "trial-room", "threadId": "research" }] }
   ],
   "grants": [
     { "id": "owner-grant", "memberId": "owner-trial", "conversationId": "trial-room", "threadId": "research", "actions": ["read", "send", "cancel"], "revision": 1, "expiresAt": 0 },

@@ -15,6 +15,7 @@ import { privateService } from '../src/private/service.js';
 import { OutboundWorker } from '../src/private/outbound-worker.js';
 import { fakeExecution, fixtureResult } from '../src/worker/fake.js';
 import { LocalRuntime } from '../src/worker/runtime.js';
+import { ControlState } from '../src/control/state.js';
 import { close, listen, requestJson } from '../src/http.js';
 import { type Message, type Run, terminal } from '../src/contracts.js';
 import { expectStatus, gate, waitFor } from './helpers.js';
@@ -23,8 +24,8 @@ import { expectStatus, gate, waitFor } from './helpers.js';
 const secrets = { COSEAT_OWNER_TOKEN: randomBytes(32).toString('hex'), COSEAT_AGENT_TOKEN: randomBytes(32).toString('hex'), COSEAT_OTHER_TOKEN: randomBytes(32).toString('hex') };
 const scope = { conversationId: 'trial-room', threadId: 'research-thread' };
 function rawConfig(path: string) {
-  return { version: 1, mode: 'private-mock', databasePath: path, port: 0, researchMemberId: 'agent1',
-    members: [ ['owner1', 'human', 'COSEAT_OWNER_TOKEN'], ['agent1', 'agent', 'COSEAT_AGENT_TOKEN'], ['agent2', 'agent', 'COSEAT_OTHER_TOKEN'] ].map(([id, kind, tokenEnv]) => ({ id, kind, name: id, tokenEnv, scopes: [scope] })),
+  return { version: 2, mode: 'private-mock', databasePath: path, port: 0, researchMemberId: 'agent1',
+    members: [ ['owner1', 'human', 'COSEAT_OWNER_TOKEN'], ['agent1', 'agent', 'COSEAT_AGENT_TOKEN'], ['agent2', 'agent', 'COSEAT_OTHER_TOKEN'] ].map(([id, kind, tokenEnv]) => ({ id, kind, name: id, tokenEnv, tokenExpiresAt: Date.now() + 3600000, scopes: [scope] })),
     grants: ['owner1', 'agent1', 'agent2'].map(memberId => ({ id: `grant-${memberId}`, memberId, ...scope, revision: 1, actions: ['read', 'send', 'claim', 'request_approval', 'cancel'], expiresAt: Date.now() + 3600000 })) };
 }
 async function setup(t: { after: (fn: () => Promise<void>) => void }, clock?: () => number) {
@@ -98,6 +99,143 @@ test('outbound worker opens no inbound port and completes durable source-thread 
   assert.equal(env.engine.state.messages.size, 2); assert.equal(env.engine.state.runs.size, 1);
   const bytes = await readFile(env.path);
   for (const secret of Object.values(secrets)) assert.equal(bytes.includes(Buffer.from(secret)), false);
+});
+
+test('private control configuration requires explicit independent credential deadlines', async t => {
+  const env = await setup(t), config = rawConfig(env.path);
+  const { credentialExpiresAt: _credentials, ...withoutCredentials } = env.config.control;
+  assert.throws(() => new PrivateEngine(env.engine.store, withoutCredentials), /private_credential_expiry_required/);
+  assert.throws(() => parseControlConfig({ ...config, version: 1 }, secrets), /private_configuration_v2_required/);
+  const { tokenExpiresAt: _expiry, ...missingExpiry } = config.members[0]!;
+  assert.throws(() => parseControlConfig({ ...config, members: [missingExpiry, ...config.members.slice(1)] }, secrets), /explicit_token_expiry_required/);
+  for (const tokenExpiresAt of [0, -1, Infinity]) {
+    assert.throws(() => parseControlConfig({ ...config, members: [{ ...config.members[0], tokenExpiresAt }, ...config.members.slice(1)] }, secrets), /explicit_token_expiry_required/);
+  }
+  config.members[0]!.tokenExpiresAt += 1000;
+  assert.equal(parseControlConfig(config, secrets).control.credentialExpiresAt!.owner1, config.members[0]!.tokenExpiresAt);
+  assert.notEqual(config.members[0]!.tokenExpiresAt, config.grants[0]!.expiresAt);
+  // An expired entry must remain denied after restart without preventing other identities from starting.
+  config.members[0]!.tokenExpiresAt = Date.now() - 1;
+  config.grants[0]!.expiresAt = Date.now() - 1;
+  const restarted = new ControlState(parseControlConfig(config, secrets).control);
+  assert.throws(() => restarted.authenticate(secrets.COSEAT_OWNER_TOKEN), /credential_expired/);
+  assert.equal(restarted.authenticate(secrets.COSEAT_AGENT_TOKEN), 'agent1');
+});
+
+test('credential expiry rejects both identities on all 11 HTTP route forms at the boundary (44 checks)', async t => {
+  let now = Date.now(); const deadline = now + 5000, env = await setup(t, () => now);
+  env.config.control.credentialExpiresAt!.owner1 = deadline;
+  env.config.control.credentialExpiresAt!.agent1 = deadline;
+  const query = new URLSearchParams(scope);
+  const routes: [string, unknown?][] = [
+    [`/messages?${query}`], [`/runs?${query}`], ['/runs/probe'], ['/messages', {}], ['/runs/probe/cancel', {}],
+    ['/worker/poll', { instanceId: 'expiry-boot' }], ['/worker/events', {}], ['/worker/not-started', {}],
+    ['/tools/send', {}], ['/tools/confirm-claim', {}], ['/tools/request-approval', {}],
+  ];
+  now = deadline - 1;
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages?${query}`);
+  assert.equal((await requestJson<Delivery>(env.url, secrets.COSEAT_AGENT_TOKEN, '/worker/poll', { instanceId: 'expiry-boot' })).command, 'idle');
+  const before = env.engine.state.snapshot();
+  for (const at of [deadline, deadline + 1]) {
+    now = at;
+    for (const token of [secrets.COSEAT_OWNER_TOKEN, secrets.COSEAT_AGENT_TOKEN]) {
+      for (const [path, body] of routes) await expectStatus(requestJson(env.url, token, path, body), 401, 'credential_expired');
+    }
+  }
+  assert.deepEqual(env.engine.state.snapshot(), before);
+  await expectStatus(requestJson(env.url, 'invalid', '/worker/poll', {}), 401, 'invalid_identity');
+  assert.equal((await requestJson<Delivery>(env.url, secrets.COSEAT_OTHER_TOKEN, '/worker/poll', { instanceId: 'unexpired-member' })).command, 'idle');
+  await requestJson(env.url, '', '/health'); // Health carries no identity or business facts.
+});
+
+test('idle long poll rechecks credential expiry after awaiting, before returning work or idle', async t => {
+  let now = Date.now(); const deadline = now + 5000, env = await setup(t, () => now);
+  env.config.control.credentialExpiresAt!.agent1 = deadline;
+  const poll = env.engine.poll.bind(env.engine);
+  t.mock.method(env.engine, 'poll', (actor: string, instance: string) => {
+    const value = poll(actor, instance); now = deadline; return value;
+  });
+  await expectStatus(requestJson(env.url, secrets.COSEAT_AGENT_TOKEN, '/worker/poll', { instanceId: 'expiry-boot' }), 401, 'credential_expired');
+});
+
+test('idle worker polling requires a current execution grant, including after the long-poll wait', async t => {
+  let now = Date.now(); const deadline = now + 5000, env = await setup(t, () => now);
+  env.config.control.grants.find(g => g.memberId === 'agent1')!.expiresAt = deadline;
+  now = deadline - 1;
+  assert.equal((await requestJson<Delivery>(env.url, secrets.COSEAT_AGENT_TOKEN, '/worker/poll', { instanceId: 'expiry-boot' })).command, 'idle');
+  const poll = env.engine.poll.bind(env.engine);
+  const mocked = t.mock.method(env.engine, 'poll', (actor: string, instance: string) => {
+    const value = poll(actor, instance); now = deadline; return value;
+  });
+  await expectStatus(requestJson(env.url, secrets.COSEAT_AGENT_TOKEN, '/worker/poll', { instanceId: 'expiry-boot' }), 403, 'worker_poll_denied');
+  mocked.mock.restore();
+  for (const at of [deadline, deadline + 1]) {
+    now = at;
+    await expectStatus(requestJson(env.url, secrets.COSEAT_AGENT_TOKEN, '/worker/poll', { instanceId: 'expiry-boot' }), 403, 'worker_poll_denied');
+    assert.equal(env.engine.state.authenticate(secrets.COSEAT_AGENT_TOKEN), 'agent1');
+    await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages?${new URLSearchParams(scope)}`);
+  }
+});
+
+test('expired run grant denies events, results and stop reports without an expiry cleanup exception', async t => {
+  let now = Date.now(); const deadline = now + 5000, env = await setup(t, () => now);
+  env.config.control.grants.find(g => g.memberId === 'agent1')!.expiresAt = deadline;
+  await env.post();
+  const delivery = await requestJson<Delivery>(env.url, secrets.COSEAT_AGENT_TOKEN, '/worker/poll', { instanceId: 'expiry-boot' });
+  const headers = { 'x-coseat-instance': 'expiry-boot', 'x-coseat-lease': delivery.leaseId! };
+  const source = env.engine.state.runs.get(delivery.runId!)!.work.source;
+  const report = { instanceId: 'expiry-boot', leaseId: delivery.leaseId };
+  const event = { id: 'expiry-session:1', sequence: 1, sessionId: 'expiry-session', runId: delivery.runId, kind: 'stopped', status: 'stopped', at: now, data: { executionSettled: true } };
+  const routes: [string, unknown?][] = [
+    [`/messages?${new URLSearchParams(scope)}&runId=${delivery.runId}`],
+    ['/tools/send', { runId: delivery.runId, result: fixtureResult() }],
+    ['/tools/confirm-claim', { runId: delivery.runId, sourceMessageId: source.messageId, sourceRevision: source.revision }],
+    ['/tools/request-approval', { runId: delivery.runId, action: 'read', reason: 'synthetic' }],
+    ['/worker/events', { ...report, events: [event] }], ['/worker/not-started', report],
+  ];
+  now = deadline - 1;
+  await requestJson(env.url, secrets.COSEAT_AGENT_TOKEN, '/worker/events', { ...report, events: [] });
+  for (const at of [deadline, deadline + 1]) {
+    now = at;
+    for (const [path, body] of routes) await expectStatus(requestJson(env.url, secrets.COSEAT_AGENT_TOKEN, path, body, undefined, headers), 403);
+  }
+  assert.equal(env.engine.state.runs.get(delivery.runId!)!.events.length, 0);
+  assert.equal(env.engine.state.messages.size, 1);
+  // Owner cancellation still uses the owner's independent, live read/cancel grant and is audited.
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `/runs/${delivery.runId}/cancel`, {});
+  assert.ok(env.engine.state.audit.some(a => a.actorId === 'owner1' && a.action === 'cancel' && a.allowed));
+  await expectStatus(requestJson(env.url, secrets.COSEAT_AGENT_TOKEN, '/worker/not-started', report), 403);
+  now += 11000;
+  assert.equal((await requestJson<Run>(env.url, secrets.COSEAT_OWNER_TOKEN, `/runs/${delivery.runId}`)).status, 'unknown');
+  assert.equal(env.engine.state.runs.get(delivery.runId!)!.stopEvidence, undefined);
+});
+
+test('one expired grant does not disable another authorized resource or replace a run-bound grant', async t => {
+  let now = Date.now(); const deadline = now + 5000, env = await setup(t, () => now);
+  const other = { conversationId: 'other-room', threadId: 'research' };
+  for (const member of ['owner1', 'agent1']) {
+    const grant = env.config.control.grants.find(g => g.memberId === member)!;
+    env.config.control.grants.push({ ...grant, ...other, id: `${grant.id}-other` });
+    grant.expiresAt = deadline;
+    env.config.control.memberships[member]!.push(other);
+  }
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...other, text: '请调研协议', clientEventId: 'other-source' });
+  const delivery = await requestJson<Delivery>(env.url, secrets.COSEAT_AGENT_TOKEN, '/worker/poll', { instanceId: 'other-boot' });
+  assert.deepEqual(delivery.work!.route, other);
+  now = deadline;
+  for (const token of [secrets.COSEAT_OWNER_TOKEN, secrets.COSEAT_AGENT_TOKEN]) {
+    await expectStatus(requestJson(env.url, token, `/messages?${new URLSearchParams(scope)}`), 403);
+    await requestJson(env.url, token, `/messages?${new URLSearchParams(other)}`);
+  }
+  assert.equal((await requestJson<Delivery>(env.url, secrets.COSEAT_AGENT_TOKEN, '/worker/poll', { instanceId: 'other-boot' })).command, 'execute');
+  const headers = { 'x-coseat-instance': 'other-boot', 'x-coseat-lease': delivery.leaseId! };
+  await requestJson(env.url, secrets.COSEAT_AGENT_TOKEN, '/tools/send', { runId: delivery.runId, result: fixtureResult() }, undefined, headers);
+  // A fresh grant in the same scope cannot silently renew an older WorkPackage's deadline.
+  const bound = env.config.control.grants.find(g => g.id === delivery.work!.grant.id)!;
+  env.config.control.grants.push({ ...bound, id: 'new-independent-grant' });
+  bound.expiresAt = now;
+  await expectStatus(requestJson(env.url, secrets.COSEAT_AGENT_TOKEN, '/worker/events', { instanceId: 'other-boot', leaseId: delivery.leaseId, events: [] }), 403);
+  await requestJson(env.url, secrets.COSEAT_AGENT_TOKEN, `/messages?${new URLSearchParams(other)}`);
 });
 
 test('cross-member lease access and body identity spoofing are rejected', async t => {

@@ -13,7 +13,8 @@ export class PrivateEngine {
   readonly state: ControlState;
   private readonly leases = new Map<string, Lease>();
   constructor(readonly store: SnapshotStore, config: ControlConfig, readonly leaseMs = 10000, private readonly now = Date.now, restoredBackup = false) {
-    this.state = new ControlState(config);
+    requireCondition(config.credentialExpiresAt && config.members.every(m => Number.isSafeInteger(config.credentialExpiresAt![m.id]) && config.credentialExpiresAt![m.id]! > 0), 400, 'private_credential_expiry_required');
+    this.state = new ControlState(config, now);
     const saved = store.load<Saved>();
     if (saved) {
       this.state.restore(saved.state);
@@ -60,11 +61,19 @@ export class PrivateEngine {
     requireCondition(this.state.config.members.find(m => m.id === actor)?.kind === 'agent', 403, 'worker_identity_required');
   }
   poll(actor: string, instanceId: string): Delivery {
-    this.agent(actor); this.sweep();
+    this.agent(actor);
+    const actions = ['read', 'send', 'claim', 'request_approval'] as const;
+    const grant = this.state.config.grants.find(g => g.memberId === actor && !g.revoked && g.expiresAt > this.now()
+      && actions.every(action => g.actions.includes(action))
+      && this.state.config.memberships[actor]?.some(s => s.conversationId === g.conversationId && s.threadId === g.threadId));
+    requireCondition(grant, 403, 'worker_poll_denied');
+    this.state.authorize(actor, 'claim', grant, grant);
+    this.sweep();
     const held = [...this.leases.values()].find(l => l.memberId === actor && !l.finished);
     if (held) {
-      if (held.instanceId !== instanceId) return { command: 'blocked' };
       const run = this.state.runs.get(held.runId)!;
+      this.state.authorizeRunGrant(actor, run, [...actions]);
+      if (held.instanceId !== instanceId) return { command: 'blocked' };
       if (!held.cancel) {
         try { this.state.currentRun(actor, run.id, 'claim'); }
         catch { held.cancel = true; if (!terminal(run.status)) { run.status = 'unknown'; run.error = 'work_no_longer_authorized'; } }
@@ -109,6 +118,7 @@ export class PrivateEngine {
   }
   notStarted(actor: string, instanceId: string, leaseId: string) {
     const lease = this.owned(actor, instanceId, leaseId), run = this.state.runs.get(lease.runId)!;
+    this.state.authorizeRunGrant(actor, run, ['claim', 'send', 'request_approval']);
     requireCondition(lease.cancel && !run.sessionId && run.events.length === 0 && !run.receiptId, 409, 'cannot_confirm_not_started');
     run.status = 'stopped'; run.stopEvidence = { scope: 'worker_acknowledged_not_started', executionStarted: false };
     delete run.error; lease.finished = true;
@@ -116,6 +126,7 @@ export class PrivateEngine {
   }
   ingest(actor: string, instanceId: string, leaseId: string, rawEvents: unknown) {
     const lease = this.owned(actor, instanceId, leaseId), run = this.state.runs.get(lease.runId)!;
+    this.state.authorizeRunGrant(actor, run, ['claim', 'send', 'request_approval']);
     this.sweep();
     requireCondition(Array.isArray(rawEvents) && rawEvents.length <= 32, 400, 'invalid_events');
     for (const raw of rawEvents) {

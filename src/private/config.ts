@@ -29,18 +29,22 @@ export function protectedOrigin(value: unknown): string {
 }
 export function parseControlConfig(raw: unknown, env: NodeJS.ProcessEnv): PrivateControlConfig {
   const c = objectValue(raw);
-  requireCondition(c.mode === 'private-mock' && c.version === 1, 400, 'private_configuration_required');
+  requireCondition(c.mode === 'private-mock' && c.version === 2, 400, 'private_configuration_v2_required');
   const port = c.port ?? 4317;
   requireCondition(Number.isInteger(port) && Number(port) >= 0 && Number(port) <= 65535, 400, 'invalid_port');
   const databasePath = stringValue(c.databasePath, 'database_path', 2048);
   requireCondition(isAbsolute(databasePath), 400, 'absolute_database_path_required');
   requireCondition(Array.isArray(c.members) && c.members.length >= 2 && c.members.length <= 20, 400, 'members_required');
   const members: Member[] = [], tokens: Record<string, string> = Object.create(null);
+  const credentialExpiresAt: Record<string, number> = Object.create(null);
   const memberships: ControlConfig['memberships'] = Object.create(null);
   for (const rawMember of c.members) {
     const m = objectValue(rawMember), memberId = id(m.id);
     requireCondition(!members.some(x => x.id === memberId) && ['human', 'agent'].includes(String(m.kind)), 400, 'invalid_member');
     const secret = token(m.tokenEnv, env);
+    // Preserve expired entries on restart: they deny only their own identity, not the entire service.
+    requireCondition(Number.isSafeInteger(m.tokenExpiresAt) && Number(m.tokenExpiresAt) > 0, 400, 'explicit_token_expiry_required');
+    credentialExpiresAt[memberId] = Number(m.tokenExpiresAt);
     requireCondition(!tokens[secret], 400, 'duplicate_identity_token');
     tokens[secret] = memberId;
     members.push({ id: memberId, name: stringValue(m.name, 'name', 128), kind: m.kind as 'human' | 'agent' });
@@ -54,11 +58,11 @@ export function parseControlConfig(raw: unknown, env: NodeJS.ProcessEnv): Privat
     const g = objectValue(rawGrant), memberId = id(g.memberId);
     requireCondition(members.some(m => m.id === memberId), 400, 'unknown_grant_member');
     requireCondition(Array.isArray(g.actions) && g.actions.length > 0 && g.actions.every(a => ['read', 'send', 'claim', 'request_approval', 'cancel'].includes(String(a))), 400, 'invalid_actions');
-    requireCondition(Number.isInteger(g.revision) && Number(g.revision) > 0 && Number.isFinite(g.expiresAt) && Number(g.expiresAt) > Date.now(), 400, 'valid_grant_required');
+    requireCondition(Number.isInteger(g.revision) && Number(g.revision) > 0 && Number.isSafeInteger(g.expiresAt) && Number(g.expiresAt) > 0, 400, 'valid_grant_required');
     return { ...scopeValue(g), id: id(g.id), memberId, revision: Number(g.revision), actions: g.actions as Grant['actions'], expiresAt: Number(g.expiresAt), revoked: g.revoked === true };
   });
   requireCondition(new Set(grants.map(g => g.id)).size === grants.length, 400, 'duplicate_grant_id');
-  return { port: Number(port), databasePath, control: { members, tokens, memberships, grants, researchMemberId, sources: fixtureSources } };
+  return { port: Number(port), databasePath, control: { members, tokens, credentialExpiresAt, memberships, grants, researchMemberId, sources: fixtureSources } };
 }
 export function parseWorkerConfig(raw: unknown, env: NodeJS.ProcessEnv): PrivateWorkerConfig {
   const c = objectValue(raw);

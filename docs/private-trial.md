@@ -21,7 +21,7 @@ npm run demo -- --pi-mock
 
 下面是待执行的操作说明，本轮未对任何远端执行。先在两端准备同一审阅通过的 commit、固定 Node 版本和构建产物。可以在开发设备 `npm ci`、`npm run build`，但不要跨 OS 复制整个 `node_modules`；目标平台需按 lockfile 安装运行依赖（`npm ci --omit=dev --ignore-scripts`）或构建经过目标平台验证的发布目录。无需 Git 常驻运行，也不需要 Docker。
 
-控制端使用 [private-control.example.json](../examples/private-control.example.json)，Worker 使用 [private-worker.example.json](../examples/private-worker.example.json)。配置放在仓库外，分别指定绝对路径。示例的 `expiresAt: 0` 故意不可启动；需明确设置毫秒 Unix 时间、成员范围、动作及到期时间。修改授权语义时增加 Grant revision。所有身份必须稳定，不能复用旧成员 ID 表示另一人。
+控制端使用 v2 [private-control.example.json](../examples/private-control.example.json)，Worker 保持 v1 [private-worker.example.json](../examples/private-worker.example.json)。配置放在仓库外，分别指定绝对路径。示例的 `tokenExpiresAt: 0` 和 `expiresAt: 0` 故意不可启动；需明确设置毫秒 Unix 时间、成员范围、动作及到期时间。修改授权语义时增加 Grant revision。所有身份必须稳定，不能复用旧成员 ID 表示另一人。
 
 由管理员通过既定秘密管理或受保护的进程环境提供令牌，本版本不生成、保存或分发真实秘密。控制进程接收所配置成员的令牌；Worker 仅接收自己的 `COSEAT_AGENT_TOKEN`。令牌至少 32 个非空白 ASCII 字符，长度检查不替代随机性与访问管理。公开 `dev-fixture`、示例占位值和已知演示固定值拒绝启动；实际 token 值不写入 JSON 配置、命令行或日志。不要启用 shell tracing 或打印环境。
 
@@ -41,6 +41,26 @@ COSEAT_CONFIG=/etc/coseat-worker/worker.json npm run private:worker
 控制端固定只绑定 `127.0.0.1`，默认端口 4317。跨设备须由管理员先提供有效 TLS 反向代理或等效受保护链路；Worker 的非回环 `controlUrl` 必须是 HTTPS，拒绝 URL 内嵌凭据、query 和非根路径。无关闭证书校验的选项。不要把回环 HTTP 直接暴露到公网或用明文公网传 bearer token。本文不配置证书、域名、防火墙、安全组、SSH、代理、新用户或持久访问。
 
 Worker 只主动发起 HTTP 请求，没有入站端口或控制面数据库访问。控制端不需要能连接 Worker 私网地址。HTTP 请求最长 5 秒；空闲领取最多等待 750 毫秒，Worker 步间等待 250 毫秒，暂时断线后仅重试幂等领取与事件上报。固定事件日志不输出配置、请求体、令牌或原始异常。
+
+## 凭据与 Grant 的独立期限
+
+每个私有成员当前只有一个静态 bearer 凭据，控制端必须显式配置 `members[].tokenExpiresAt`，表示该凭据的绝对截止时间；不从 Grant 推导，不随轮询、重启或运行续期。它与 provider 的 runtime session、Worker boot instance 不同，也不是完整登录／刷新 token 系统。
+
+- 凭据在 `now >= tokenExpiresAt` 时返回 401 `credential_expired`，所有业务及 Worker 路由都拒绝，包括空闲轮询、事件、未启动确认和取消；无效身份仍为 401 `invalid_identity`。仅无业务内容的 `/health` 不要求认证。
+- JSON 请求体读取及长轮询等待之后、执行事务之前重新认证，不能凭进入请求时尚有效而跨过期限操作。
+- Grant 的截止只作用于对应成员、资源、动作。一个 Grant 到期不等于成员凭据到期，不阻止其他有效 Grant 覆盖的操作。空闲 Worker 也必须至少有一个仍有效且成员范围匹配的完整执行 Grant 才能轮询，否则 403 `worker_poll_denied`。
+- 已有 Run 的轮询、工具及事件绑定原 Grant 的 ID、revision、配置期限及工作包期限；新的同范围 Grant 不能悄悄续期旧 Run。当前事件协议使用同一完整执行 Grant，不额外发放报告权限。
+- 没有到期善后豁免：过期／撤销后不能发输出、终态事件、未启动确认或通过过期权限取消。另一个仍获有效 read/cancel Grant 的成员可以按自己的权限取消，并记录正常授权审计；这不延长 Worker 的权限。
+
+若执行端在期限之后才尝试报告停止，控制端会拒绝，不能声称收到停止证据。Worker 失去续租后通过本地 watchdog 尽力停止；控制端租约过期时查询显示 unknown，已有回执仍保留。过期任务的未结租约继续占用单成员执行槽，即便该成员另有有效 Grant 也不能并行重派；其他获权读写仍可使用。此版本没有强制解锁或单独善后权限 API，须在授权到期前留出停止／对账时间。
+
+## 从旧配置升级的约束
+
+**旧控制端 v1 配置会拒绝启动新代码**，缺少期限不能回退为永久凭据。管理员需在审阅后将控制配置改为 v2，并逐个填写已经批准的绝对 `tokenExpiresAt`；如已有试用截止时间，应保留该时间，不能改成“升级后再计一段时间”。Grant 期限也保持原值。Worker 配置版本和 SQLite schema 1 均不变，没有数据库迁移或真实令牌生成。
+
+已过期但格式有效的凭据／Grant 可保留在配置中：服务重启后仍逐项拒绝，而不因一个成员过期阻止其他成员启动；零值、缺失、非整数等非法期限仍拒绝配置。升级前仍须离线备份、安排停止和对账；重启会按既有规则封住未结租约。
+
+源码修复不自动替换任何部署包装器或计时器。切换前应核对新配置保留原授权窗口、拒绝语义（凭据 401、Grant 403）及停止行为，再评估是否撤下旧包装器；本轮未执行这些远程动作。回退到旧源码会重新暴露空闲轮询／事件期限缺口，不能在撤掉独立到期保护后直接回退旧代码。
 
 停止顺序：先停止接收新用户工作，给 Worker 发送 SIGTERM / Ctrl+C，使其请求停止运行并尝试提交终态；随后给控制进程发送 SIGTERM / Ctrl+C，等待退出再处理数据库文件。若进程被强制杀死或网络断开，不能据此声称已获停止回执。生产进程管理、自动启动及服务账户尚未配置。
 

@@ -7,10 +7,12 @@ export function privateService(engine: PrivateEngine) {
   const { state } = engine;
   return server(async (request, response, url) => {
     if (request.method === 'GET' && url.pathname === '/health') { respond(response, 200, { service: 'control', mode: 'private-mock', storageVersion: 1 }); return; }
-    const actor = state.authenticate(bearer(request));
+    const token = bearer(request);
+    const actor = state.authenticate(token);
     const body = request.method === 'POST' ? await jsonBody(request) : undefined;
     if (body) requireCondition(body.memberId === undefined && body.authorId === undefined, 400, 'identity_is_authenticated');
-    const commit = <T>(fn: () => T) => engine.commit(fn);
+    // Body reads and idle long polls await I/O: recheck credentials immediately before each operation.
+    const commit = <T>(fn: () => T) => engine.commit(() => { state.authenticate(token); return fn(); });
     const guard = (runId: string) => engine.guardTool(actor, stringValue(request.headers['x-coseat-instance'], 'instance', 128), stringValue(request.headers['x-coseat-lease'], 'lease', 128), runId);
     if (url.pathname === '/messages' && body) {
       const value = commit(() => {

@@ -48,8 +48,8 @@ try {
   const scope = { conversationId: 'trial-room', threadId: 'research' };
   const databasePath = join(controlDir, 'state.sqlite');
   const controlConfig = join(controlDir, 'config.json'), workerConfig = join(workerDir, 'config.json');
-  await writeFile(controlConfig, JSON.stringify({ version: 1, mode: 'private-mock', port, databasePath, researchMemberId: 'agent-demo',
-    members: [{ id: 'owner-demo', kind: 'human', name: 'Owner', tokenEnv: 'COSEAT_OWNER_TOKEN', scopes: [scope] }, { id: 'agent-demo', kind: 'agent', name: 'Agent', tokenEnv: 'COSEAT_AGENT_TOKEN', scopes: [scope] }],
+  await writeFile(controlConfig, JSON.stringify({ version: 2, mode: 'private-mock', port, databasePath, researchMemberId: 'agent-demo',
+    members: [{ id: 'owner-demo', kind: 'human', name: 'Owner', tokenEnv: 'COSEAT_OWNER_TOKEN', tokenExpiresAt: Date.now() + 3600000, scopes: [scope] }, { id: 'agent-demo', kind: 'agent', name: 'Agent', tokenEnv: 'COSEAT_AGENT_TOKEN', tokenExpiresAt: Date.now() + 3600000, scopes: [scope] }],
     grants: ['owner-demo', 'agent-demo'].map(memberId => ({ id: `grant-${memberId}`, memberId, ...scope, revision: 1, actions: ['read', 'send', 'claim', 'request_approval', 'cancel'], expiresAt: Date.now() + 3600000 })) }));
   await writeFile(workerConfig, JSON.stringify({ version: 1, mode: 'private-mock', controlUrl: url, memberId: 'agent-demo', tokenEnv: 'COSEAT_AGENT_TOKEN', provider, workspace: workerDir }));
   const control = start(new URL('../src/private/control-main.js', import.meta.url), controlConfig, controlDir, { COSEAT_OWNER_TOKEN: ownerToken, COSEAT_AGENT_TOKEN: agentToken }, 'control_ready');

@@ -4,6 +4,8 @@ import { decideParticipation } from '../participation.js';
 
 export interface ControlConfig {
   members: Member[]; grants: Grant[]; tokens: Record<string, string>;
+  // Private mode has one explicitly expiring credential per member. Dev fixtures omit this map.
+  credentialExpiresAt?: Record<string, number>;
   memberships: Record<string, Scope[]>; researchMemberId: string; sources: Source[];
 }
 export class ControlState {
@@ -16,7 +18,7 @@ export class ControlState {
   private readonly claims = new Map<string, string>();
   private readonly resultKeys = new Map<string, { fingerprint: string; messageId: string; receiptId: string }>();
   private readonly toolCalls = new Map<string, number>();
-  constructor(readonly config: ControlConfig) {}
+  constructor(readonly config: ControlConfig, private readonly now = Date.now) {}
 
   snapshot() {
     return structuredClone({ messages: [...this.messages], runs: [...this.runs], approvals: [...this.approvals],
@@ -35,12 +37,16 @@ export class ControlState {
   authenticate(token: string): string {
     const actorId = this.config.tokens[token];
     requireCondition(actorId && this.config.members.some(m => m.id === actorId), 401, 'invalid_identity');
+    if (this.config.credentialExpiresAt) {
+      const expiresAt = this.config.credentialExpiresAt[actorId];
+      requireCondition(Number.isFinite(expiresAt) && expiresAt! > this.now(), 401, 'credential_expired');
+    }
     return actorId;
   }
-  authorize(actorId: string, action: Action, scope: Scope): Grant {
+  authorize(actorId: string, action: Action, scope: Scope, bound?: { id: string; revision: number }): Grant {
     const member = this.config.memberships[actorId]?.some(s => s.conversationId === scope.conversationId && s.threadId === scope.threadId);
-    const grant = this.config.grants.find(g => g.memberId === actorId && g.conversationId === scope.conversationId && g.threadId === scope.threadId && g.actions.includes(action) && !g.revoked && g.expiresAt > Date.now());
-    this.audit.push({ actorId, action, allowed: Boolean(member && grant), resource: scope, at: Date.now() });
+    const grant = this.config.grants.find(g => g.memberId === actorId && g.conversationId === scope.conversationId && g.threadId === scope.threadId && g.actions.includes(action) && !g.revoked && g.expiresAt > this.now() && (!bound || (g.id === bound.id && g.revision === bound.revision)));
+    this.audit.push({ actorId, action, allowed: Boolean(member && grant), resource: scope, at: this.now() });
     requireCondition(member && grant, 403, 'scope_denied');
     return grant;
   }
@@ -120,14 +126,20 @@ export class ControlState {
   currentRun(actorId: string, runId: string, action: Action, allowCompleted = false): Run {
     const run = this.runs.get(runId);
     requireCondition(run && run.memberId === actorId, 403, 'run_denied');
-    const grant = this.authorize(actorId, action, run.work.route);
-    this.authorize(actorId, 'read', run.work.source);
-    requireCondition(grant.id === run.work.grant.id && grant.revision === run.work.grant.revision, 409, 'grant_revision_changed');
+    this.authorizeRunGrant(actorId, run, [action, 'read']);
     const source = this.messages.get(run.sourceMessageId);
     requireCondition(source?.revision === run.work.source.revision, 409, 'source_revision_changed');
-    requireCondition(run.work.grant.expiresAt > Date.now(), 403, 'grant_expired');
     requireCondition(run.status === 'queued' || run.status === 'running' || (allowCompleted && run.status === 'completed'), 409, 'run_not_active');
     return run;
+  }
+  // Event/stop reconciliation may outlive an active Run, but never its bound authorization.
+  authorizeRunGrant(actorId: string, run: Run, actions: Action[]): void {
+    requireCondition(run.memberId === actorId, 403, 'run_denied');
+    const bound = this.config.grants.find(g => g.id === run.work.grant.id);
+    requireCondition(bound?.revision === run.work.grant.revision, 409, 'grant_revision_changed');
+    for (const action of actions) this.authorize(actorId, action, run.work.route, run.work.grant);
+    this.authorize(actorId, 'read', run.work.source, run.work.grant);
+    requireCondition(run.work.grant.expiresAt > this.now(), 403, 'grant_expired');
   }
   private useTool(run: Run): void {
     const count = (this.toolCalls.get(run.id) ?? 0) + 1;
