@@ -31,11 +31,12 @@ export async function environment(execute: Execute = fakeExecution(), autoDispat
   const runtime = new LocalRuntime(config);
   const worker = workerService(runtime, DEV.runtimeToken);
   const workerUrl = await listen(worker);
-  const app = controlService(state, new RuntimeClient(workerUrl, DEV.runtimeToken), { autoDispatch });
+  const runtimeClient = new RuntimeClient(workerUrl, DEV.runtimeToken);
+  const app = controlService(state, runtimeClient, { autoDispatch });
   const url = await listen(app.service);
   config.controlUrl = url;
   return {
-    state, runtime, app, url, workerUrl,
+    state, runtime, runtimeClient, app, url, workerUrl,
     post(text = '请调研一下运行时插件的取消语义', key: string = crypto.randomUUID()) { return requestJson<{ message: Message; duplicate: boolean }>(url, DEV.humanToken, '/messages', { ...scope, text, clientEventId: key }); },
     async completed() { return waitFor(() => [...state.runs.values()].find(r => r.status === 'completed'), 8000); },
     async dispose() { await runtime.close(); app.stop(); await app.drain(); await close(app.service); await close(worker); },

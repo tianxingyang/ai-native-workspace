@@ -26,7 +26,7 @@ export class CoSeatTools {
   }
   async claimTask(): Promise<{ runId: string; duplicate: boolean }> {
     this.before('claim_task');
-    const value = await requestJson<{ run: Run; duplicate: boolean }>(this.baseUrl, this.memberToken, '/tools/claim', { sourceMessageId: this.work.source.messageId, intent: 'research' }, this.signal);
+    const value = await requestJson<{ run: Run; duplicate: boolean }>(this.baseUrl, this.memberToken, '/tools/confirm-claim', { runId: this.work.runId, sourceMessageId: this.work.source.messageId, sourceRevision: this.work.source.revision }, this.signal);
     requireCondition(value.run.id === this.work.runId, 409, 'claim_binding_mismatch');
     return { runId: value.run.id, duplicate: value.duplicate };
   }

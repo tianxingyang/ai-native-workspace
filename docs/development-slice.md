@@ -96,10 +96,12 @@ CoSeat→Worker 控制令牌与 Agent→CoSeat 成员令牌分开。当前是显
 | --- | --- | --- |
 | `read_messages` | `GET /messages?...&runId=...` | 当前成员、线程范围、run 所有者、Grant 和来源版本 |
 | `send_message` | `POST /tools/send` | 由 run 绑定源线程与作者；重新校验权限、版本、取消、来源和回执 |
-| `claim_task` | `POST /tools/claim` | 原子 source/revision/research 认领；认领不产生新权限 |
+| `claim_task` | `POST /tools/confirm-claim` | 校验绑定 run/source/revision 与当前授权后确认既有认领；绝不创建或派发新 Run |
 | `request_approval` | `POST /tools/request-approval` | 同 run 和线程；只创建 pending 请求，不批准、不扩权、不自动恢复 |
 
 人和 Agent 都通过同一 `authorize` 检查读取、发送等应用动作。可见性在参与判断、派发和每次业务工具调用处检查；来源、Grant 及成员关系在发布前再验。测试可直接改变内存事实以验证失效，但尚无完整编辑/撤回/退群管理接口和已加载上下文清理机制。
+
+初次认领仍由参与策略或 `POST /tools/claim` 原子创建；Worker 的 `claim_task` 只使用确认接口。取消接口会补读执行端事件并对账：已完成且已有发布回执时返回 `completed / too_late_completed`；等待 capabilities、尚未发出创建会话请求时返回 `stopped_before_session` 和控制面“未启动”证据，不伪造 runtime 停止事件。创建请求已在途或结果不明时，不能用缺少 session ID 推断未启动。
 
 ## 可复现证据与限制
 

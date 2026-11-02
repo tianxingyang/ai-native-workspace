@@ -97,6 +97,12 @@ export class ControlState {
     this.claims.set(key, runId);
     return { run, duplicate: false };
   }
+  confirmClaim(actorId: string, runId: string, messageId: string, revision: number): { run: Run; duplicate: true } {
+    const run = this.currentRun(actorId, runId, 'claim');
+    requireCondition(run.sourceMessageId === messageId && run.work.source.revision === revision, 409, 'claim_binding_mismatch');
+    this.useTool(run);
+    return { run, duplicate: true };
+  }
   currentRun(actorId: string, runId: string, action: Action, allowCompleted = false): Run {
     const run = this.runs.get(runId);
     requireCondition(run && run.memberId === actorId, 403, 'run_denied');
@@ -169,11 +175,13 @@ export class ControlState {
       run.status = 'stopped';
     } else if (event.kind === 'failed') {
       run.status = 'failed'; run.error = 'runtime_failed';
-    } else if (run.status !== 'cancel_requested') {
-      if (event.status === 'completed') {
+    } else if (event.kind === 'status' && event.status === 'completed') {
+        // Completion can precede a cancellation whose caller has not consumed events yet.
+        // A server publication receipt plus the provider terminal event is authoritative.
         run.status = run.receiptId ? 'completed' : 'failed';
         if (!run.receiptId) run.error = 'completed_without_publication_receipt';
-      } else if (event.status === 'running') run.status = 'running';
+    } else if (run.status !== 'cancel_requested') {
+      if (event.status === 'running') run.status = 'running';
     }
   }
   visibleRun(actorId: string, id: string): Run {

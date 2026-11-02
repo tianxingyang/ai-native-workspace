@@ -5,7 +5,7 @@
 | 命令 | 结果 |
 | --- | --- |
 | `npm install --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org --cache .npm-cache` | 成功；122 packages；固定直接版本及 lockfile |
-| `npm test`（包含 TypeScript build） | **18 passed, 0 failed, 0 skipped**；最近一次测试耗时约 4.7 秒 |
+| `npm test`（包含 TypeScript build，审查修复后） | **22 passed, 0 failed, 0 skipped** |
 | `npm run demo -- --pi-mock` | 成功；control PID 16172，worker PID 9596；Run completed，四轮 SDK 模拟模型循环 |
 | `git diff --check` | 通过 |
 
@@ -16,3 +16,13 @@ Alex 连续发送三条群聊消息：午饭闲聊、调研请求、继续讨论
 测试还单独运行 fake 与 pi-mock 双进程场景；通过 12 并发认领、8 次重复输入、6 次重复结果、未授权读/发、不可见消息不入队、来源/授权版本失效、取消后迟到结果、停止确认和选配能力拒绝等用例。pi 模拟模型用例验证实际三次 HTTP 工具调用的结果进入后续 SDK 轮次，禁止非 loopback fetch，实际工具集合只有四个 CoSeat 工具。
 
 真实模型调用、真实联网调研、物理隔离、持久恢复、完整编辑撤回与防循环、生产身份认证未运行或未实现。以上不构成 VIT-108/112 全部验收完成；更详细范围见[运行说明](../development-slice.md)。
+
+## 独立审查回归
+
+在原实现上先运行三个确定性用例，全部失败：完成事件未消费时取消返回 `cancel_requested`；capabilities 等待期间取消也返回 `cancel_requested`；来源修改后旧 Run 的认领工具导致 Run 数量从 1 增至 2。确认发现成立后才修改实现。
+
+修复后新增的四个回归用例全部通过：完成事件对账并报告取消太晚；创建会话前取消确认未启动且不产生 runtime 事件；创建请求已在途时保留待确认状态，直到 provider 确认未应用输入；旧 Run 在来源版本改变后调用确认认领，返回 `source_revision_changed`，Run 数量仍为 1、派发执行次数为 0。
+
+同时重跑 `npm run demo` 和 `npm run demo -- --pi-mock`，两种双进程演示均完成并关闭服务。真实模型调用仍未运行。
+
+修复后的 fake 演示 PID：23252 / 25968，Run `a1a26ebd-b686-4b94-9784-56b950ac2082`；pi-mock 演示 PID：29168 / 31092，Run `00f48104-0275-4cfe-99c9-f75a0394f1ff`。最后一次完整测试 22/22 通过，耗时约 5.1 秒。

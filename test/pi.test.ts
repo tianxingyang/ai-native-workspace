@@ -38,7 +38,7 @@ test('real pi 1.4.0 SDK executes a four-turn mock-model loop through HTTP tools 
   assert.equal((output.data.sdkEvents as string[]).filter(e => e === 'tool_execution_end').length, 3);
   assert.ok((output.data.sdkEvents as string[]).includes('agent_settled'));
   assert.ok(requests.includes('/tools/send'));
-  assert.ok(requests.includes('/tools/claim'));
+  assert.ok(requests.includes('/tools/confirm-claim'));
   assert.deepEqual((await readdir(folder)).sort(), ['.pi', 'AGENTS.md']);
 });
 

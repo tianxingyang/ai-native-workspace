@@ -6,6 +6,7 @@ import { RuntimeClient } from './runtime-client.js';
 
 export function controlService(state: ControlState, runtime: RuntimeClient, options: { autoDispatch?: boolean } = {}) {
   const jobs = new Set<Promise<void>>();
+  const creatingSessions = new Set<string>();
   let shuttingDown = false;
   const dispatch = (run: Run) => {
     const job = (async () => {
@@ -13,10 +14,13 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
         // Recheck visibility, grant and revisions immediately before dispatch.
         state.currentRun(run.memberId, run.id, 'read');
         const capabilities = await runtime.capabilities();
+        if (terminal(run.status)) return;
         requireCondition(capabilities.protocol === PROTOCOL_VERSION, 409, 'protocol_mismatch');
         state.currentRun(run.memberId, run.id, 'read');
+        creatingSessions.add(run.id);
         const session = await runtime.createSession(run.work);
         run.sessionId = session.sessionId;
+        creatingSessions.delete(run.id);
         if (run.status === 'cancel_requested') await runtime.cancel(session.sessionId);
         else {
           state.currentRun(run.memberId, run.id, 'read');
@@ -30,8 +34,9 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
         }
         if (!terminal(run.status)) { run.status = 'unknown'; run.error = 'runtime_stop_unconfirmed'; }
       } catch (error) {
+        if (terminal(run.status)) return;
         // Network errors cannot prove failure or cancellation of remote execution.
-        if (error instanceof ApiError && !run.sessionId && run.status !== 'cancel_requested') {
+        if (error instanceof ApiError && !run.sessionId && !creatingSessions.has(run.id) && run.status !== 'cancel_requested') {
           run.status = 'failed'; run.error = error.code;
         } else {
           run.status = 'unknown'; run.error = 'runtime_outcome_unknown';
@@ -70,6 +75,11 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
       if (!result.duplicate && options.autoDispatch !== false) dispatch(result.run);
       respond(response, 200, result); return;
     }
+    if (url.pathname === '/tools/confirm-claim' && request.method === 'POST') {
+      const body = await jsonBody(request);
+      requireCondition(Number.isInteger(body.sourceRevision) && Number(body.sourceRevision) > 0, 400, 'invalid_source_revision');
+      respond(response, 200, state.confirmClaim(actor, stringValue(body.runId, 'runId', 128), stringValue(body.sourceMessageId, 'sourceMessageId', 128), Number(body.sourceRevision))); return;
+    }
     if (url.pathname === '/tools/send' && request.method === 'POST') {
       const body = await jsonBody(request);
       requireCondition(body.authorId === undefined && body.memberId === undefined && body.conversationId === undefined && body.threadId === undefined, 400, 'identity_and_route_are_bound');
@@ -88,9 +98,21 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
     if (match && request.method === 'GET' && !match[2]) { respond(response, 200, state.visibleRun(actor, match[1]!)); return; }
     if (match?.[2] && request.method === 'POST') {
       const run = state.cancel(actor, match[1]!);
+      const stoppedBeforeSession = !run.sessionId && !creatingSessions.has(run.id) && !terminal(run.status);
+      if (stoppedBeforeSession) {
+        run.status = 'stopped';
+        run.stopEvidence = { scope: 'runtime_session_not_created', executionStarted: false };
+      }
       // Freeze publication before the remote RPC; do not treat its acceptance as stopped.
-      const receipt = run.sessionId && !terminal(run.status) ? await runtime.cancel(run.sessionId).catch(() => ({ accepted: false, stopped: false })) : { accepted: !terminal(run.status), stopped: run.status === 'stopped' };
-      respond(response, 202, { status: run.status, cancellation: receipt, publishedReceiptId: run.receiptId ?? null }); return;
+      const receipt = run.sessionId && !terminal(run.status) ? await runtime.cancel(run.sessionId).catch(() => ({ accepted: false, stopped: false })) : { accepted: stoppedBeforeSession || !terminal(run.status), stopped: run.status === 'stopped' };
+      if (run.sessionId && !terminal(run.status)) {
+        try {
+          const { events } = await runtime.events(run.sessionId, run.events.length);
+          for (const event of events) state.recordEvent(run, event);
+        } catch { /* Keep publication fenced; the dispatcher may reconcile on its next poll. */ }
+      }
+      const cancellationOutcome = run.stopEvidence ? 'stopped_before_session' : run.status === 'completed' ? 'too_late_completed' : run.status === 'stopped' ? 'stopped' : run.status === 'failed' ? 'already_failed' : 'unconfirmed';
+      respond(response, 202, { status: run.status, cancellation: receipt, cancellationOutcome, stopEvidence: run.stopEvidence ?? null, publishedReceiptId: run.receiptId ?? null }); return;
     }
     respond(response, 404, { error: 'not_found' });
   });
