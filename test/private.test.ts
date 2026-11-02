@@ -14,6 +14,7 @@ import { PrivateEngine, type Delivery } from '../src/private/engine.js';
 import { privateService } from '../src/private/service.js';
 import { OutboundWorker } from '../src/private/outbound-worker.js';
 import { fakeExecution, fixtureResult } from '../src/worker/fake.js';
+import { LocalRuntime } from '../src/worker/runtime.js';
 import { close, listen, requestJson } from '../src/http.js';
 import { type Message, type Run, terminal } from '../src/contracts.js';
 import { expectStatus, gate, waitFor } from './helpers.js';
@@ -131,6 +132,120 @@ test('lease expiry fences late results and never reassigns unknown work', async 
   await expectStatus(requestJson(env.url, secrets.COSEAT_AGENT_TOKEN, '/tools/send', { runId: delivery.runId, result: fixtureResult() }, undefined, { 'x-coseat-lease': delivery.leaseId!, 'x-coseat-instance': 'original' }), 409);
   assert.equal(env.engine.commit(() => env.engine.poll('agent1', 'original')).command, 'cancel');
   assert.equal(env.engine.state.runs.size, 1);
+});
+
+test('lost assignment response expires and the original worker confirms it never created a session', async t => {
+  let now = Date.now(), executions = 0, notStartedRequests = 0;
+  const env = await setup(t, () => now), worker = env.worker(async () => { executions++; });
+  const createSession = t.mock.method(LocalRuntime.prototype, 'createSession');
+  await env.post();
+  const runId = [...env.engine.state.runs.keys()][0]!;
+  const originalFetch = globalThis.fetch;
+  let lostDelivery: Delivery | undefined;
+  globalThis.fetch = async (input, init) => {
+    const response = await originalFetch(input, init);
+    const path = new URL(String(input)).pathname;
+    if (path === '/worker/poll' && !lostDelivery) {
+      assert.equal(response.status, 200);
+      lostDelivery = await response.json() as Delivery;
+      assert.equal(lostDelivery.command, 'execute');
+      throw new TypeError('injected_assignment_response_loss');
+    }
+    if (path === '/worker/not-started') notStartedRequests++;
+    return response;
+  };
+  try {
+    await assert.rejects(worker.step(), /injected_assignment_response_loss/);
+    const saved = env.engine.store.load<{ leases: [string, { runId: string; instanceId: string }][] }>()!;
+    assert.equal(saved.leases.length, 1);
+    assert.equal(saved.leases[0]![0], lostDelivery!.leaseId);
+    assert.equal(saved.leases[0]![1].instanceId, worker.instanceId);
+    assert.equal(saved.leases[0]![1].runId, runId);
+    assert.equal(createSession.mock.callCount(), 0);
+    assert.equal(executions, 0);
+    now += 11000;
+    assert.equal((await requestJson<Run>(env.url, secrets.COSEAT_OWNER_TOKEN, `/runs/${runId}`)).status, 'unknown');
+    const cancellation = await worker.step();
+    assert.equal(cancellation.command, 'cancel');
+    assert.equal(cancellation.leaseId, lostDelivery!.leaseId);
+    const stopped = env.engine.state.runs.get(runId)!;
+    assert.equal(stopped.status, 'stopped');
+    assert.deepEqual(stopped.stopEvidence, { scope: 'worker_acknowledged_not_started', executionStarted: false });
+    assert.equal(stopped.sessionId, undefined); assert.equal(stopped.receiptId, undefined);
+    assert.equal(stopped.events.length, 0);
+    assert.equal((await worker.step()).command, 'idle');
+    assert.equal(notStartedRequests, 1); assert.equal(createSession.mock.callCount(), 0);
+    assert.equal(executions, 0); assert.equal(env.engine.state.runs.size, 1);
+  } finally { globalThis.fetch = originalFetch; }
+  await env.restart();
+  assert.equal(env.engine.state.runs.get(runId)?.status, 'stopped');
+  assert.equal(env.engine.state.messages.size, 1);
+});
+
+test('lost event acknowledgements replay complete batches without duplicate events or receipts and allow renewal', async t => {
+  const hold = gate(); t.after(async () => { hold.release(); });
+  let now = Date.now(), executions = 0, ready = false;
+  let emit: ((data: Record<string, unknown>) => void) | undefined;
+  const env = await setup(t, () => now);
+  const worker = env.worker(async (_work, _input, tools, _signal, output) => {
+    executions++; emit = output;
+    await tools.sendMessage(fixtureResult()); ready = true;
+    await hold.promise;
+  });
+  await env.post(); await worker.step(); await waitFor(() => ready ? true : undefined);
+  const runId = [...env.engine.state.runs.keys()][0]!, receiptId = env.engine.state.runs.get(runId)!.receiptId;
+  assert.ok(receiptId);
+  emit!({ marker: 'deterministic_pending_event' });
+  const originalFetch = globalThis.fetch;
+  const batches: string[] = [];
+  let loseNext = true;
+  globalThis.fetch = async (input, init) => {
+    const response = await originalFetch(input, init);
+    if (new URL(String(input)).pathname === '/worker/events') {
+      assert.equal(response.status, 200);
+      batches.push(String(init!.body));
+      if (loseNext) {
+        loseNext = false; await response.arrayBuffer();
+        throw new TypeError('injected_event_ack_loss');
+      }
+    }
+    return response;
+  };
+  try {
+    now += 9000;
+    await assert.rejects(worker.step(), /injected_event_ack_loss/);
+    const persisted = env.engine.store.load<{ state: { runs: [string, Run][] } }>()!.state.runs.find(([id]) => id === runId)![1];
+    assert.ok(persisted.events.some(e => e.data.marker === 'deterministic_pending_event'));
+    assert.equal(persisted.receiptId, receiptId);
+    const count = persisted.events.length;
+    assert.equal((await worker.step()).command, 'execute');
+    assert.equal(batches[1], batches[0]); // Full request including every event is retransmitted unchanged.
+    assert.equal(env.engine.state.runs.get(runId)!.events.length, count);
+    now += 2000; // Beyond the original lease; the post-retry poll must have renewed it.
+    assert.equal((await worker.step()).command, 'execute');
+    assert.equal(env.engine.state.runs.get(runId)!.status, 'running');
+    assert.equal(executions, 1); assert.equal(env.engine.state.messages.size, 2);
+
+    // Lose the terminal batch acknowledgement too, after the publication receipt is already durable.
+    hold.release();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    loseNext = true;
+    const terminalBatch = batches.length;
+    await assert.rejects(worker.step(), /injected_event_ack_loss/);
+    const completed = env.engine.state.runs.get(runId)!;
+    assert.equal(completed.status, 'completed');
+    const finalCount = completed.events.length;
+    assert.equal((await worker.step()).command, 'idle');
+    assert.equal(batches[terminalBatch + 1], batches[terminalBatch]);
+    assert.equal(completed.events.length, finalCount);
+    assert.equal(new Set(completed.events.map(e => e.id)).size, finalCount);
+    assert.equal(completed.receiptId, receiptId);
+    assert.equal(executions, 1); assert.equal(env.engine.state.messages.size, 2);
+  } finally { globalThis.fetch = originalFetch; hold.release(); }
+  await env.restart();
+  assert.equal(env.engine.state.runs.get(runId)?.receiptId, receiptId);
+  assert.equal(env.engine.state.runs.get(runId)?.status, 'completed');
+  assert.equal(env.engine.state.messages.size, 2);
 });
 
 test('cancel survives a control restart and reconnecting worker converges without repeating execution', async t => {
