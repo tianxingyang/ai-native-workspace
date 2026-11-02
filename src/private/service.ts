@@ -2,13 +2,16 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { requireCondition, scopeValue, stringValue } from '../contracts.js';
 import { bearer, jsonBody, respond, server } from '../http.js';
 import { PrivateEngine } from './engine.js';
+import { clientSession, serveWeb } from './web.js';
 
-export function privateService(engine: PrivateEngine) {
+export function privateService(engine: PrivateEngine, options: { web?: boolean } = {}) {
   const { state } = engine;
   return server(async (request, response, url) => {
+    if (options.web && serveWeb(request, response, url)) return;
     if (request.method === 'GET' && url.pathname === '/health') { respond(response, 200, { service: 'control', mode: 'private-mock', storageVersion: 1 }); return; }
     const token = bearer(request);
     const actor = state.authenticate(token);
+    if (url.pathname === '/session' && request.method === 'GET') { respond(response, 200, engine.commit(() => clientSession(state, actor))); return; }
     const body = request.method === 'POST' ? await jsonBody(request) : undefined;
     if (body) requireCondition(body.memberId === undefined && body.authorId === undefined, 400, 'identity_is_authenticated');
     // Body reads and idle long polls await I/O: recheck credentials immediately before each operation.
