@@ -18,6 +18,20 @@ export class ControlState {
   private readonly toolCalls = new Map<string, number>();
   constructor(readonly config: ControlConfig) {}
 
+  snapshot() {
+    return structuredClone({ messages: [...this.messages], runs: [...this.runs], approvals: [...this.approvals],
+      decisions: this.decisions, audit: this.audit.slice(-1000), messageKeys: [...this.messageKeys],
+      claims: [...this.claims], resultKeys: [...this.resultKeys], toolCalls: [...this.toolCalls] });
+  }
+  restore(data: ReturnType<ControlState['snapshot']>): void {
+    const restoreMap = <K, V>(map: Map<K, V>, entries: [K, V][]) => { map.clear(); for (const [key, value] of entries) map.set(key, value); };
+    restoreMap(this.messages, data.messages); restoreMap(this.runs, data.runs); restoreMap(this.approvals, data.approvals);
+    restoreMap(this.messageKeys, data.messageKeys); restoreMap(this.claims, data.claims);
+    restoreMap(this.resultKeys, data.resultKeys); restoreMap(this.toolCalls, data.toolCalls);
+    this.decisions.splice(0, this.decisions.length, ...data.decisions);
+    this.audit.splice(0, this.audit.length, ...data.audit);
+  }
+
   authenticate(token: string): string {
     const actorId = this.config.tokens[token];
     requireCondition(actorId && this.config.members.some(m => m.id === actorId), 401, 'invalid_identity');

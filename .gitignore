@@ -5,3 +5,7 @@ dist/
 *.log
 .env
 .env.*
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+private-config*.json

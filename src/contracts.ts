@@ -56,7 +56,7 @@ export interface Run {
   id: string; taskId: string; memberId: string; sourceMessageId: string; intent: 'research';
   work: WorkPackage; status: RunStatus; sessionId?: string; receiptId?: string;
   events: RuntimeEvent[]; error?: string;
-  stopEvidence?: { scope: 'runtime_session_not_created'; executionStarted: false };
+  stopEvidence?: { scope: 'runtime_session_not_created' | 'worker_acknowledged_not_started'; executionStarted: false };
 }
 export class ApiError extends Error {
   constructor(public status: number, public code: string) { super(code); }

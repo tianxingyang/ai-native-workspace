@@ -10,7 +10,7 @@ interface Session {
 /** Shared protocol lifecycle; harness-specific execution remains a small function. */
 export class LocalRuntime implements RuntimeProvider {
   private readonly sessions = new Map<string, Session>();
-  constructor(private readonly config: { provider: string; version: string; memberId: string; controlUrl: string; memberToken: string; execute: Execute }) {}
+  constructor(private readonly config: { provider: string; version: string; memberId: string; controlUrl: string; memberToken: string; execute: Execute; toolHeaders?: Record<string, string> }) {}
   capabilities(): RuntimeCapabilities {
     return { protocol: PROTOCOL_VERSION, provider: this.config.provider, providerVersion: this.config.version, appendInput: false, pause: false, resume: false, checkpoint: false, cancellation: 'cooperative' };
   }
@@ -49,7 +49,7 @@ export class LocalRuntime implements RuntimeProvider {
       s.status = 'running'; this.emit(s, 'input_applied', { inputId: input.id });
       let budgetExpired = false;
       const timer = setTimeout(() => { budgetExpired = true; s.abort.abort(new Error('runtime_budget_exceeded')); }, s.work.budget.maxDurationMs);
-      const tools = new CoSeatTools(this.config.controlUrl, this.config.memberToken, s.work, s.abort.signal, value => this.emit(s, 'approval_requested', value));
+      const tools = new CoSeatTools(this.config.controlUrl, this.config.memberToken, s.work, s.abort.signal, value => this.emit(s, 'approval_requested', value), this.config.toolHeaders);
       try {
         await this.config.execute(s.work, input, tools, s.abort.signal, value => this.emit(s, 'output', value));
         requireCondition(Boolean(tools.receiptId), 409, 'no_publication_receipt');

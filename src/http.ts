@@ -40,10 +40,10 @@ export async function close(service: ReturnType<typeof server>): Promise<void> {
   service.closeIdleConnections();
   await new Promise<void>((resolve, reject) => service.close(error => error ? reject(error) : resolve()));
 }
-export async function requestJson<T>(base: string, token: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+export async function requestJson<T>(base: string, token: string, path: string, body?: unknown, signal?: AbortSignal, extraHeaders: Record<string, string> = {}): Promise<T> {
   const response = await fetch(new URL(path, base), {
     method: body === undefined ? 'GET' : 'POST', redirect: 'error',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    headers: { ...extraHeaders, authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000),
   });
