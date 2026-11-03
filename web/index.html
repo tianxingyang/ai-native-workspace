@@ -1,43 +1,105 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>CoSeat 同席</title><link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script></head>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>CoSeat 同席</title>
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/app.js"></script>
+</head>
 <body>
-<!-- THESIS: A shared conversation with human and agent peers; work stays beside its source.
-OWN-WORLD: Ink text, pale slate navigation, white reading surface, deep teal actions; aligned initials and restrained rules.
-STORY: Enter an authorized room, discuss, inspect research and request a confirmed stop.
-FIRST VIEWPORT: 280px conversation rail, room header and member line, spacious chronological messages, bottom composer. Narrow screens switch between rooms and chat.
-FORM: Brief-pinned familiar team messenger, code-led reusable interface. Signature interaction: source-linked research unfolds in the message stream.
-FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance -->
+<svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M20.5 12 4.2 4.3c-.5-.2-1 .3-.8.8L6 12l-2.6 6.9c-.2.5.3 1 .8.8z"/><path d="M6 12h6.5"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.2c.6-3 2.8-4.9 5.5-4.9s4.9 1.9 5.5 4.9"/><path d="M15.4 5.5a3.1 3.1 0 0 1 0 6M17.3 14.6c1.7.6 2.8 2.1 3.2 4.6"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6.5 6.5 11 11M17.5 6.5l-11 11"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M14.5 5.5 8 12l6.5 6.5"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.3 12.2a7.3 7.3 0 1 1-2.1-5.4"/><path d="M19.4 4.6v3.9h-3.9"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.6 4.6 3.3 17.4c-.6 1 .1 2.1 1.3 2.1h14.8c1.2 0 1.9-1.2 1.3-2.1L13.4 4.6c-.6-1-2.2-1-2.8 0z"/><path d="M12 9.5v4.2M12 16.6v.1"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7.6V12l2.9 1.9"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24"><path d="M13.5 4.5h4a1.5 1.5 0 0 1 1.5 1.5v12a1.5 1.5 0 0 1-1.5 1.5h-4"/><path d="M9.5 8 5.5 12l4 4M5.5 12H15"/></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 4v7.5"/><path d="M7.3 6.8a7 7 0 1 0 9.4 0"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5.6c2.6-1 5.3-.9 8 .7 2.7-1.6 5.4-1.7 8-.7v13c-2.6-1-5.3-.9-8 .7-2.7-1.6-5.4-1.7-8-.7z"/><path d="M12 6.3v13"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v13.5M6.5 13 12 18.5 17.5 13"/></symbol>
+  <symbol id="i-jump" viewBox="0 0 24 24"><path d="M5 12h13M13 6.5l5.5 5.5-5.5 5.5"/></symbol>
+  <symbol id="i-thread" viewBox="0 0 24 24"><path d="M5 5.5h14M5 10.5h10M8.5 15.5H19M8.5 19.5h6"/><path d="M5 13.5v6"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5.5" y="10.5" width="13" height="9" rx="1.6"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6"/></symbol>
+  <symbol id="st-queued" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.2" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+  <symbol id="st-running" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.6" fill="currentColor"/></symbol>
+  <symbol id="st-cancel_requested" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="5.9" y="5.9" width="4.2" height="4.2" rx=".6" fill="currentColor"/></symbol>
+  <symbol id="st-stopped" viewBox="0 0 16 16"><rect x="3.2" y="3.2" width="9.6" height="9.6" rx="1.6" fill="currentColor"/></symbol>
+  <symbol id="st-completed" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.6" fill="currentColor"/><path d="m5.2 8.3 1.9 1.9 3.8-4.1" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="st-failed" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.6" fill="currentColor"/><path d="m5.8 5.8 4.4 4.4m0-4.4-4.4 4.4" stroke="#fff" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="st-unknown" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6.4 6.4a1.7 1.7 0 1 1 2.4 1.6c-.5.3-.8.6-.8 1.2v.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11.4" r=".9" fill="currentColor"/></symbol>
+</svg>
+
 <section id="connect" class="connection-page" aria-labelledby="connect-title">
-  <div class="connect-panel"><div class="wordmark">CoSeat <span>同席</span></div>
-    <h1 id="connect-title">回到团队的讨论中</h1>
-    <p>人与 Agent，同席协作。连接后查看你获准访问的会话。</p>
-    <form id="connect-form"><label for="token">本地演示访问凭据</label><input id="token" type="password" autocomplete="off" spellcheck="false" required maxlength="512" aria-describedby="credential-help"><button class="primary" id="connect-button">连接会话</button></form>
-    <p id="credential-help" class="muted">使用启动演示时生成的临时凭据。仅在当前页面内存中保留；刷新或退出后需重新连接。</p>
-    <p id="connect-error" class="error" role="alert"></p>
-    <div class="demo-note">本地模拟演示 · Agent 使用合成资料，不进行真实调研。</div>
+  <div class="connect-panel">
+    <div class="connect-card-top"><div class="wordmark">CoSeat <span>同席</span></div></div>
+    <div class="connect-body">
+      <h1 id="connect-title">回到团队的讨论中</h1>
+      <p class="connect-lede">人与 Agent，同席协作。连接后查看你获准访问的会话。</p>
+      <form id="connect-form">
+        <label for="token">本地演示访问凭据</label>
+        <input id="token" type="password" autocomplete="off" spellcheck="false" required maxlength="512" aria-describedby="connect-error credential-help" aria-invalid="false">
+        <p id="connect-error" class="error" role="alert"></p>
+        <button class="primary" id="connect-button">连接会话</button>
+      </form>
+      <p id="credential-help" class="muted">使用启动演示时生成的临时凭据。仅在当前页面内存中保留；刷新或退出后需重新连接。</p>
+      <div class="demo-note">本地模拟演示 · Agent 使用合成资料，不进行真实调研。</div>
+    </div>
   </div>
 </section>
+
 <div id="app" class="shell" hidden>
   <aside id="sidebar" class="sidebar" aria-label="会话导航">
     <div class="brand-row"><div class="wordmark">CoSeat <span>同席</span></div><span class="tag">本地演示</span></div>
     <div class="section-title"><h1>会话</h1><span id="room-count"></span></div>
     <nav id="rooms" aria-label="已授权会话"></nav>
-    <div class="sidebar-footer"><div id="identity"></div><button id="logout" class="quiet">退出连接</button></div>
+    <div class="sidebar-footer"><div id="identity" class="identity"></div><button id="logout" class="rail-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-logout"/></svg><span>退出连接</span></button></div>
   </aside>
-  <main id="chat" class="chat">
-    <header class="chat-header"><button id="back" class="quiet back">会话列表</button><div class="heading"><h2 id="room-title"></h2><p id="thread-title"></p></div><button id="members-toggle" class="quiet" aria-expanded="false" aria-controls="members">成员</button></header>
-    <div id="members" class="members" hidden></div>
-    <div class="context-strip"><span>模拟 Agent · 仅使用合成资料</span><span id="connection-status" role="status">正在连接</span></div>
-    <div id="sync-error" class="sync-error" hidden><span id="sync-error-text"></span><button id="reconnect" class="quiet">立即重连</button></div>
-    <div id="source-filter" class="source-filter" hidden><span>正在查看这条消息的讨论与研究</span><button id="all-messages" class="quiet">返回全部消息</button></div>
-    <section id="timeline" class="timeline" aria-label="消息记录" tabindex="0"><div id="messages"></div></section>
-    <button id="new-messages" class="new-messages" hidden>查看新消息</button>
-    <div class="composer-wrap"><div id="outbox" aria-live="polite"></div>
-      <form id="composer"><label class="sr-only" for="message">发送到当前会话的消息</label><textarea id="message" rows="3" maxlength="8000" placeholder="和团队说点什么…"></textarea><div class="composer-bottom"><span id="send-help">Enter 发送 · Shift + Enter 换行</span><button id="send" class="primary" type="submit">发送</button></div></form>
+
+  <main id="chat" class="chat" aria-labelledby="room-title">
+    <header class="chat-header">
+      <button id="back" class="quiet back" type="button"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg><span>会话列表</span></button>
+      <span id="room-tile" class="tile room-tile" aria-hidden="true"></span>
+      <div class="heading"><h2 id="room-title" tabindex="-1"></h2><p id="thread-title"></p></div>
+      <ul id="seats" class="seats" aria-label="在座成员"></ul>
+      <span id="connection-status" class="connection" role="status" data-state="pending">正在连接</span>
+      <button id="members-toggle" class="quiet members-toggle" type="button" aria-expanded="false" aria-controls="details"><svg class="icon" aria-hidden="true"><use href="#i-users"/></svg><span id="members-count">成员</span><span id="members-short" aria-hidden="true"></span></button>
+    </header>
+    <div id="sync-error" class="banner warn" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span id="sync-error-text"></span><button id="reconnect" type="button">立即重连</button></div>
+    <div class="timeline-wrap">
+      <section id="timeline" class="timeline" aria-label="消息记录" tabindex="0"><div id="messages"></div></section>
+      <button id="new-messages" class="new-messages" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-down"/></svg><span>查看新消息</span></button>
+    </div>
+    <div class="composer-wrap">
+      <div id="outbox" aria-live="polite"></div>
+      <div id="expiry" class="banner warn expiry" role="status" hidden></div>
+      <form id="composer">
+        <div id="seat" class="seat-card"></div>
+        <div class="composer-fold"><div class="composer-fold-inner">
+          <label class="sr-only" for="message">发送到当前会话的消息</label>
+          <textarea id="message" rows="1" maxlength="8000" placeholder="和团队说点什么…"></textarea>
+          <div class="composer-bottom"><span id="send-help">Enter 发送 · Shift + Enter 换行</span><button id="send" class="primary" type="submit"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg><span id="send-label">发送</span></button></div>
+        </div></div>
+      </form>
       <p id="scope-note" class="scope-note"></p>
     </div>
   </main>
+
+  <aside id="details" class="details" aria-labelledby="details-title" hidden>
+    <header class="details-header"><h2 id="details-title" tabindex="-1"></h2><button id="details-close" class="icon-button" type="button" aria-label="关闭详情"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></header>
+    <div id="details-members" class="details-body" hidden>
+      <section id="my-seat" class="my-seat" aria-label="你的席位"></section>
+      <h3 class="pane-section-title">在座成员</h3>
+      <ul id="members" class="member-list"></ul>
+      <p class="pane-note">本演示中的 Agent 在讨论出现明确的调研请求时自动参与，无需 @；只使用合成资料，不访问互联网。</p>
+      <p class="pane-note">每项操作仍由服务端校验授权。这里只显示你自己的权限，不显示其他成员的授权。</p>
+    </div>
+    <div id="details-thread" class="details-body" hidden></div>
+  </aside>
 </div>
 <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
 </body></html>

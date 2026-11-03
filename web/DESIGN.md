@@ -1,252 +1,357 @@
 ---
-name: CoSeat 同席 — Web IM
-description: Chinese-first shared conversations for human and agent teammates, verified in a local browser demo.
+name: CoSeat 同席 — Team IM
+description: Team messenger where people and agents sit at one table as named peers; reused by the Windows Tauri client and the local browser demo. Market, default locale and initially supported languages remain undecided.
 colors:
-  accent: "#14675f"
-  accent-hover: "#0e514b"
-  focus: "#268c80"
-  ink: "#202d35"
-  muted: "#586974"
-  panel: "#f2f5f6"
-  reading: "#fff"
-  line: "#dce4e7"
-  button-hover: "#e3ebed"
-  room-selected: "#dfece8"
-  role-surface: "#e1eae8"
-  role-text: "#28574f"
-  context-surface: "#f6f8f8"
-  research-surface: "#f3f7f6"
-  research-action: "#e2ede9"
-  source-filter: "#edf5f2"
-  source-border: "#bdd8cd"
-  human-surface: "#e7edf2"
-  human-ink: "#3f596b"
-  agent-surface: "#dfece6"
-  agent-ink: "#285c4b"
-  danger: "#a33a30"
-  warning-surface: "#fff3e4"
-  warning-ink: "#74480d"
-  synthetic-surface: "#fbf1d9"
-  synthetic-ink: "#7b591e"
-  input-border: "#9daeb5"
-  composer-border: "#bccdce"
+  card-white: "#ffffff"
+  table: "#f5f7f5"
+  quiet-fill: "#edf1ee"
+  hairline: "#dfe5e0"
+  strong-rule: "#c9d1cb"
+  control-edge: "#858f89"
+  muted-ink: "#5f6b64"
+  secondary-ink: "#3f4a44"
+  ink: "#17201b"
+  felt: "#1f4337"
+  felt-raised: "#29503f"
+  felt-deep: "#193a2f"
+  felt-ink: "#eef4f0"
+  felt-mute: "#b4cbbf"
+  felt-focus: "#9fd8bf"
+  accent: "#1d6a50"
+  accent-soft: "#e2eee7"
+  focus: "#2e8a67"
+  live: "#b87310"
+  live-ink: "#865410"
+  live-soft: "#fbf1de"
+  live-rule: "#ead2a6"
+  live-on-felt: "#f2c879"
+  warn-ink: "#6b4307"
+  warn-soft: "#fcf2df"
+  warn-rule: "#ecd3a6"
+  danger: "#b0281f"
 typography:
-  headline:
-    fontFamily: '"Segoe UI", "Microsoft YaHei", system-ui, sans-serif'
-    fontSize: "28px"
+  display:
+    fontFamily: '"Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif'
+    fontSize: "22px"
     fontWeight: 700
-    lineHeight: 1.4
-    letterSpacing: "-.02em"
+    lineHeight: 1.35
+    letterSpacing: "-.01em"
   title:
-    fontFamily: '"Segoe UI", "Microsoft YaHei", system-ui, sans-serif'
-    fontSize: "19px"
-    fontWeight: 650
+    fontFamily: '"Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif'
+    fontSize: "17px"
+    fontWeight: 700
+    lineHeight: 1.3
   body:
-    fontFamily: '"Segoe UI", "Microsoft YaHei", system-ui, sans-serif'
+    fontFamily: '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif'
     fontSize: "14px"
-    lineHeight: 1.85
+    fontWeight: 400
+    lineHeight: 1.7
   label:
-    fontFamily: '"Segoe UI", "Microsoft YaHei", system-ui, sans-serif'
+    fontFamily: '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif'
     fontSize: "13px"
+    fontWeight: 600
+    lineHeight: 1.5
+  meta:
+    fontFamily: '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif'
+    fontSize: "12px"
+    fontWeight: 400
+    lineHeight: 1.65
   caption:
-    fontFamily: '"Segoe UI", "Microsoft YaHei", system-ui, sans-serif'
+    fontFamily: '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif'
     fontSize: "11px"
-  role:
-    fontFamily: '"Segoe UI", "Microsoft YaHei", system-ui, sans-serif'
+    fontWeight: 400
+    lineHeight: 1.6
+  data:
+    fontFamily: '"Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace'
     fontSize: "11px"
-    fontWeight: 500
+    fontWeight: 400
+    lineHeight: 1.6
 rounded:
-  badge: "4px"
-  control: "8px"
-  mobile-avatar: "9px"
-  room: "10px"
-  avatar: "11px"
-  container: "12px"
+  mark: "4px"
+  card: "6px"
+  panel: "8px"
+  field: "10px"
+  pill: "16px"
 spacing:
-  tight: "4px"
-  small: "8px"
+  hair: "4px"
+  tight: "8px"
   compact: "12px"
-  inset: "14px"
-  medium: "16px"
-  desktop-gutter: "30px"
-  wide-gutter: "50px"
+  base: "16px"
+  gutter: "24px"
 components:
   button-primary:
-    backgroundColor: "{colors.accent}"
-    textColor: "{colors.reading}"
-    rounded: "{rounded.control}"
-    padding: "8px 14px"
+    backgroundColor: "{colors.felt}"
+    textColor: "{colors.card-white}"
+    rounded: "{rounded.card}"
+    padding: "0 16px"
+    height: "36px"
   button-primary-hover:
-    backgroundColor: "{colors.accent-hover}"
+    backgroundColor: "{colors.felt-deep}"
+  button-outline:
+    backgroundColor: "{colors.card-white}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.card}"
+    padding: "0 10px"
+    height: "30px"
   button-quiet:
-    textColor: "{colors.muted}"
-    typography: "{typography.label}"
-    rounded: "{rounded.control}"
-    padding: "8px 14px"
-  button-research:
-    backgroundColor: "{colors.research-action}"
+    textColor: "{colors.secondary-ink}"
+    rounded: "{rounded.card}"
+    padding: "0 10px"
+    height: "32px"
+  button-text:
     textColor: "{colors.accent}"
-    rounded: "{rounded.control}"
-    padding: "5px 10px"
-  input-credential:
-    backgroundColor: "{colors.reading}"
-    rounded: "{rounded.control}"
-    padding: "12px"
-    width: "100%"
+    typography: "{typography.meta}"
+    height: "28px"
+  room-default:
+    textColor: "{colors.felt-ink}"
+    rounded: "{rounded.card}"
+    padding: "8px 10px"
   room-selected:
-    backgroundColor: "{colors.room-selected}"
-    rounded: "{rounded.room}"
-    padding: "14px 12px"
-    width: "100%"
-  role-badge:
-    backgroundColor: "{colors.role-surface}"
-    textColor: "{colors.role-text}"
-    typography: "{typography.role}"
-    rounded: "{rounded.badge}"
-    padding: "3px 6px"
+    backgroundColor: "{colors.card-white}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.card}"
+    padding: "8px 10px"
+  seat-card:
+    backgroundColor: "{colors.card-white}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.card}"
+    padding: "0 10px 0 4px"
+    height: "30px"
+  seat-card-live:
+    backgroundColor: "{colors.live-soft}"
+    textColor: "{colors.live-ink}"
   research-card:
-    backgroundColor: "{colors.research-surface}"
-    rounded: "{rounded.container}"
-    padding: "14px 16px"
+    backgroundColor: "{colors.card-white}"
+    rounded: "{rounded.card}"
+    padding: "10px 12px"
   composer:
-    backgroundColor: "{colors.reading}"
-    rounded: "{rounded.container}"
-    padding: "12px 14px"
+    backgroundColor: "{colors.card-white}"
+    rounded: "{rounded.field}"
+    padding: "8px 10px 8px 12px"
+  composer-readonly:
+    backgroundColor: "{colors.quiet-fill}"
+  synthetic-label:
+    textColor: "{colors.secondary-ink}"
+    typography: "{typography.caption}"
+    rounded: "{rounded.mark}"
+    padding: "0 6px"
+  source-key:
+    backgroundColor: "{colors.accent-soft}"
+    textColor: "{colors.accent}"
+    rounded: "{rounded.mark}"
+    size: "18px"
+  banner-warning:
+    backgroundColor: "{colors.warn-soft}"
+    textColor: "{colors.warn-ink}"
+    padding: "8px 20px"
+  input-credential:
+    backgroundColor: "{colors.card-white}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.card}"
+    padding: "0 12px"
+    height: "40px"
 ---
 
-# Design System: CoSeat 同席 — Web IM
+# Design System: CoSeat 同席 — Team IM
 
 ## Overview
 
-**Creative North Star: "同席讨论，工作紧随来源"**
+**Creative North Star: "One table, named seats"（同席之桌）**
 
-A familiar team messenger keeps people, agents and their work in one chronological conversation. Ink text, pale slate navigation, a white reading surface and deep teal actions support Chinese-first office use. Initial avatars align peers consistently; research stays attached to its source message instead of moving into a separate dashboard.
+CoSeat keeps the skeleton every team-messenger user already knows: a conversation rail, one chronological stream, a composer at the bottom and an optional details pane on the right. The world on top of that skeleton is a meeting table. The rail is felt green, and the open conversation is the white card placed on it. Every member, human or agent, appears as a name-card tile with a word label for their kind. Your own name card sits on the composer and states your standing (出席 to speak, 列席 to read only) and when your speaking grant ends.
 
-This is a source-derived record of the current `web/` interface, based on `index.html`, `style.css`, `app.js` and the product context in `../PRODUCT.md`. The North Star paraphrases the existing body direction contract; it is an implementation assumption, not a newly approved brand identity. This boundary is reusable UI currently verified in a browser local demo. A desktop framework, installer and production service are not implemented by this design record. `../docs/design.md` remains the separate product architecture document.
+Work does not live in a dashboard. It arrives on the table as white cards that stand on a cool grey-green surface: a research card under its source message, with its state in a fixed first cell, and a result whose synthetic sources carry numbered keys. Message text itself is never boxed. Amber is reserved for things in flux, such as an agent researching, a cancellation awaiting its stop receipt, a lost connection or a grant about to expire. Dashed edges mark anything that is not fully real or not fully yours: synthetic results, demo notes, limitations and the read-only composer.
+
+The density suits an Operate surface. Rail rows are compact, the in-app type ramp stays within 11–17px, and Windows system faces carry Chinese and Latin text. Motion only reports state: live marks breathe, the details pane slides in, the composer folds shut when speaking ends, and a result you jump to flashes. This record describes the built `web/` interface (index.html, style.css, app.js). Under PRODUCT.md these remain implementation decisions for this slice, not a ratified brand identity.
 
 **Key Characteristics:**
 
-- Chinese-first, familiar conversation navigation.
-- Shared message alignment for human and agent peers.
-- Flat surfaces separated by tone, whitespace and thin rules.
-- Source-linked research with explicit state and synthetic-result labels.
-- Native text, CSS and inline SVG; no raster UI assets.
+- Familiar IM structure; the metaphor lives in identity, permission and expiry details.
+- People and agents share one alignment; kind is a word plus a tile tint, never a different layout.
+- White standing cards on a grey-green table; a felt-green rail and connection screen.
+- State always in words beside a drawn mark; amber means in flux, green means done.
+- Honest synthetic material: dashed labels, plain-text placeholder URLs, visible limitations.
 
 ## Colors
 
-Deep teal provides the action accent; slate and white organize the reading environment. Frontmatter records observed CSS values, including extracted repeated literals; only `accent`, `muted`, `line`, `panel`, `danger` and the container radius currently exist as CSS custom properties. This document does not imply a runtime theme API or dark theme.
+A restrained grey-green system with one committed field. Felt green owns the rail and the connection screen. Inside the reading area, green appears only as the accent for actions and completion.
 
 ### Primary
 
-- **Deep teal** (`accent`): primary actions, research status, message-source actions and source disclosure.
-- **Deep teal hover** (`accent-hover`): primary-button hover only.
-- **Focus teal** (`focus`): the visible keyboard outline, independent of selection.
+- **Felt Green** (`felt`): rail background, connection screen, primary buttons, the selected room's tile and the conversation tile in the header.
+- **Raised Felt** (`felt-raised`): hover on rail rows and rail buttons.
+- **Deep Felt** (`felt-deep`): rail footer band and primary-button hover.
+- **Felt Ink / Felt Mute** (`felt-ink`, `felt-mute`): primary and secondary text on felt. Mute keeps at least 5.2:1 on every felt tone.
+- **Felt Focus** (`felt-focus`): keyboard outline inside the rail.
+
+### Secondary
+
+- **Ledger Green** (`accent`): text actions (查看结果, 查看这条消息的讨论), completed marks and step dots, 出席 standing, available permissions, source keys and the summary text of the sources disclosure.
+- **Pale Ledger** (`accent-soft`): agent tiles, source-key chips, the pressed members toggle and the flash on a jumped-to message.
+- **Focus Green** (`focus`): the 2px keyboard outline everywhere outside the rail, and the composer's focus-within ring.
+
+### Tertiary
+
+- **Live Amber** (`live`): drawn marks only. Covers the running and cancel-requested state marks, live dots, the live seat's border and ring, and the current-step dot.
+- **Live Ink** (`live-ink`): text for live states (调研中, the current step, an unknown result).
+- **Live Wash / Live Rule** (`live-soft`, `live-rule`): fill of a live seat card and border of an in-flight research card.
+- **Live on Felt** (`live-on-felt`): live preview text in an unselected rail row.
 
 ### Neutral
 
-- **Ink / muted slate** (`ink`, `muted`): message content versus timestamps, supporting labels and secondary controls.
-- **Pale slate / reading white** (`panel`, `reading`): navigation and page surround versus chat content.
-- **Fine slate rule** (`line`): header, member and footer boundaries.
-- **Soft gray hover** (`button-hover`): generic button hover.
-- **Selected sage** (`room-selected`): the current conversation; selection is also exposed through `aria-current`.
-- **Quiet context / research surfaces** (`context-surface`, `research-surface`): context strip and research blocks; research actions and source filters have their own existing pale green fills.
-- **Human and agent avatar pairs** (`human-surface`, `human-ink`, `agent-surface`, `agent-ink`): distinguish member kind without changing message alignment or prominence. Text badges also identify kind.
-- **Role badge pair** (`role-surface`, `role-text`): short role and local-demo labels.
+- **Card White** (`card-white`): every standing card, the header, the details pane and the composer.
+- **Table** (`table`): the stream and composer surround; the app's ground.
+- **Quiet Fill** (`quiet-fill`): message hover, quote blocks, the "你" chip and the read-only composer.
+- **Hairline / Strong Rule** (`hairline`, `strong-rule`): card edges, dividers, step connectors and dashed demo rules.
+- **Control Edge** (`control-edge`): field and synthetic-label strokes (3.3:1 on white).
+- **Muted / Secondary / Ink** (`muted-ink`, `secondary-ink`, `ink`): meta text, supporting text and primary text. Muted keeps at least 4.8:1 on every neutral surface.
 
-### Semantic States
+### Semantic
 
-- **Danger red** (`danger`): connection and request errors.
-- **Warm warning pair** (`warning-surface`, `warning-ink`): sync interruption and unconfirmed outbound messages.
-- **Synthetic result pair** (`synthetic-surface`, `synthetic-ink`): marks simulated research output explicitly.
-- **Input / composer rules** (`input-border`, `composer-border`): resting field edges; the composer border switches to the accent when focus is inside.
+- **Warning trio** (`warn-soft`, `warn-ink`, `warn-rule`): sync-interruption banner, expiry notice, unconfirmed-send outbox. It shares the amber family on purpose, because these banners also mean "in flux, watch this".
+- **Danger** (`danger`): request errors, failed marks and steps, and the invalid-credential field border.
 
-**The State-in-Words Rule.** Status text must carry the meaning; color alone never establishes success, failure, role or a confirmed stop.
+**The One Ramp Rule.** Every neutral comes from the nine-step ramp `card-white` → `ink`. A new grey is a new token or a mistake.
+
+**The Amber Means In-Flux Rule.** Amber marks work that is still moving or a deadline that is approaching. Completion is green, failure is red, and a confirmed stop is ink. Amber is never decoration.
+
+**The State-in-Words Rule.** Every state pairs its mark or colour with words: 正在研究, 等待停止确认, 已停止, 已连接, 连接中断, 列席（只读）. Colour alone never carries a state at any width.
 
 ## Typography
 
-One system font stack serves headings, body copy and controls. Segoe UI and Microsoft YaHei are preferred, then platform sans-serif. There is no downloaded display or mono font. Font synthesis is disabled; installed font availability can change the rendered face.
+**Display / Title Font:** Segoe UI Variable Display, falling back to Segoe UI, Microsoft YaHei UI, Microsoft YaHei, PingFang SC and system-ui.
+**Body Font:** Segoe UI Variable Text, with the same CJK fallbacks plus Noto Sans CJK SC.
+**Data Font:** Cascadia Mono or Consolas, used only for placeholder source URLs.
 
-- **Headline:** connection-page heading; the recorded bold weight is the native heading default. Narrow screens reduce its size to (26px).
-- **Title:** room heading, reduced to (17px) on narrow screens. The sidebar section title and conversation name use (14px); conversation names use weight (600).
-- **Body:** message text uses the recorded generous leading and a maximum line measure of (75ch). Whitespace is preserved and long content can wrap anywhere.
-- **Labels:** message names and research titles use (13px); author names use weight (650), research titles (600). Secondary room/thread metadata commonly uses (12px).
-- **Captions:** timestamps, scope notes and status badges sit at the smaller end of the observed scale. Timestamps use tabular numerals.
-- **Wordmark:** text only, size (24px), weight (750), tracking (-.025em); the rail uses (23px). The adjacent Chinese name is smaller and muted.
+**Character:** The native Windows UI voice. Latin is set in Segoe, Chinese in YaHei UI, and leading is generous enough for CJK reading. The stack is deliberate. This is an Operate surface inside a Tauri WebView2 client, the CSP forbids remote fonts, and a bundled CJK face would add megabytes to the installer without helping any task. Font synthesis is disabled.
 
-Keep ordinary Chinese case and short descriptive action labels. There is no uppercase label system or fixed mathematical type ratio.
+### Hierarchy
+
+- **Display** (700, 22px, 1.35, -.01em): the connection-card heading only. The wordmark uses the same stack at 700 weight, 24px on the connection card and 20px in the rail, with -.02em tracking.
+- **Title** (700, 17px, 1.3): the conversation title. Pane titles and your seat name use 15px at the same weight.
+- **Body** (400, 14px, 1.7): message text, capped at 72ch, with whitespace preserved and wrapping anywhere. Base UI text is 14px at 1.6.
+- **Label** (600, 13px): author names (14px/600), room names, run titles, the sources summary and permission rows. The run state cell is 13px/700.
+- **Meta** (400, 12px, 1.65): timestamps (tabular numerals), thread names, previews, step labels, run notes, helper text and banners at 13px.
+- **Caption** (400, 11px): the synthetic label, count badges, source keys, gutter times and rail times.
+
+**The Weight-Not-Size Rule.** Inside the app, rank is carried by weight (400 / 600 / 700) on a tight 11–17px ramp. Only the connection card goes above 17px.
 
 ## Layout
 
-The desktop shell fills the dynamic viewport height and is centered with a maximum width of (1700px). A fixed conversation rail (280px) sits beside a flexible chat column. The chat uses a flex column: room header, optional members, context and state strips, independently scrollable timeline, then composer. This is a messaging workspace, not a grid of interchangeable cards.
+The shell is a full-height grid: a 272px rail plus a fluid chat column. At 1180px and wider, opening the details pane adds a 360px third column. Below 1180px the pane overlays from the right (up to 380px) with a lifted shadow. Between 721px and 900px the rail narrows to 240px. At 720px and below, the shell becomes one column that switches between rail and chat, and the pane fills the window.
 
-The header has a minimum height of (89px). The timeline uses vertical padding (28px / 12px) and the desktop horizontal gutter from the spacing tokens. At viewport widths of at least (1400px), timeline and composer horizontal gutters increase to the wide-gutter value. Message rows have maximum width (880px), an avatar column (36px), a gap (12px) and bottom spacing (26px). Research blocks cap at (660px); source details at (680px).
+The chat column stacks a white header (at least 64px tall, hairline below), optional warning banners, the scrolling timeline on the table surface (padding 18 / 24 / 16px), and the composer area (padding 6 / 24 / 14px). At 720px and below, the horizontal gutters drop to 12px.
 
-At widths up to (720px), the shell becomes one column. It shows either the room list or the chat; the “会话列表” control switches views. Selecting a room returns to chat and focuses the room title. Returning to the list focuses the selected room. The chat header becomes at least (78px) high with tighter padding; timeline and composer use horizontal gutters (16px). Avatars shrink to (30px), message gaps to (10px), and message bottom spacing to (24px). Research headers and context content wrap when necessary.
+Each message row is a grid of a 36px tile and a fluid body with a 12px gap. Rows use 6–10px padding against matching negative margins, so the hover fill extends past the text edge. Consecutive messages from one author within five minutes share a header, and the time moves into a hover gutter. Results, and messages that carry a research card, always restart the header. Day dividers name 今天, 昨天 or the date. Text holds at 72ch; research cards and sources cap at 640px.
 
-The connection surface is centered with padding (24px) and a panel width capped at (440px). It is an unboxed form rather than an elevated card. Spacing values are extracted from the current implementation, not an enforced universal spacing scale.
+At 981px and wider the header shows a seating strip of full name cards. At 980px and below the seats collapse into 28px tiles that overlap by 6px. Their names stay in the accessibility tree, and a live agent's tile keeps its amber ring and dot. At 720px and below, the back control is icon-only, the members toggle shows an icon and a count, the connection status keeps its text, research steps stack vertically and the Enter hint is hidden.
+
+Spacing follows 4 / 8 / 12 / 16 / 24px, with 6px and 10px as in-component steps.
 
 ## Elevation & Depth
 
-There are no box shadows. Surface tones, one-pixel boundaries and whitespace establish hierarchy. Source highlighting uses a two-pixel outline with an offset (8px); keyboard focus uses a three-pixel outline with an offset (3px), while the textarea uses an offset (5px). These marks convey location and focus, not elevation.
+Depth comes from two things together: tonal layers (felt rail, grey-green table, white cards) and one standing shadow that makes a card look placed on the table. Message text is never lifted.
 
-The only authored animation is the selected source's background fading from its highlight color to the research surface over (1s), using `ease-out`. It runs only when `prefers-reduced-motion: no-preference` matches. There are no general hover transitions or loading spinners to reuse.
+### Shadow Vocabulary
+
+- **Standing card** (`box-shadow: 0 1px 0 rgb(23 32 27 / .04), 0 3px 10px -5px rgb(23 32 27 / .3)`): tiles, seat cards, research cards, sources, composer, suggestion chips, the members' and your own seat card in the pane.
+- **Card on felt** (`box-shadow: 0 1px 0 rgb(0 0 0 / .22), 0 8px 16px -10px rgb(0 0 0 / .55)`): the selected conversation on the rail.
+- **Lifted pane** (`box-shadow: -12px 0 36px -18px rgb(23 32 27 / .45)`): the details pane while it overlays (below 1180px).
+- **Floating pill** (`box-shadow: 0 6px 18px -8px rgb(23 32 27 / .45)`): the 查看新消息 button.
+- **Connection card** (`box-shadow: 0 2px 0 rgb(0 0 0 / .14), 0 28px 60px -28px rgb(0 0 0 / .6)`): the card on the felt connection screen.
+
+Focus is not elevation. Controls get a 2px `focus` outline at a 2px offset. The composer uses a 3px soft ring of the same green while focus is inside it.
+
+**The Standing Card Rule.** Identities and artifacts stand on the table as white cards with a hairline edge and the standing shadow. Speech never does: no bubbles, no boxed message text.
 
 ## Shapes
 
-Controls have gently rounded corners; badges are compact, slightly rounded rectangles. The radius tokens preserve the actual distinctions between controls, selected rooms, avatars and larger containers. Avatars are initial tiles, not circular photos. Research blocks and the composer share the container radius. Dividers are fine solid rules; there are no decorative gradients or raster textures in this implementation.
+Cards, tiles, buttons, rooms and seat cards share one gentle corner (6px). The composer field is softer (10px). The connection card and message hover rows use 8px. Marks, keys, badges and the synthetic label use 4px. Pills appear only for count badges and the new-messages button, and circles only for state dots.
 
-Room icons are authored inline SVG speech bubbles with a stroke weight (1.5), displayed at (21px) inside a tile (38px). Preserve the inline, current-color icon treatment when reusing this pattern.
+Icons come from one authored inline SVG sprite: a 24-unit grid, 1.6 stroke, round caps and joins, sized 14–18px. State marks use a 16-unit grid: a hollow ring for queued, a filled dot for running, a ring with a square for cancel requested, a filled square for stopped, a check disc for completed, a cross disc for failed and a question ring for unknown.
+
+**The Dashed Edge Rule.** A dashed edge says "not the real thing, or not available to you". It marks the synthetic-result label, the 本地演示 tag, the demo-note rule, the limitations block and the read-only composer. Nothing else is dashed.
 
 ## Components
 
 ### Buttons
 
-Primary buttons have a deep teal fill, white text and weight (600). Base buttons have minimum height (40px), and the send action has minimum width (76px). Quiet buttons use muted text and the same base geometry. Generic hover adds a soft gray fill; primary hover uses its darker teal variant. Disabled buttons have opacity (.55) and a default cursor.
+- **Shape:** gentle corners (6px) everywhere.
+- **Primary:** felt fill, white 600 text, 36px tall (40px on the connection card), 0 16px padding, an optional 16px icon. Hover deepens to `felt-deep`. Disabled turns `hairline` with muted text.
+- **Outline:** white fill, strong-rule stroke, ink 600 text at 12px, 30px tall. Used for 取消研究 and 重试同一条消息.
+- **Quiet:** secondary-ink 13px text on no fill, with `quiet-fill` on hover. Used for the members toggle and the mobile back control.
+- **Text action:** ledger-green 12px/600 text with an optional 14px icon, underlined on hover with a 3px offset.
+- **Rail button:** felt-mute 12px text with a 15px icon and raised felt on hover. Used for 退出连接 / 断开连接 / 退出应用.
 
-Compact research cancellation controls use a pale research-action fill, accent text, font size (12px), minimum height (32px) and padding (5px 10px). Message-source actions are lighter text controls with padding (4px 0), font size (12px) and minimum height (30px). Their existing selector specificity keeps their own fill or text treatment; do not infer a new active-state animation.
+### Conversation Rail
 
-Buttons, inputs, textarea, disclosure summaries and focusable timeline/title elements receive the shared visible keyboard outline. Dynamic updates preserve focus on message actions using action identifiers; if an action disappears, focus returns to the timeline.
+- Rows are at least 58px tall with a 36px tile, a two-line copy block (name + thread + time, then preview or live line + count badge) and an explicit accessible name (room, live state, local new-message count).
+- **Selected:** becomes the white card on felt (card-on-felt shadow), with the tile in felt and white text.
+- **Live:** the preview reads "{agent} 正在调研" after an amber dot.
+- **New activity:** a felt-ink count badge counts messages from others since this page session last viewed the room. It is local only and never a read receipt.
 
-### Inputs / Composer
+### Seating Strip and Name Cards
 
-The credential field uses a white surface, one-pixel border, control radius and padding (12px). Its password value is retained only in page memory, and the connection screen explains the local-demo credential scope.
+- Each header seat is a 30px white card with a 22px tile, the name at 600 and the kind or "你" in muted text.
+- A live agent's seat gets an amber border, a live wash, a breathing dot and the word 调研中.
+- At 980px and below, seats become stacked 28px tiles with white rims, as described in Layout.
 
-The composer is a bordered container with an unbordered, non-resizable textarea. The textarea uses font size (14px), leading (1.75), preserved content and an accent caret. The bottom row holds keyboard help and send. Enter sends; Shift + Enter inserts a line break. Composition events protect Chinese input. Empty, pending or unauthorized sends disable the action; a pending request also disables editing. Read-only state changes the helper copy.
+### Message Row
 
-### Conversation Navigation
+- A tile (white for people, pale ledger for agents), then author 600 + kind word + optional "你" chip + time, then the 14px body.
+- Hover fills the row with `quiet-fill`. A jumped-to message flashes `accent-soft` and takes focus.
 
-Full-width room buttons have minimum height (76px), an icon tile, a strong conversation name and a smaller thread identifier. Long navigation text truncates with ellipses. Current room selection uses a sage fill and `aria-current`; ordinary hover uses the generic button fill. The bottom identity and disconnect controls remain separated by a rule. Narrow layouts use the room/chat switch described above rather than an overlay drawer.
+### Research Card (signature)
 
-### Badges / Members
+- A white standing card under its source message, at most 640px wide. In-flight states use a `live-rule` border.
+- The first cell is fixed (at least 112px, divided from the rest by a hairline) and holds the state mark plus a 13px/700 label. The cell is followed by 调研 #N and the agent's name, with the outline cancel button at the right when the viewer may cancel.
+- Progress steps come only from server events (已认领 → 开始执行 → 结果回到讨论, or 取消已受理 → 等待停止确认 / 已停止), with second-precision times. They stack vertically when narrow.
+- The note states the receipt truth. Acceptance of a cancel is never shown as a stop.
 
-Role badges label “人类” or “Agent”; their text stays on one line. The member list is a wrapping row revealed by a button with `aria-expanded`. A separate warm badge identifies simulated research results. Role and result badges are informational, not interactive filter chips.
+### Sources Disclosure
 
-### Message Stream / Research Card
+- A native details element on a white standing card. The summary shows a chevron, "N 条合成来源与限制" and the key chips.
+- Each source row shows its key, title (600), excerpt and the fixture URL in data type with 测试占位地址 wording. It is plain text, never a link.
+- Limitations sit below a dashed rule under the heading 限制.
 
-Messages share one left-aligned grid regardless of author kind. Initial avatar, author, role and time precede text. Research cards sit below the source message with a title, textual status, supporting explanation and an authorized cancellation control when applicable. States distinguish queued, running, cancellation requested, completed, failed, stopped and unknown; requested cancellation is not displayed as a confirmed stop.
+### Composer and Seat Card (signature)
 
-Results disclose synthetic sources and limitations in native `details` / `summary`. Placeholder source addresses are visibly labeled as unusable evidence rather than rendered as genuine evidence links. Source-view controls narrow the displayed messages to the source and its related discussion; the composer still sends to the preset thread. Preserve that scope explanation.
+- A white field card (10px corners) with the focus-within ring. Your seat card stands at its top-left as a white name card: tile, name, standing (出席 in ledger green) and "可发言至 HH:MM（剩 N 分钟）". It switches to warning ink inside the five-minute notice window.
+- The textarea grows with content up to 40vh. The bottom row holds the Enter hint and the primary send button (icon + 发送 / 发送中…).
+- **Read-only:** the input row folds shut (grid rows 1fr → 0fr over 280ms, instant under reduced motion). The field turns dashed on `quiet-fill`, and the seat card alone remains: a lock, 列席（只读）, and the reason (已于 HH:MM 到期, 已被收回 or 没有发言授权).
 
-### Feedback / Empty States
+### Banners and Outbox
 
-Sync interruption retains the last synchronized records and offers reconnection in a warm strip. Unconfirmed sends appear above the composer with retry copy; they are not silently presented as delivered messages. A new-message control preserves reading position when the reader is away from the bottom. Loading and empty conversations have different copy. Live regions announce connection and action outcomes without replacing the chronological record.
+- Warning banners carry an icon, text in `warn-ink` and an optional outline-style action (立即重连).
+- The expiry notice sits above the composer as a rounded banner.
+- Unconfirmed sends appear in the outbox above the composer with retry copy. They are never shown as delivered messages.
+
+### Details Pane
+
+- A white column or overlay with a 64px header (15px/700 title and a close icon button).
+- **Seating and permissions (座次与权限):** your own seat card with standing and a permission list (查看消息 / 发言 / 取消调研: 可用 · 至 HH:MM, 已于 HH:MM 到期, 已被收回 or 未授权), then the member list. It never shows other members' grants.
+- **Discussion details (讨论详情):** the source message, its research runs (steps stack vertically) and the results with sources expanded.
+
+### Connection Card
+
+- A white card on full felt. The top band carries the wordmark and closes with a hairline fold. Below it come the 22px heading, the lede, the credential field and the primary button.
+- A rejected credential puts the error directly under the field and marks the field with a danger border and `aria-invalid`. The desktop shell hides the field and offers 进入本地演示.
 
 ## Do's and Don'ts
 
 ### Do:
 
-- **Do** retain Chinese-first labels, composition-safe input and readable message leading.
-- **Do** keep human and agent messages in the same alignment, with explicit kind labels.
-- **Do** keep research status, results and source disclosure beside the originating message.
-- **Do** preserve visible keyboard focus through navigation and asynchronous updates.
-- **Do** reuse the existing flat surfaces, token roles and responsive room/chat switch.
-- **Do** label synthetic output and uncertain outcomes in words.
+- **Do** keep the IM skeleton: rail, one chronological stream, bottom composer, details in the side pane.
+- **Do** keep people and agents in the same alignment, with kind as a word label (人类 / Agent) plus a tile tint.
+- **Do** put research state in the card's fixed first cell as mark + words, and derive progress only from server events.
+- **Do** show standing (出席 / 列席) and the speaking deadline on the viewer's seat card, and fold the composer when speaking lapses.
+- **Do** mark synthetic or unavailable material with dashed edges and words, and render fixture URLs as plain text.
+- **Do** keep every neutral on the `card-white` → `ink` ramp and every card on the 6px corner with the standing shadow.
 
 ### Don't:
 
-- **Don't** describe the current browser demo as an installed desktop or production client.
-- **Don't** promote provisional colors, metaphor or spacing into a newly approved brand commitment.
-- **Don't** replace this messenger's shared message stream with a dashboard layout.
-- **Don't** make role, request acceptance or execution completion depend on color alone.
-- **Don't** introduce raster assets or remote icon/font dependencies when reproducing this current interface.
-- **Don't** imply attachments, direct-message creation, message editing, unread receipts or arbitrary new threads exist in this slice.
+- **Don't** use amber for completion, emphasis or decoration; it means in flux or time-bound.
+- **Don't** box or bubble message text, or move research into a dashboard away from its source message.
+- **Don't** show other members' grants, presence, typing or read state. The session API does not provide them, and the new-message count stays local to the page session.
+- **Don't** let colour alone carry a state at any width; the connection label stays visible on narrow windows.
+- **Don't** load remote fonts, icons or images, or use inline style attributes; the CSP forbids them.

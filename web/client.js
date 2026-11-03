@@ -38,6 +38,8 @@ export class Client {
 }
 export function errorText(error) {
   if (error instanceof ApiError) {
+    if (error.code === 'demo_expired') return '本地演示已到 30 分钟上限并结束。请退出应用后重新打开，开始新的演示。';
+    if (error.code === 'credential_expired') return '本次演示凭据已到期。请重新启动演示，使用新的临时凭据连接。';
     if (error.status === 401) return '凭据无效或已失效，请重新连接。';
     if (error.status === 403) return '授权已到期、被撤销或无权访问。请联系管理员核对后重新连接。';
     if (error.status === 409) return '状态发生变化，请刷新记录后核对；不要重复创建研究。';

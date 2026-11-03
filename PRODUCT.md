@@ -13,7 +13,7 @@ Native HTML, CSS and browser modules, with a replaceable transport module. Tauri
 Local synthetic identities only. No production credentials, real model calls, deployment or persistent grants. Browser credentials live in page memory; desktop credentials remain in the disposable backend process, never reaching the renderer. Reload requires reconnecting to the same bounded demo. Existing server authorization applies to every operation. Source fixtures and stop acknowledgements must be described honestly.
 
 ## Design assumptions
-Chinese-first work chat used on a desktop in ordinary office light, with narrow-screen support. Familiar conversation navigation is explicitly requested; visual details are implementation assumptions, not a new brand commitment.
+Work chat used on a desktop in ordinary office light, with narrow-screen support. The current demo uses Chinese; target market, default locale and initially supported languages remain undecided. Familiar conversation navigation is explicitly requested; visual details are implementation assumptions, not a new brand commitment.
 
 ## Open decisions
 Real authentication/session lifecycle, remote connection, live research provider, attachments, direct messages, unread receipts and dynamically created threads remain outside this slice. Windows native interactions must be reported with their actual verification status.

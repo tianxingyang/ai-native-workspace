@@ -50,7 +50,7 @@ test.beforeEach(async ({ page }) => {
   await page.locator('#send').click();
   await expect(page.locator('.message')).toHaveCount(1);
 });
-test.afterEach(async () => { await demo?.stop(); });
+test.afterEach(async ({ page }) => { await page.close(); await demo?.stop(); });
 
 async function pauseDrain(page, { handled = true, fail = false } = {}) {
   await page.evaluate(({ scope, handled, fail }) => {
@@ -105,6 +105,25 @@ test('an empty first drain also preserves a racing activation', async ({ page })
   await finish(page, 4);
   await expect(page.locator('#app')).toBeVisible();
   await expect(page.locator('#room-title')).toHaveText(second.conversationId);
+});
+
+test('notification recovery closes a narrow modal and releases its inert background', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('#members-toggle').click();
+  await expect(page.locator('#details')).toHaveAttribute('aria-modal', 'true');
+  await expect(page.locator('#chat')).toHaveAttribute('inert');
+  await pauseDrain(page, { handled: false });
+  await wakeWhileBusy(page, { kind: 'open', scope: second });
+  await finish(page, 4);
+  await expect(page.locator('#app')).toBeVisible();
+  await expect(page.locator('#room-title')).toHaveText(second.conversationId);
+  await expect(page.locator('#details')).toBeHidden();
+  await expect(page.locator('#chat')).not.toHaveAttribute('inert');
+  await expect(page.locator('#sidebar')).not.toHaveAttribute('inert');
+  await expect(page.locator('#members')).toBeEmpty();
+  await page.locator('#message').fill('恢复后的消息输入仍可用');
+  await page.locator('#send').click();
+  await expect(page.locator('.message-text')).toHaveText('恢复后的消息输入仍可用');
 });
 
 test('duplicate wake-ups with no pending notice restore the view and stop draining', async ({ page }) => {
