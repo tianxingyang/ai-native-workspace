@@ -9,6 +9,8 @@ import { startWebDemo } from '../scripts/web-demo.js';
 import { cleanEnvironment } from '../scripts/process-pair.js';
 
 test('desktop route boundary excludes URLs, authority changes, arbitrary commands and unknown query fields', () => {
+  assert.equal(permittedRequest('http://127.0.0.1/messages?conversationId=a&threadId=b', undefined), false);
+  assert.equal(permittedRequest('/\\127.0.0.1/messages?conversationId=a&threadId=b', undefined), false);
   for (const path of ['https://example.invalid/messages?conversationId=a&threadId=b', '//example.invalid/messages?conversationId=a&threadId=b', '/session?token=a', '/messages?conversationId=a&threadId=b&admin=1', '/messages?conversationId=a&conversationId=b&threadId=c', '/admin']) assert.equal(permittedRequest(path, undefined), false);
   for (const path of ['/runs/a%2fcancel/cancel', '/runs/../cancel', '/session', 'file:///anything']) assert.equal(permittedRequest(path, {}), false);
   assert.equal(permittedRequest('/messages?conversationId=a&threadId=b', undefined), true);

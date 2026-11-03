@@ -1,5 +1,7 @@
 # Windows 安装版验收记录
 
+本页保留 0.1.0 当时结果。后续实现与托盘补测见 [0.1.1 验收记录](2026-11-03-windows-client-0.1.1.md)。0.1.0 安装器未覆盖。
+
 版本：CoSeat Demo 0.1.0，Windows x64，NSIS 当前用户安装，**未签名**。依赖 PR #3 (`d436c95ed33bb061c459c8acdddf5486be493fc9`)，其下为 PR #2 (`c080a2faada1d688b684973a7b7d8a31cf8ec1cc`)。不合并、不部署。
 
 交付文件 `CoSeat-Demo-0.1.0-windows-x64-setup.exe`，25,870,842 字节；SHA-256：`6dbf320e461f1f0d386cc5ae00198bde933f68f5de1858ca43b5d852667b52a6`。最后构建完成于 01:23:33 UTC，已对该安装器重新安装、冒烟和退出/卸载。Tauri 的安装二进制与未打包二进制仅有 3 字节 bundle 类型标记差异（NSS / UNK）；自带 Node 与后台 JS 文件逐字节一致。

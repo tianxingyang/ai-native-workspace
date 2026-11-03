@@ -67,8 +67,9 @@ function selectRoom(id) {
   state.selected = id; state.source = null; state.epoch++; state.syncing = false;
   clearTimeout(state.timer); $('app').classList.remove('show-rooms'); $('message').value = current().draft;
   $('source-filter').hidden = true; $('sync-error').hidden = true; $('new-messages').hidden = true;
-  renderRooms(); renderHeader(); renderMessages(true); renderOutbox(); void sync();
+  renderRooms(); renderHeader(); renderMessages(true); renderOutbox(); const syncing = sync();
   if (matchMedia('(max-width: 720px)').matches) { $('room-title').tabIndex = -1; $('room-title').focus(); }
+  return syncing;
 }
 async function sync() {
   if (!state.client || state.syncing) return;
@@ -85,6 +86,7 @@ async function sync() {
     for (const run of room.runs) if (['cancel_requested', 'completed', 'failed', 'stopped'].includes(run.status)) state.cancels.delete(run.id);
     renderMessages(); updateComposer(); renderOutbox();
     $('connection-status').textContent = '已连接'; $('sync-error').hidden = true;
+    return true;
   } catch (error) {
     if (epoch !== state.epoch) return;
     if (error instanceof ApiError && [401, 403].includes(error.status)) { invalidate(error); return; }
@@ -257,13 +259,58 @@ if (desktop) {
   $('token').required = false; $('token').hidden = true;
   document.querySelector('label[for="token"]').hidden = true;
   $('connect-button').textContent = '进入本地演示';
-  $('credential-help').textContent = '安装版已内置模拟服务。临时身份只保留在后台内存，启动 30 分钟后失效。关闭窗口会留在托盘；从托盘退出可结束并清理本次演示。系统允许通知时，后台收到新消息会提示；请在提示消失前点击返回会话。';
-  document.querySelector('.demo-note').textContent = 'CoSeat Demo 0.1.0 · 未签名测试版 · 无真实模型调用';
+  $('credential-help').textContent = '安装版已内置模拟服务。临时身份只保留在后台内存，启动 30 分钟后失效。关闭窗口会留在托盘；退出应用可结束并清理本次演示。通知点击会重新校验授权；已结束或重启前的演示不会恢复旧消息。';
+  document.querySelector('.demo-note').textContent = 'CoSeat Demo 0.1.1 · 未签名测试版 · 无真实模型调用';
   $('logout').textContent = '断开连接';
   const actions = el('div', 'desktop-actions');
   $('logout').before(actions); actions.append($('logout'), button('退出应用', () => desktop.core.invoke('desktop_quit')));
-  void desktop.event.listen('desktop-conversation', event => {
-    const id = key(event.payload);
-    if (state.client && state.rooms.has(id)) selectRoom(id);
-  });
+  document.querySelector('.connect-panel').append(button('退出应用', () => desktop.core.invoke('desktop_quit')));
+  const noticePanel = el('section', 'connection-page'); noticePanel.hidden = true;
+  noticePanel.append(el('p', '', '正在核对通知来源与当前授权…')); document.body.append(noticePanel);
+  let noticeBusy = false;
+  async function openNotification() {
+    if (noticeBusy) return; noticeBusy = true;
+    let handled = false;
+    try {
+      for (;;) {
+        const result = await desktop.core.invoke('desktop_take_notification');
+        if (result.kind === 'none') break;
+        handled = true;
+        $('app').hidden = true; $('connect').hidden = true; noticePanel.hidden = false;
+        state.epoch++; state.syncing = false; clearTimeout(state.timer);
+        if (result.kind === 'open' && state.client) {
+          const client = state.client;
+          const session = await client.session();
+          if (client !== state.client) throw new ApiError(401, 'connection_changed');
+          sessionReceived(session);
+          const id = key(result.scope);
+          if (!state.rooms.has(id)) throw new ApiError(403, 'scope_denied');
+          if (!await selectRoom(id) || client !== state.client) throw new Error('notification_sync_failed');
+          $('app').hidden = false; $('connect').hidden = true;
+        } else if (result.kind === 'unauthorized') {
+          invalidate(new ApiError(Number(result.status) || 403, 'notification_access_denied'));
+        } else {
+          invalidate();
+          $('connect-error').textContent = result.reason === 'disconnected'
+            ? '当前已断开连接。请手动进入演示后查看获准访问的消息。'
+            : '这条通知属于已结束或不可用的演示，旧消息不会恢复。可手动进入本次本地演示。';
+        }
+        noticePanel.hidden = true;
+      }
+    } catch (error) { handled = true; noticePanel.hidden = true; invalidate(error); }
+    finally {
+      noticeBusy = false;
+      // A queued event may arrive after the initial pending-notice drain. Never
+      // leave the loading screen stranded when that event has nothing to take.
+      noticePanel.hidden = true;
+      if (!handled) { $('app').hidden = !state.client; $('connect').hidden = Boolean(state.client); }
+      if (handled) await desktop.core.invoke('desktop_present');
+    }
+  }
+  void desktop.event.listen('desktop-notification', () => {
+    // Hide any cached content immediately; native window restoration happens only
+    // after this handler has loaded freshly authorized state or a safe error view.
+    $('app').hidden = true; $('connect').hidden = true; noticePanel.hidden = false;
+    void openNotification();
+  }).then(() => openNotification());
 }

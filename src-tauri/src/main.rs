@@ -15,9 +15,9 @@ use std::{
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager,
+    Manager,
 };
-use tauri_plugin_notification::NotificationExt;
+mod notifications;
 
 struct Host {
     stdin: Mutex<ChildStdin>,
@@ -126,6 +126,11 @@ fn desktop_quit(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+#[tauri::command]
+fn desktop_present(app: tauri::AppHandle) {
+    show(&app);
+}
+
 fn show(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -136,13 +141,20 @@ fn show(app: &tauri::AppHandle) {
 
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
-        .plugin(tauri_plugin_notification::init())
+        .manage(Arc::new(notifications::Notifications::default()))
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            if !notifications::queue_activation(app, args.into_iter().skip(1)) {
+                show(app);
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![
             desktop_request,
             desktop_connected,
             desktop_status,
-            desktop_quit
+            desktop_quit,
+            desktop_present,
+            notifications::desktop_take_notification
         ])
         .setup(|app| {
             let resource = app.path().resource_dir()?.join("runtime");
@@ -182,21 +194,9 @@ fn main() {
                 })
                 .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
                 .build()?;
-            let notices = Arc::new(Mutex::new(HashMap::<i32, Value>::new()));
-            let callback_app = app.handle().clone();
-            let callback_notices = notices.clone();
-            app.notification().on_action(move |event| {
-                if let Some(scope) = event
-                    .notification()
-                    .and_then(|n| callback_notices.lock().unwrap().get(&n.id()).cloned())
-                {
-                    show(&callback_app);
-                    let _ = callback_app.emit_to("main", "desktop-conversation", scope);
-                }
-            })?;
+            notifications::queue_activation(app.handle(), std::env::args().skip(1));
             let event_app = app.handle().clone();
             std::thread::spawn(move || {
-                let mut notification_id = 0i32;
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                     let Ok(data) = serde_json::from_str::<Value>(&line) else {
                         continue;
@@ -216,20 +216,15 @@ fn main() {
                         if focused {
                             continue;
                         }
-                        notification_id += 1;
-                        let mut records = notices.lock().unwrap();
-                        if records.len() >= 128 {
-                            records.clear();
-                        }
-                        records.insert(notification_id, data["scope"].clone());
-                        drop(records);
-                        let submitted = event_app
-                            .notification()
-                            .builder()
-                            .id(notification_id)
-                            .title("CoSeat 同席")
-                            .body("团队讨论有新消息，点击返回会话。仅本地模拟资料。 ")
-                            .show();
+                        let notices = event_app.state::<Arc<notifications::Notifications>>();
+                        let Some(expires_at) = data["expiresAt"].as_u64() else {
+                            continue;
+                        };
+                        let Some(id) = notices.add(data["scope"].clone(), expires_at) else {
+                            continue;
+                        };
+                        let submitted =
+                            notifications::show(&event_app.config().identifier, &id, expires_at);
                         if submitted.is_ok() {
                             host.notifications_submitted.fetch_add(1, Ordering::SeqCst);
                         }
