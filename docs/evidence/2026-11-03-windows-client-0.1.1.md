@@ -66,7 +66,7 @@ SHA-256：`d29c5acd0862dc58d932ba8d58bad523e73d1bd85dcb2a59b924e9c377dc94b7`。
 
 npm 仍是原有 3 包条目、9 公告（2 moderate、1 high），不是 3 个独立漏洞。详见[既有逐公告诊断](https://github.com/tianxingyang/ai-native-workspace/pull/3#issuecomment-6583282671)。安装包不带生产 npm 模块、不执行 pi；便携 Node 24.22.2 / Undici 7.30.1 只用于固定本地 mock。没有更换任何现有部署的 Node，也没有把结论推广到真实模型或任意网络工具。
 
-安装器、README 和 SHA256SUMS 按版本独立保存。0.1.0 已上传 Library，但给用户发送附件时返回大小限制，**未送达附件**。未创建第三方下载服务或公开 Release。Library 分享操作需要明确接收人/工作区范围，未提供可直接返回给所有者的公共下载链接，因此没有猜测或编造链接。用户本机 Downloads/CoSeat 是当前可用交付入口；公开 Release 资产另需批准。
+安装器、README 和 SHA256SUMS 按版本独立保存到用户本机 Downloads/CoSeat。0.1.0 已上传 Library，但给用户发送附件时返回大小限制，**未送达附件**。0.1.1 也已独立保存到 Library，保留确认 ID；Library 工具提供按确认 ID 构造的登录后下载入口，可作为替代交付方式，未声称用户端下载已验证。分享权限接口需要明确接收人/工作区范围，本任务没有扩大权限或产生公开分享。未创建第三方下载服务或公开 Release；公开 Release 资产另需批准。
 
 无生产凭据、设备身份、私有地址或真实资料进入公开源码/文档/截图。没有改动云服务、DNS、SSH、代理、证书、试点截止时间或模型额度。
 
