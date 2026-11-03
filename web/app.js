@@ -6,6 +6,7 @@ const key = scope => JSON.stringify([scope.conversationId, scope.threadId]);
 const state = { client: null, session: null, selected: '', rooms: new Map(), epoch: 0, timer: null, syncing: false, source: null, offset: 0, cancels: new Map() };
 const labels = { queued: '等待执行', running: '正在研究', cancel_requested: '等待停止确认', completed: '已完成', failed: '执行失败', stopped: '已停止', unknown: '执行结果待核对' };
 let navigationSignature = '';
+let cancellationRevision = 0;
 function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
 function button(text, fn, className = 'quiet') { const node = el('button', className, text); node.type = 'button'; node.addEventListener('click', fn); return node; }
 function current() { return state.rooms.get(state.selected); }
@@ -80,8 +81,10 @@ async function sync() {
     if (epoch !== state.epoch) return;
     sessionReceived(session);
     if (selection !== state.selected) { $('message').value = current().draft; renderMessages(true); }
-    const room = current(), data = await client.snapshot(room.scope);
+    const room = current(), revision = cancellationRevision, data = await client.snapshot(room.scope);
     if (epoch !== state.epoch) return;
+    // A snapshot requested before a cancellation acknowledgement may contain older run states.
+    if (revision !== cancellationRevision) return;
     room.messages = data.messages; room.runs = data.runs; room.loaded = true;
     for (const run of room.runs) if (['cancel_requested', 'completed', 'failed', 'stopped'].includes(run.status)) state.cancels.delete(run.id);
     renderMessages(); updateComposer(); renderOutbox();
@@ -175,8 +178,15 @@ async function cancelRun(id) {
   state.cancels.set(id, 'sending'); renderMessages();
   try {
     const result = await client.cancel(id); if (client !== state.client) return;
-    for (const room of state.rooms.values()) room.runs = room.runs.map(run => run.id === id ? result : run);
-    state.cancels.delete(id); announce('取消请求已受理，正在核对停止状态。'); await sync();
+    cancellationRevision++;
+    // Cancellation returns an acknowledgement, not a full Run. Keep identity and execution evidence.
+    for (const room of state.rooms.values()) room.runs = room.runs.map(run => run.id === id ? {
+      ...run,
+      // A newer poll may already have observed the terminal state while cancel was in flight.
+      status: ['completed', 'failed', 'stopped'].includes(run.status) ? run.status : result.status,
+      receiptId: result.publishedReceiptId ?? run.receiptId,
+    } : run);
+    state.cancels.delete(id); announce('取消请求已受理，正在核对停止状态。'); renderMessages(); await sync();
   } catch (error) {
     if (client !== state.client) return;
     if (error instanceof ApiError && [401, 403].includes(error.status)) { invalidate(error); return; }

@@ -35,3 +35,15 @@
 本轮测试包保存在独立 worktree 的 `src-tauri/target/release/bundle/nsis/CoSeat Demo_0.1.1_x64-setup.exe`，25,787,965 字节，SHA-256 `a8fe0efd6607de92efb505becd4f72a08ab4985859d8f62c362b86af92988f1d`。仅用于本轮验证，未覆盖或重新发布此前交付包，未签名。测试安装已卸载。验证日期为 2026-11-03；未修改线上服务、系统通知设置或模型额度。
 
 本次不将协议入口验证称为横幅或通知中心卡片点击验收。既有卡片显示/点击人工验收限制继续保留。
+
+## 合入 main 后的组合回归
+
+在通知修复 `1a60601ce5e6d139af8ba929b61ab373e170f561` 上合入 main `990a66987a9821150d7b9f48c45e594719c85650`，保留 PR #2 拒绝审计持久化及 PR #3 取消竞态修复。没有文本冲突；逐项核对 `web/app.js`：取消确认合并到完整 Run、保留已停止/完成状态、快照 revision 防回退，与通知 pending wake-up/单消费者 drain 均存在。审计实现及对应后端/浏览器测试与 main 完全一致。
+
+组合树重新验证：开发 Node 24.14.0 后端 55/55，随包 Node 24.22.2 后端 55/55，Chromium 18/18（包括 3 项取消竞态与 7 项通知回归），Rust release 3/3，Clippy `-D warnings`、fmt、JS syntax、TypeScript 和 diff whitespace 均通过。这些是本地执行结果，不是 GitHub CI 结论。
+
+前一轮 `1a60601` 测试安装器已另存到忽略提交的 `.local/artifacts/CoSeat-1a60601-x64-setup.exe`；此前交付包也未改动。
+
+组合树 NSIS 构建成功，测试包 25,776,206 字节，SHA-256 `05b3a05c913dbeed92cbc2dc19dec21993396365837cbd5e44656cc9bc11242e`，保存在本 worktree 的标准构建输出目录。实际安装/卸载退出码 0。重新运行 `desktop-smoke.mjs`、`desktop-notification-smoke.mjs` 与 `desktop-notification-race-smoke.mjs` 均通过：取消/停止、去重、合成来源、会话/草稿、刷新、权限拒绝、真实通知协议及有界空响应竞态全部保留。横幅/通知中心卡片点击仍未人工验收，测试包未发布。
+
+组合回归后的清理复核：应用/运行时/通知协议均已移除，测试应用与 Node 后台进程 0，检查端口监听 0，其他用户卸载注册项无差异。
