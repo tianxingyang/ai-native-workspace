@@ -1,0 +1,181 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-02T16:50:58.552Z",
+  "title": "Design System: CoSeat 同席 — Web IM",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "Deep teal"
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink"
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted slate"
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Pale slate"
+      },
+      "reading": {
+        "role": "neutral",
+        "displayName": "Reading white"
+      },
+      "danger": {
+        "displayName": "Danger red"
+      },
+      "warning-surface": {
+        "displayName": "Warm warning surface"
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Connection heading",
+        "purpose": "Native h1 bold weight; 26px on narrow screens."
+      },
+      "title": {
+        "displayName": "Room title",
+        "purpose": "Room identity, 17px on narrow screens."
+      },
+      "body": {
+        "displayName": "Message body",
+        "purpose": "Chinese-first messages with preserved whitespace and 75ch maximum width."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "source-focus",
+        "value": "source-focus 1s ease-out",
+        "purpose": "Only when prefers-reduced-motion: no-preference; background moves from #d8ede5 to #f3f7f6."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "narrow",
+        "value": "720px"
+      },
+      {
+        "name": "wide",
+        "value": "1400px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Connect or send, with hover, focus and disabled styling.",
+      "html": "<button type=\"button\" class=\"ds-primary\">发送</button>",
+      "css": ".ds-primary{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:16px;cursor:pointer;border:0;border-radius:8px;min-height:40px;padding:8px 14px;color:#202d35;background:transparent}.ds-primary:hover{background:#e3ebed}.ds-primary:disabled{cursor:default;opacity:.55}.ds-primary:focus-visible{outline:3px solid #268c80;outline-offset:3px}.ds-primary{background:var(--accent,#14675f);color:#fff;font-weight:600}.ds-primary:hover{background:#0e514b}"
+    },
+    {
+      "name": "Quiet action",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "Secondary actions such as members and disconnect.",
+      "html": "<button type=\"button\" class=\"ds-quiet\">成员</button>",
+      "css": ".ds-quiet{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:16px;cursor:pointer;border:0;border-radius:8px;min-height:40px;padding:8px 14px;color:#202d35;background:transparent}.ds-quiet:hover{background:#e3ebed}.ds-quiet:disabled{cursor:default;opacity:.55}.ds-quiet:focus-visible{outline:3px solid #268c80;outline-offset:3px}.ds-quiet{color:var(--muted,#586974);font-size:13px}"
+    },
+    {
+      "name": "Research cancellation",
+      "kind": "button",
+      "refersTo": "button-research",
+      "description": "Compact research action; acceptance still requires a separate stop confirmation.",
+      "html": "<div class=\"ds-research-action\"><button type=\"button\">取消研究</button></div>",
+      "css": ".ds-research-action button{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:16px;cursor:pointer;border:0;border-radius:8px;min-height:40px;padding:8px 14px;color:#202d35;background:transparent}.ds-research-action button:hover{background:#e3ebed}.ds-research-action button:disabled{cursor:default;opacity:.55}.ds-research-action button:focus-visible{outline:3px solid #268c80;outline-offset:3px}.ds-research-action button{font-size:12px;color:var(--accent,#14675f);min-height:32px;padding:5px 10px;background:#e2ede9}"
+    },
+    {
+      "name": "Message source action",
+      "kind": "button",
+      "description": "A compact text action under a message.",
+      "html": "<div class=\"ds-message-actions\"><button type=\"button\">查看这条消息的讨论</button></div>",
+      "css": ".ds-message-actions button{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:16px;cursor:pointer;border:0;border-radius:8px;min-height:40px;padding:8px 14px;color:#202d35;background:transparent}.ds-message-actions button:hover{background:#e3ebed}.ds-message-actions button:disabled{cursor:default;opacity:.55}.ds-message-actions button:focus-visible{outline:3px solid #268c80;outline-offset:3px}.ds-message-actions{margin-top:4px}.ds-message-actions button{font-size:12px;padding:4px 0;min-height:30px;color:var(--accent,#14675f)}"
+    },
+    {
+      "name": "Credential field",
+      "kind": "input",
+      "refersTo": "input-credential",
+      "description": "Local-demo password input. The snippet contains no credential.",
+      "html": "<label class=\"ds-credential-label\" for=\"ds-token\">本地演示访问凭据</label><input id=\"ds-token\" class=\"ds-credential\" type=\"password\" autocomplete=\"off\" spellcheck=\"false\" maxlength=\"512\">",
+      "css": ".ds-credential-label{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;display:block;font-size:14px;font-weight:600;color:#202d35;margin-bottom:12px}.ds-credential{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:16px;width:100%;padding:12px;border:1px solid #9daeb5;border-radius:8px;background:#fff;caret-color:var(--accent,#14675f)}.ds-credential:focus-visible{outline:3px solid #268c80;outline-offset:3px}"
+    },
+    {
+      "name": "Selected conversation",
+      "kind": "nav",
+      "refersTo": "room-selected",
+      "description": "Current room with inline SVG and thread metadata. Example identifiers are illustrative.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"已授权会话\"><button class=\"ds-room\" type=\"button\" aria-current=\"true\"><span class=\"ds-room-icon\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3V6a2 2 0 0 1 2-2Z\"/><path d=\"M7 9h10M7 13h7\"/></svg></span><span class=\"ds-room-copy\"><strong>团队讨论</strong><small>预设线程</small></span></button></nav>",
+      "css": ".ds-room{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:16px;cursor:pointer;border:0;border-radius:8px;min-height:40px;padding:8px 14px;color:#202d35;background:transparent}.ds-room:hover{background:#e3ebed}.ds-room:disabled{cursor:default;opacity:.55}.ds-room:focus-visible{outline:3px solid #268c80;outline-offset:3px}.ds-nav{background:var(--panel,#f2f5f6);padding:8px 12px}.ds-room{display:flex;width:100%;align-items:center;gap:12px;text-align:left;padding:14px 12px;margin:4px 0;min-height:76px;border-radius:10px}.ds-room[aria-current=true]{background:#dfece8}.ds-room-icon{display:grid;place-items:center;width:38px;height:38px;background:#fff;color:#42665e;border:1px solid #d4dfdb;border-radius:11px;flex-shrink:0}.ds-room-icon svg{width:21px;height:21px}.ds-room-copy{min-width:0;display:grid;gap:6px}.ds-room-copy strong{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ds-room-copy small{font-size:12px;color:var(--muted,#586974);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
+    },
+    {
+      "name": "Member kind badge",
+      "kind": "chip",
+      "refersTo": "role-badge",
+      "description": "Informational role label; it is not an interactive chip.",
+      "html": "<span class=\"ds-kind\">Agent</span>",
+      "css": ".ds-kind{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:11px;border-radius:4px;padding:3px 6px;background:#e1eae8;color:#28574f;font-weight:500;white-space:nowrap}"
+    },
+    {
+      "name": "Research card",
+      "kind": "card",
+      "refersTo": "research-card",
+      "description": "Research beside its source message; example shows a pending cancellation state.",
+      "html": "<div class=\"ds-run\"><div class=\"ds-run-top\"><div class=\"ds-run-title\">Agent · 调研<span class=\"ds-status\">等待停止确认</span></div></div><p>已受理取消请求，尚未收到实际停止确认。</p></div>",
+      "css": ".ds-run{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;color:#202d35;margin-top:12px;background:#f3f7f6;border-radius:var(--radius,12px);padding:14px 16px;max-width:660px}.ds-run-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.ds-run-title{font-size:13px;font-weight:600}.ds-status{font-size:11px;font-weight:500;color:var(--accent,#14675f);margin-left:10px}.ds-run p{font-size:12px;color:var(--muted,#586974);line-height:1.7;margin:8px 0 0}@media(max-width:720px){.ds-run{padding:12px}.ds-run-top{align-items:flex-start;flex-wrap:wrap}.ds-run-title{line-height:1.7}.ds-status{display:inline-block}}"
+    },
+    {
+      "name": "Message composer",
+      "kind": "custom",
+      "refersTo": "composer",
+      "description": "Field and send action with focus styling. This static snippet does not implement sending or keyboard submission.",
+      "html": "<div class=\"ds-composer\"><textarea class=\"ds-message\" rows=\"3\" maxlength=\"8000\" aria-label=\"发送到当前会话的消息\" placeholder=\"和团队说点什么…\"></textarea><div class=\"ds-composer-bottom\"><span>Enter 发送 · Shift + Enter 换行</span><button class=\"ds-send\" type=\"button\" disabled>发送</button></div></div>",
+      "css": ".ds-send{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:16px;cursor:pointer;border:0;border-radius:8px;min-height:40px;padding:8px 14px;color:#202d35;background:transparent}.ds-send:hover{background:#e3ebed}.ds-send:disabled{cursor:default;opacity:.55}.ds-send:focus-visible{outline:3px solid #268c80;outline-offset:3px}.ds-composer{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;border:1px solid #bccdce;border-radius:var(--radius,12px);padding:12px 14px;background:#fff}.ds-composer:focus-within{border-color:var(--accent,#14675f)}.ds-message{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;display:block;border:0;resize:none;width:100%;background:transparent;line-height:1.75;font-size:14px;color:#202d35;padding:0;caret-color:var(--accent,#14675f)}.ds-message::placeholder{color:#667780}.ds-message:focus-visible{outline:3px solid #268c80;outline-offset:3px}.ds-message:focus-visible{outline-offset:5px}.ds-composer-bottom{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:8px}.ds-composer-bottom>span{font-size:11px;color:var(--muted,#586974)}.ds-send{min-width:76px;background:var(--accent,#14675f);color:#fff;font-weight:600}.ds-send:hover{background:#0e514b}@media(max-width:720px){.ds-composer-bottom>span{font-size:10px}}"
+    },
+    {
+      "name": "Synthetic-source disclosure",
+      "kind": "custom",
+      "description": "Native details/summary with visible provenance limits and keyboard focus.",
+      "html": "<details class=\"ds-sources\"><summary>合成来源与限制</summary><p>测试占位地址，不可作为证据链接。</p></details>",
+      "css": ".ds-sources{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;margin-top:10px;font-size:13px;max-width:680px}.ds-sources summary{color:var(--accent,#14675f);cursor:pointer;min-height:32px;padding:6px 0}.ds-sources p{font-size:12px;color:var(--muted,#586974);margin:5px 0;line-height:1.75}.ds-sources summary:focus-visible{outline:3px solid #268c80;outline-offset:3px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "同席讨论，工作紧随来源",
+    "overview": "A familiar team messenger keeps people, agents and their work in one chronological conversation. Ink text, pale slate navigation, a white reading surface and deep teal actions support Chinese-first office use. Initial avatars align peers consistently; research stays attached to its source message instead of moving into a separate dashboard.\n\nThis is a source-derived record of the current `web/` interface, based on `index.html`, `style.css`, `app.js` and the product context in `../PRODUCT.md`. The North Star paraphrases the existing body direction contract; it is an implementation assumption, not a newly approved brand identity. This boundary is reusable UI currently verified in a browser local demo. A desktop framework, installer and production service are not implemented by this design record. `../docs/design.md` remains the separate product architecture document.",
+    "keyCharacteristics": [
+      "Chinese-first, familiar conversation navigation.",
+      "Shared message alignment for human and agent peers.",
+      "Flat surfaces separated by tone, whitespace and thin rules.",
+      "Source-linked research with explicit state and synthetic-result labels.",
+      "Native text, CSS and inline SVG; no raster UI assets."
+    ],
+    "rules": [
+      {
+        "name": "The State-in-Words Rule",
+        "body": "Status text must carry the meaning; color alone never establishes success, failure, role or a confirmed stop.",
+        "section": "colors"
+      }
+    ],
+    "dos": [
+      "**Do** retain Chinese-first labels, composition-safe input and readable message leading.",
+      "**Do** keep human and agent messages in the same alignment, with explicit kind labels.",
+      "**Do** keep research status, results and source disclosure beside the originating message.",
+      "**Do** preserve visible keyboard focus through navigation and asynchronous updates.",
+      "**Do** reuse the existing flat surfaces, token roles and responsive room/chat switch.",
+      "**Do** label synthetic output and uncertain outcomes in words."
+    ],
+    "donts": [
+      "**Don't** describe the current browser demo as an installed desktop or production client.",
+      "**Don't** promote provisional colors, metaphor or spacing into a newly approved brand commitment.",
+      "**Don't** replace this messenger's shared message stream with a dashboard layout.",
+      "**Don't** make role, request acceptance or execution completion depend on color alone.",
+      "**Don't** introduce raster assets or remote icon/font dependencies when reproducing this current interface.",
+      "**Don't** imply attachments, direct-message creation, message editing, unread receipts or arbitrary new threads exist in this slice."
+    ]
+  }
+}

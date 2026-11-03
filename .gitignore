@@ -9,3 +9,6 @@ dist/
 *.sqlite-wal
 *.sqlite-shm
 private-config*.json
+test-results/
+playwright-report/
+.impeccable/review/
