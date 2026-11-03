@@ -75,6 +75,78 @@ test('running cancellation is accepted before a real stopped receipt', async ({ 
   await page.screenshot({ path: '.impeccable/review/cancelled.png', fullPage: true });
 });
 
+for (const inFlight of [false, true]) {
+  test(`cancellation keeps its task when ${inFlight ? 'a stale poll is in flight' : 'refresh fails'}`, async ({ page }) => {
+    const errors = []; page.on('pageerror', error => errors.push(error.message));
+    await connect(page); await send(page, '请调研取消响应关联');
+    await expect(page.locator('.status-label')).toHaveText('正在研究');
+    const runId = await page.locator('.run').getAttribute('data-run');
+    const sourceId = await page.locator('.message').getAttribute('data-message');
+    let failReads = false, releasePoll, pollReady;
+    const ready = new Promise(resolve => { pollReady = resolve; });
+    const release = new Promise(resolve => { releasePoll = resolve; });
+    await page.route('**/runs?*', async route => {
+      if (inFlight && !failReads) {
+        const response = await route.fetch();
+        pollReady(); await release;
+        await route.fulfill({ response });
+      } else if (failReads) await route.abort('failed');
+      else await route.continue();
+    });
+    await page.route('**/session', async route => {
+      if (failReads) await route.abort('failed'); else await route.continue();
+    });
+    let acknowledgement;
+    await page.route('**/runs/*/cancel', async route => {
+      const response = await route.fetch(); acknowledgement = await response.json();
+      failReads = true; await route.fulfill({ response });
+    });
+    if (inFlight) await ready;
+    try {
+      await page.getByRole('button', { name: '取消研究', exact: true }).click();
+      await expect(page.locator('#announcement')).toHaveText('取消请求已受理，正在核对停止状态。');
+      expect(acknowledgement).toEqual({ status: 'cancel_requested', publishedReceiptId: null });
+      const card = page.locator(`[data-message="${sourceId}"] [data-run="${runId}"]`);
+      await expect(card.locator('.status-label')).toHaveText('等待停止确认');
+      await expect(card).toContainText('尚未收到实际停止确认');
+      await expect(card.getByRole('button', { name: '取消研究', exact: true })).toHaveCount(0);
+      releasePoll();
+      await expect(page.locator('#sync-error')).toBeVisible();
+      await expect(card.locator('.status-label')).toHaveText('等待停止确认');
+      await page.unroute('**/runs?*'); await page.unroute('**/session');
+      await page.getByRole('button', { name: '立即重连' }).click();
+      await expect(card.locator('.status-label')).toHaveText('已停止');
+      await expect(card).toContainText('执行设备已确认运行结束');
+      expect(errors).toEqual([]);
+    } finally { releasePoll(); }
+  });
+}
+
+test('late cancellation acknowledgement preserves a polled stopped receipt', async ({ page }) => {
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  await connect(page); await send(page, '请调研停止回执保留');
+  await expect(page.locator('.status-label')).toHaveText('正在研究');
+  let releaseCancel;
+  const release = new Promise(resolve => { releaseCancel = resolve; });
+  await page.route('**/runs/*/cancel', async route => {
+    const response = await route.fetch();
+    expect((await response.json()).status).toBe('cancel_requested');
+    await release; await route.fulfill({ response });
+  });
+  try {
+    await page.getByRole('button', { name: '取消研究', exact: true }).click();
+    await expect(page.locator('.status-label')).toHaveText('已停止');
+    await expect(page.locator('.run')).toContainText('执行设备已确认运行结束');
+    await page.route('**/session', route => route.abort('failed'));
+    releaseCancel();
+    await expect(page.locator('#announcement')).toHaveText('取消请求已受理，正在核对停止状态。');
+    await expect(page.locator('#sync-error')).toBeVisible();
+    await expect(page.locator('.status-label')).toHaveText('已停止');
+    await expect(page.locator('.run')).toContainText('执行设备已确认运行结束');
+    expect(errors).toEqual([]);
+  } finally { releaseCancel(); }
+});
+
 test('lost send response and repeated submit retry the same message without duplicate work', async ({ page }) => {
   await connect(page);
   let drop = true;
