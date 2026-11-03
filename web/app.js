@@ -267,43 +267,51 @@ if (desktop) {
   document.querySelector('.connect-panel').append(button('退出应用', () => desktop.core.invoke('desktop_quit')));
   const noticePanel = el('section', 'connection-page'); noticePanel.hidden = true;
   noticePanel.append(el('p', '', '正在核对通知来源与当前授权…')); document.body.append(noticePanel);
-  let noticeBusy = false;
+  let noticeBusy = false, noticePending = false;
   async function openNotification() {
+    noticePending = true;
     if (noticeBusy) return; noticeBusy = true;
     let handled = false;
     try {
-      for (;;) {
-        const result = await desktop.core.invoke('desktop_take_notification');
-        if (result.kind === 'none') break;
-        handled = true;
-        $('app').hidden = true; $('connect').hidden = true; noticePanel.hidden = false;
-        state.epoch++; state.syncing = false; clearTimeout(state.timer);
-        if (result.kind === 'open' && state.client) {
-          const client = state.client;
-          const session = await client.session();
-          if (client !== state.client) throw new ApiError(401, 'connection_changed');
-          sessionReceived(session);
-          const id = key(result.scope);
-          if (!state.rooms.has(id)) throw new ApiError(403, 'scope_denied');
-          if (!await selectRoom(id) || client !== state.client) throw new Error('notification_sync_failed');
-          $('app').hidden = false; $('connect').hidden = true;
-        } else if (result.kind === 'unauthorized') {
-          invalidate(new ApiError(Number(result.status) || 403, 'notification_access_denied'));
-        } else {
-          invalidate();
-          $('connect-error').textContent = result.reason === 'disconnected'
-            ? '当前已断开连接。请手动进入演示后查看获准访问的消息。'
-            : '这条通知属于已结束或不可用的演示，旧消息不会恢复。可手动进入本次本地演示。';
-        }
-        noticePanel.hidden = true;
-      }
-    } catch (error) { handled = true; noticePanel.hidden = true; invalidate(error); }
-    finally {
+      do {
+        noticePending = false;
+        try {
+          for (;;) {
+            const result = await desktop.core.invoke('desktop_take_notification');
+            if (result.kind === 'none') break;
+            handled = true;
+            $('app').hidden = true; $('connect').hidden = true; noticePanel.hidden = false;
+            state.epoch++; state.syncing = false; clearTimeout(state.timer);
+            if (result.kind === 'open' && state.client) {
+              const client = state.client;
+              const session = await client.session();
+              if (client !== state.client) throw new ApiError(401, 'connection_changed');
+              sessionReceived(session);
+              const id = key(result.scope);
+              if (!state.rooms.has(id)) throw new ApiError(403, 'scope_denied');
+              if (!await selectRoom(id) || client !== state.client) throw new Error('notification_sync_failed');
+              $('app').hidden = false; $('connect').hidden = true;
+            } else if (result.kind === 'unauthorized') {
+              invalidate(new ApiError(Number(result.status) || 403, 'notification_access_denied'));
+            } else {
+              invalidate();
+              $('connect-error').textContent = result.reason === 'disconnected'
+                ? '当前已断开连接。请手动进入演示后查看获准访问的消息。'
+                : '这条通知属于已结束或不可用的演示，旧消息不会恢复。可手动进入本次本地演示。';
+            }
+            noticePanel.hidden = true;
+          }
+        } catch (error) { handled = true; noticePanel.hidden = true; invalidate(error); }
+        // An activation can arrive after native code took an empty queue but
+        // before its IPC response reaches us. Keep one consumer and drain again
+        // for recorded wake-ups, including those received during a failed read.
+      } while (noticePending);
+    } finally {
       noticeBusy = false;
-      // A queued event may arrive after the initial pending-notice drain. Never
-      // leave the loading screen stranded when that event has nothing to take.
+      // Duplicate wake-ups can hide the views without yielding another notice.
+      // Restore the current authorized state (or the cleared error view).
       noticePanel.hidden = true;
-      if (!handled) { $('app').hidden = !state.client; $('connect').hidden = Boolean(state.client); }
+      $('app').hidden = !state.client; $('connect').hidden = Boolean(state.client);
       if (handled) await desktop.core.invoke('desktop_present');
     }
   }

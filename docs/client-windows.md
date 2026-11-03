@@ -47,4 +47,6 @@ cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
 在仓库 `.desktop/installed` 的测试安装启动并通过上述冒烟后，运行 `node scripts/desktop-notification-smoke.mjs`，验证 Windows 自身通知历史及已注册协议入口。其 PowerShell 辅助脚本只读取 CoSeat 的通知记录，不读取其他应用消息、不修改设置。脚本明确不替代真实横幅/通知中心卡片点击验收。
 
+同一实例可继续运行 `node scripts/desktop-notification-race-smoke.mjs`，验证空 IPC 响应交付期间再次激活通知不会丢失唤醒。PR #4 review 修复与本轮构建证据见[通知竞态回归记录](evidence/2026-11-03-notification-wakeup-review.md)；此前已交付的 0.1.1 包不包含这次修复。
+
 共享页面的浏览器验证不能替代 Windows 托盘和通知的实测。未签名、未验证的系统交互、现有依赖风险均需在交付说明中保留。
