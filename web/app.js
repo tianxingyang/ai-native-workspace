@@ -1,6 +1,7 @@
 import { Client, ApiError, errorText } from './client.js';
 
 const $ = id => document.getElementById(id);
+const desktop = window.__TAURI__;
 const key = scope => JSON.stringify([scope.conversationId, scope.threadId]);
 const state = { client: null, session: null, selected: '', rooms: new Map(), epoch: 0, timer: null, syncing: false, source: null, offset: 0, cancels: new Map() };
 const labels = { queued: '等待执行', running: '正在研究', cancel_requested: '等待停止确认', completed: '已完成', failed: '执行失败', stopped: '已停止', unknown: '执行结果待核对' };
@@ -11,6 +12,7 @@ function current() { return state.rooms.get(state.selected); }
 function authorized(action) { return (current()?.scope.permissions[action] ?? 0) > Date.now() + state.offset; }
 function announce(text) { $('announcement').textContent = text; }
 function invalidate(error) {
+  if (desktop) void desktop.core.invoke('desktop_connected', { connected: false });
   state.client?.close(); state.client = null; state.epoch++; clearTimeout(state.timer); state.syncing = false;
   state.session = null; state.rooms.clear(); state.cancels.clear(); state.source = null; state.selected = '';
   navigationSignature = '';
@@ -18,7 +20,8 @@ function invalidate(error) {
   $('messages').replaceChildren(); $('rooms').replaceChildren(); $('outbox').replaceChildren();
   $('source-filter').hidden = true; $('sync-error').hidden = true; $('new-messages').hidden = true;
   $('identity').textContent = ''; $('members').replaceChildren(); $('connect-error').textContent = error ? errorText(error) : '';
-  $('connect-button').disabled = false; $('connect-button').textContent = '连接会话'; $('token').focus();
+  $('connect-button').disabled = false; $('connect-button').textContent = desktop ? '进入本地演示' : '连接会话';
+  (desktop ? $('connect-button') : $('token')).focus();
 }
 function sessionReceived(session) {
   state.session = session; state.offset = session.serverTime - Date.now();
@@ -221,11 +224,12 @@ async function sendPending(room, id) {
 }
 $('connect-form').addEventListener('submit', async event => {
   event.preventDefault(); if ($('connect-button').disabled) return;
-  const token = $('token').value.trim(); if (!token) return;
+  const token = desktop ? 'local-demo' : $('token').value.trim(); if (!token) return;
   $('connect-button').disabled = true; $('connect-button').textContent = '正在连接…'; $('connect-error').textContent = '';
   const client = new Client(token); $('token').value = '';
   try {
     const session = await client.session(); state.client = client; state.epoch++;
+    if (desktop) void desktop.core.invoke('desktop_connected', { connected: true });
     sessionReceived(session); $('connect').hidden = true; $('app').hidden = false;
     $('message').value = current().draft; renderMessages(true); await sync();
     if (state.client) $('message').focus();
@@ -249,3 +253,17 @@ $('new-messages').addEventListener('click', () => { $('timeline').scrollTop = $(
 window.addEventListener('online', () => void sync());
 window.addEventListener('pagehide', () => invalidate());
 window.addEventListener('beforeunload', event => { if ([...state.rooms.values()].some(room => room.pending)) { event.preventDefault(); event.returnValue = ''; } });
+if (desktop) {
+  $('token').required = false; $('token').hidden = true;
+  document.querySelector('label[for="token"]').hidden = true;
+  $('connect-button').textContent = '进入本地演示';
+  $('credential-help').textContent = '安装版已内置模拟服务。临时身份只保留在后台内存，启动 30 分钟后失效。关闭窗口会留在托盘；从托盘退出可结束并清理本次演示。系统允许通知时，后台收到新消息会提示；请在提示消失前点击返回会话。';
+  document.querySelector('.demo-note').textContent = 'CoSeat Demo 0.1.0 · 未签名测试版 · 无真实模型调用';
+  $('logout').textContent = '断开连接';
+  const actions = el('div', 'desktop-actions');
+  $('logout').before(actions); actions.append($('logout'), button('退出应用', () => desktop.core.invoke('desktop_quit')));
+  void desktop.event.listen('desktop-conversation', event => {
+    const id = key(event.payload);
+    if (state.client && state.rooms.has(id)) selectRoom(id);
+  });
+}

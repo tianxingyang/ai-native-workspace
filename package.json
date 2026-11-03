@@ -18,7 +18,10 @@
     "demo:private": "npm run build && node dist/scripts/private-demo.js",
     "demo:im": "npm run build && node dist/scripts/web-demo.js",
     "check:web": "node --check web/app.js && node --check web/client.js",
-    "test:browser": "npm run build && playwright test"
+    "test:browser": "npm run build && playwright test",
+    "desktop:prepare": "npm run build && node scripts/prepare-desktop.mjs",
+    "desktop:build": "tauri build",
+    "desktop:dev": "tauri dev"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.4.0",
@@ -27,6 +30,7 @@
   },
   "devDependencies": {
     "@playwright/test": "1.58.2",
+    "@tauri-apps/cli": "2.12.4",
     "@types/node": "24.10.0",
     "typescript": "5.9.3"
   }
