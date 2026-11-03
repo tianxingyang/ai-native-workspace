@@ -18,6 +18,7 @@ const EXPIRY_NOTICE = 5 * 60 * 1000;
 const paneOverlay = matchMedia('(max-width: 1179px)');
 const SUGGESTIONS = ['请调研一下插件协议', '大家好，同步一下今天的进展。'];
 
+let cancellationRevision = 0;
 function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
 function button(text, fn, className = 'quiet') { const node = el('button', className, text); node.type = 'button'; node.addEventListener('click', fn); return node; }
 function icon(name, className = 'icon') {
@@ -227,9 +228,11 @@ async function sync() {
     if (selection !== state.selected) { $('message').value = current().draft; renderMessages(true); }
     // Every authorized room is refreshed so the list can show activity; only the
     // open room's failure decides the connection state.
-    const ids = [...state.rooms.keys()];
+    const ids = [...state.rooms.keys()], revision = cancellationRevision;
     const results = await Promise.allSettled(ids.map(id => client.snapshot(state.rooms.get(id).scope)));
     if (epoch !== state.epoch) return;
+    // None of this batch may replace a newer cancellation acknowledgement.
+    if (revision !== cancellationRevision) return;
     const opened = results[ids.indexOf(state.selected)];
     if (opened.status === 'rejected') throw opened.reason;
     ids.forEach((id, index) => {
@@ -478,9 +481,14 @@ async function cancelRun(id) {
   state.cancels.set(id, 'sending'); renderMessages();
   try {
     const result = await client.cancel(id); if (client !== state.client) return;
-    // The response carries status only; keep the run's identity and history until the next sync.
-    for (const room of state.rooms.values()) room.runs = room.runs.map(run => run.id === id ? { ...run, status: result.status } : run);
-    // Show acceptance at once; only a later server stop event can turn it into a stop.
+    cancellationRevision++;
+    // Cancellation returns an acknowledgement, not a full Run. Keep identity and execution evidence.
+    for (const room of state.rooms.values()) room.runs = room.runs.map(run => run.id === id ? {
+      ...run,
+      // A newer poll may already have observed the terminal state while cancel was in flight.
+      status: ['completed', 'failed', 'stopped'].includes(run.status) ? run.status : result.status,
+      receiptId: result.publishedReceiptId ?? run.receiptId,
+    } : run);
     state.cancels.delete(id); announce('取消请求已受理，正在核对停止状态。');
     renderMessages(); renderPane(); renderRooms(); renderSeats(current());
     await sync();
@@ -753,7 +761,7 @@ if (desktop) {
   document.querySelector('label[for="token"]').hidden = true;
   $('connect-button').textContent = '进入本地演示';
   $('credential-help').textContent = '安装版已内置模拟服务。临时身份只保留在后台内存，启动 30 分钟后失效。关闭窗口会留在托盘；退出应用可结束并清理本次演示。通知点击会重新校验授权；已结束或重启前的演示不会恢复旧消息。';
-  document.querySelector('.demo-note').textContent = 'CoSeat Demo 0.1.2 · 未签名测试版 · 无真实模型调用';
+  document.querySelector('.demo-note').textContent = 'CoSeat Demo 0.1.3 · 未签名测试版 · 无真实模型调用';
   $('logout').querySelector('span').textContent = '断开连接';
   const actions = el('div', 'desktop-actions'), quit = button('', () => desktop.core.invoke('desktop_quit'), 'rail-button');
   quit.append(icon('i-power'), el('span', '', '退出应用'));
@@ -761,43 +769,51 @@ if (desktop) {
   document.querySelector('.connect-body').append(button('退出应用', () => desktop.core.invoke('desktop_quit'), 'quiet connect-quit'));
   const noticePanel = el('section', 'connection-page'); noticePanel.hidden = true;
   noticePanel.append(el('p', '', '正在核对通知来源与当前授权…')); document.body.append(noticePanel);
-  let noticeBusy = false;
+  let noticeBusy = false, noticePending = false;
   async function openNotification() {
+    noticePending = true;
     if (noticeBusy) return; noticeBusy = true;
     let handled = false;
     try {
-      for (;;) {
-        const result = await desktop.core.invoke('desktop_take_notification');
-        if (result.kind === 'none') break;
-        handled = true;
-        $('app').hidden = true; $('connect').hidden = true; noticePanel.hidden = false;
-        state.epoch++; state.syncing = false; clearTimeout(state.timer);
-        if (result.kind === 'open' && state.client) {
-          const client = state.client;
-          const session = await client.session();
-          if (client !== state.client) throw new ApiError(401, 'connection_changed');
-          sessionReceived(session);
-          const id = key(result.scope);
-          if (!state.rooms.has(id)) throw new ApiError(403, 'scope_denied');
-          if (!await selectRoom(id) || client !== state.client) throw new Error('notification_sync_failed');
-          $('app').hidden = false; $('connect').hidden = true;
-        } else if (result.kind === 'unauthorized') {
-          invalidate(new ApiError(Number(result.status) || 403, 'notification_access_denied'));
-        } else {
-          invalidate();
-          $('connect-error').textContent = result.reason === 'disconnected'
-            ? '当前已断开连接。请手动进入演示后查看获准访问的消息。'
-            : '这条通知属于已结束或不可用的演示，旧消息不会恢复。可手动进入本次本地演示。';
-        }
-        noticePanel.hidden = true;
-      }
-    } catch (error) { handled = true; noticePanel.hidden = true; invalidate(error); }
-    finally {
+      do {
+        noticePending = false;
+        try {
+          for (;;) {
+            const result = await desktop.core.invoke('desktop_take_notification');
+            if (result.kind === 'none') break;
+            handled = true;
+            $('app').hidden = true; $('connect').hidden = true; noticePanel.hidden = false;
+            state.epoch++; state.syncing = false; clearTimeout(state.timer);
+            if (result.kind === 'open' && state.client) {
+              const client = state.client;
+              const session = await client.session();
+              if (client !== state.client) throw new ApiError(401, 'connection_changed');
+              sessionReceived(session);
+              const id = key(result.scope);
+              if (!state.rooms.has(id)) throw new ApiError(403, 'scope_denied');
+              if (!await selectRoom(id) || client !== state.client) throw new Error('notification_sync_failed');
+              $('app').hidden = false; $('connect').hidden = true;
+            } else if (result.kind === 'unauthorized') {
+              invalidate(new ApiError(Number(result.status) || 403, 'notification_access_denied'));
+            } else {
+              invalidate();
+              $('connect-error').textContent = result.reason === 'disconnected'
+                ? '当前已断开连接。请手动进入演示后查看获准访问的消息。'
+                : '这条通知属于已结束或不可用的演示，旧消息不会恢复。可手动进入本次本地演示。';
+            }
+            noticePanel.hidden = true;
+          }
+        } catch (error) { handled = true; noticePanel.hidden = true; invalidate(error); }
+        // An activation can arrive after native code took an empty queue but
+        // before its IPC response reaches us. Keep one consumer and drain again
+        // for recorded wake-ups, including those received during a failed read.
+      } while (noticePending);
+    } finally {
       noticeBusy = false;
-      // A queued event may arrive after the initial pending-notice drain. Never
-      // leave the loading screen stranded when that event has nothing to take.
+      // Duplicate wake-ups can hide the views without yielding another notice.
+      // Restore the current authorized state (or the cleared error view).
       noticePanel.hidden = true;
-      if (!handled) { $('app').hidden = !state.client; $('connect').hidden = Boolean(state.client); }
+      $('app').hidden = !state.client; $('connect').hidden = Boolean(state.client);
       if (handled) await desktop.core.invoke('desktop_present');
     }
   }

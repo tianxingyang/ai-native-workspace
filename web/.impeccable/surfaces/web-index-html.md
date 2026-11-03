@@ -17,7 +17,7 @@ Reusable IM shell in `web/` (index.html, style.css, app.js, client.js), hosted b
 - Preserve every behavior: send/receive with idempotent retry, server permission checks, cancel acceptance vs stop receipt, synthetic sources labelled honestly, offline recovery, expiry feedback, desktop notification flow.
 - No invented features (attachments, DMs, read receipts, new threads, other members' grants). CSP: no inline style attributes, no remote fonts or images.
 - Type: the Windows platform CJK stack (Segoe UI Variable + Microsoft YaHei UI, PingFang/Noto fallbacks) is deliberate. This is an Operate surface inside a Tauri WebView2 client; the CSP forbids remote fonts, and a bundled CJK face would add megabytes to the installer with no task benefit. The wordmark stays in the same stack.
-- The original redesign left backend/native implementation unchanged. Follow-up review fixes and local desktop verification are authorized; use a distinct 0.1.2 artifact and preserve the previously delivered 0.1.1. Production credentials, services and OS security settings remain outside scope.
+- The original redesign left backend/native implementation unchanged. Follow-up review fixes, integration of the reviewed main fixes, and local desktop verification are authorized; use a distinct 0.1.3 integration artifact and preserve 0.1.1/0.1.2. Production credentials, services and OS security settings remain outside scope.
 
 ## Direction contract
 THESIS: People and agents hold name cards at one table; your seat card states what you may do here and until when. Refuses bolt-on bots and permissions that surface only as errors.
