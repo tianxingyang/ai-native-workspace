@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ControlState, type ControlConfig } from '../control/state.js';
-import { objectValue, requireCondition, stringValue, terminal, type Run, type RuntimeEvent, type WorkPackage } from '../contracts.js';
+import { ApiError, objectValue, requireCondition, stringValue, terminal, type Run, type RuntimeEvent, type WorkPackage } from '../contracts.js';
 import { SnapshotStore } from './store.js';
 
 interface Lease { id: string; runId: string; memberId: string; instanceId: string; expiresAt: number; cancel: boolean; finished: boolean }
@@ -16,8 +16,10 @@ export class PrivateEngine {
     requireCondition(config.credentialExpiresAt && config.members.every(m => Number.isSafeInteger(config.credentialExpiresAt![m.id]) && config.credentialExpiresAt![m.id]! > 0), 400, 'private_credential_expiry_required');
     this.state = new ControlState(config, now);
     const saved = store.load<Saved>();
+    const audit = store.loadAudit<ControlState['audit']>();
     if (saved) {
       this.state.restore(saved.state);
+      if (audit) this.state.restoreAudit(audit);
       for (const [id, lease] of saved.leases) this.leases.set(id, lease);
       if (restoredBackup) for (const run of this.state.runs.values()) {
         if (!terminal(run.status)) { run.status = 'unknown'; run.error = 'backup_restore_reconciliation_required'; }
@@ -32,22 +34,37 @@ export class PrivateEngine {
         }
       }
       this.store.save(this.snapshot());
-    }
+    } else if (audit) this.state.restoreAudit(audit);
   }
   private snapshot(): Saved { return { state: this.state.snapshot(), leases: structuredClone([...this.leases]) }; }
   commit<T>(operation: () => T): T {
     const before = this.snapshot();
+    const rollback = () => {
+      // Authorization checks describe attempts, even when no business mutation commits.
+      const audit = structuredClone(this.state.audit.slice(-1000));
+      this.state.restore(before.state); this.leases.clear();
+      for (const [id, lease] of before.leases) this.leases.set(id, lease);
+      this.state.restoreAudit(audit);
+    };
+    let value: T;
     try {
-      const value = operation();
-      if (this.state.audit.length > 1000) this.state.audit.splice(0, this.state.audit.length - 1000);
+      value = operation();
       requireCondition(this.state.messages.size <= 5000 && this.state.runs.size <= 1000, 507, 'trial_capacity_reached');
+    } catch (error) {
+      rollback(); this.persistAudit(); throw error;
+    }
+    try {
+      this.persistAudit();
       this.store.save(this.snapshot());
       return value;
     } catch (error) {
-      this.state.restore(before.state); this.leases.clear();
-      for (const [id, lease] of before.leases) this.leases.set(id, lease);
-      throw error;
+      rollback(); throw error;
     }
+  }
+  private persistAudit(): void {
+    this.state.restoreAudit(this.state.audit);
+    try { this.store.saveAudit(this.state.audit); }
+    catch { throw new ApiError(503, 'audit_persistence_failed'); }
   }
   sweep(): void {
     for (const lease of this.leases.values()) {
