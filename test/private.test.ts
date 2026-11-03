@@ -442,6 +442,114 @@ test('SQLite rolls back failed commits and rejects a second service; backup rest
   assert.equal(env.engine.commit(() => env.engine.cancel('owner1', runId)).status, 'unknown');
 });
 
+test('denied HTTP reads, sends and cancellations retain audit while business state rolls back', async t => {
+  const env = await setup(t); await env.post();
+  env.config.control.grants.find(g => g.memberId === 'owner1')!.actions = ['read', 'send'];
+  const runId = [...env.engine.state.runs.keys()][0]!;
+  const forbidden = { conversationId: 'forbidden-room', threadId: 'private' };
+  const { audit: _beforeAudit, ...before } = env.engine.state.snapshot();
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages?${new URLSearchParams(forbidden)}`), 403);
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...forbidden, text: 'must not persist', clientEventId: 'denied-send' }), 403);
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `/runs/${runId}/cancel`, {}), 403);
+  const { audit, ...after } = env.engine.state.snapshot();
+  assert.deepEqual(after, before);
+  assert.deepEqual(audit.filter(a => !a.allowed).map(a => a.action), ['read', 'send', 'cancel']);
+  for (const entry of audit) assert.deepEqual(Object.keys(entry.resource).sort(), ['conversationId', 'threadId']);
+  assert.deepEqual(env.engine.store.loadAudit(), audit);
+  await env.restart();
+  assert.deepEqual(env.engine.state.audit, audit);
+  const { audit: _restoredAudit, ...restored } = env.engine.state.snapshot();
+  assert.deepEqual(restored, before);
+});
+
+test('denial after business mutations rolls back messages, claims and leases but retains bounded audit', async t => {
+  const env = await setup(t);
+  env.engine.commit(() => {
+    for (let at = 0; at < 1000; at++) env.engine.state.audit.push({ actorId: 'owner1', action: 'read', allowed: true, resource: scope, at });
+  });
+  const { audit: _oldAudit, ...before } = env.engine.state.snapshot();
+  assert.throws(() => env.engine.commit(() => {
+    const { message } = env.engine.state.createMessage('owner1', scope, '请调研协议', 'rolled-back-source');
+    env.engine.state.claim('agent1', message.id);
+    assert.equal(env.engine.poll('agent1', 'rolled-back-boot').command, 'execute');
+    env.engine.state.authorize('owner1', 'send', { conversationId: 'forbidden', threadId: 'private' });
+  }), /scope_denied/);
+  const { audit, ...after } = env.engine.state.snapshot();
+  assert.deepEqual(after, before);
+  assert.equal(audit.length, 1000); assert.equal(audit.at(-1)!.allowed, false);
+  assert.deepEqual(env.engine.store.loadAudit(), audit);
+  assert.deepEqual(env.engine.store.load<{ leases: unknown[] }>()!.leases, []);
+  await env.restart();
+  assert.deepEqual(env.engine.state.audit, audit);
+  assert.equal(env.engine.state.messages.size, 0); assert.equal(env.engine.state.runs.size, 0);
+});
+
+test('authorization audit commits independently when the business snapshot exceeds its storage limit', async t => {
+  const env = await setup(t); const { message } = await env.post();
+  const { audit: beforeAudit, ...before } = env.engine.state.snapshot();
+  assert.throws(() => env.engine.commit(() => {
+    env.engine.state.authorize('owner1', 'read', scope);
+    env.engine.state.messages.get(message.id)!.text = 'x'.repeat(9 * 1024 * 1024);
+  }), /trial_storage_limit/);
+  const { audit, ...after } = env.engine.state.snapshot();
+  assert.deepEqual(after, before); assert.equal(audit.length, beforeAudit.length + 1);
+  assert.deepEqual(env.engine.store.loadAudit(), audit);
+  const saved = env.engine.store.load<{ state: ReturnType<ControlState['snapshot']> }>()!;
+  assert.equal(saved.state.messages.find(([id]) => id === message.id)![1].text, message.text);
+  await env.restart();
+  assert.deepEqual(env.engine.state.audit, audit);
+  const { audit: _restoredAudit, ...restored } = env.engine.state.snapshot();
+  assert.deepEqual(restored, before);
+});
+
+test('audit storage failure reports 503 and rolls back business while retaining pending audit in memory', async t => {
+  const env = await setup(t); await env.post();
+  const { audit: beforeAudit, ...before } = env.engine.state.snapshot();
+  const failure = t.mock.method(env.engine.store, 'saveAudit', () => { throw new Error('injected_audit_storage_failure'); });
+  try {
+    await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages?conversationId=forbidden&threadId=private'), 503, 'audit_persistence_failed');
+    await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...scope, text: 'must roll back', clientEventId: 'audit-down' }), 503, 'audit_persistence_failed');
+    const { audit, ...after } = env.engine.state.snapshot();
+    assert.deepEqual(after, before);
+    assert.equal(audit.filter(a => !a.allowed).length, 1);
+    assert.deepEqual(env.engine.store.loadAudit(), beforeAudit); // No false claim of durability on failed I/O.
+  } finally { failure.mock.restore(); }
+  const pending = structuredClone(env.engine.state.audit);
+  env.engine.commit(() => undefined); // A subsequent transaction flushes retained checks before business can commit.
+  assert.deepEqual(env.engine.store.loadAudit(), pending);
+  await env.restart();
+  assert.deepEqual(env.engine.state.audit, pending);
+  const { audit: _restoredAudit, ...restored } = env.engine.state.snapshot();
+  assert.deepEqual(restored, before);
+});
+
+test('legacy snapshot audit is recovered and stripped to scope identifiers before independent persistence', async t => {
+  const env = await setup(t);
+  const legacy = env.engine.state.snapshot();
+  legacy.audit.push({ actorId: 'owner1', action: 'read', allowed: true, at: 1, resource: { ...scope, text: 'synthetic legacy message body' } as typeof scope });
+  env.engine.store.save({ state: legacy, leases: [] });
+  assert.equal(env.engine.store.loadAudit(), undefined);
+  await env.restart();
+  assert.deepEqual(env.engine.state.audit[0]!.resource, scope);
+  assert.throws(() => env.engine.commit(() => env.engine.state.authorize('owner1', 'read', { conversationId: 'forbidden', threadId: 'private' })), /scope_denied/);
+  const audit = env.engine.store.loadAudit<ControlState['audit']>()!;
+  assert.equal(audit.length, 2);
+  assert.equal(JSON.stringify(audit).includes('synthetic legacy message body'), false);
+  await env.restart();
+  assert.deepEqual(env.engine.state.audit, audit);
+});
+
+test('first rejected request retains audit across restart before any business snapshot exists', async t => {
+  const env = await setup(t);
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages?conversationId=forbidden&threadId=private'), 403);
+  assert.equal(env.engine.store.load(), undefined);
+  const audit = structuredClone(env.engine.state.audit);
+  assert.equal(audit.length, 1); assert.equal(audit[0]!.allowed, false);
+  assert.deepEqual(env.engine.store.loadAudit(), audit);
+  await env.restart();
+  assert.deepEqual(env.engine.state.audit, audit);
+});
+
 test('publication response loss keeps its durable receipt and never replays the uncertain action', async t => {
   const env = await setup(t); let executions = 0, sends = 0;
   const worker = env.worker(async (...args) => { executions++; await fakeExecution(0)(...args); });

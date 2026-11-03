@@ -11,6 +11,7 @@ export class SnapshotStore {
     this.db = new DatabaseSync(path, { timeout: 1000 });
     try {
       this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA locking_mode=EXCLUSIVE; CREATE TABLE IF NOT EXISTS snapshot (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, body TEXT NOT NULL) STRICT;');
+      this.db.exec('CREATE TABLE IF NOT EXISTS authorization_audit (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL) STRICT;');
       // Retain SQLite's exclusive lock for this connection; a second service must fail startup.
       this.db.exec('BEGIN EXCLUSIVE; COMMIT;');
     } catch (error) { this.db.close(); throw error; }
@@ -29,6 +30,14 @@ export class SnapshotStore {
       this.db.prepare('INSERT INTO snapshot(id, version, body) VALUES(1,1,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body').run(body);
       this.db.exec('COMMIT');
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  loadAudit<T>(): T | undefined {
+    const row = this.db.prepare('SELECT body FROM authorization_audit WHERE id=1').get();
+    return row ? JSON.parse(String(row.body)) as T : undefined;
+  }
+  saveAudit(entries: readonly unknown[]): void {
+    // Its own atomic SQLite transaction, independent of business rollback and snapshot size limits.
+    this.db.prepare('INSERT INTO authorization_audit(id, body) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body').run(JSON.stringify(entries.slice(-1000)));
   }
   close(): void { this.db.close(); }
 }

@@ -31,7 +31,12 @@ export class ControlState {
     restoreMap(this.messageKeys, data.messageKeys); restoreMap(this.claims, data.claims);
     restoreMap(this.resultKeys, data.resultKeys); restoreMap(this.toolCalls, data.toolCalls);
     this.decisions.splice(0, this.decisions.length, ...data.decisions);
-    this.audit.splice(0, this.audit.length, ...data.audit);
+    this.restoreAudit(data.audit);
+  }
+  restoreAudit(entries: ControlState['audit']): void {
+    this.audit.splice(0, this.audit.length, ...entries.slice(-1000).map(({ actorId, action, allowed, resource, at }) => ({
+      actorId, action, allowed, at, resource: { conversationId: resource.conversationId, threadId: resource.threadId },
+    })));
   }
 
   authenticate(token: string): string {
@@ -46,7 +51,7 @@ export class ControlState {
   authorize(actorId: string, action: Action, scope: Scope, bound?: { id: string; revision: number }): Grant {
     const member = this.config.memberships[actorId]?.some(s => s.conversationId === scope.conversationId && s.threadId === scope.threadId);
     const grant = this.config.grants.find(g => g.memberId === actorId && g.conversationId === scope.conversationId && g.threadId === scope.threadId && g.actions.includes(action) && !g.revoked && g.expiresAt > this.now() && (!bound || (g.id === bound.id && g.revision === bound.revision)));
-    this.audit.push({ actorId, action, allowed: Boolean(member && grant), resource: scope, at: this.now() });
+    this.audit.push({ actorId, action, allowed: Boolean(member && grant), resource: { conversationId: scope.conversationId, threadId: scope.threadId }, at: this.now() });
     requireCondition(member && grant, 403, 'scope_denied');
     return grant;
   }
