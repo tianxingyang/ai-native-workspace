@@ -9,6 +9,11 @@ export class Client {
   constructor(token) { this.#token = token; }
   close() { this.#token = ''; for (const controller of this.#controllers) controller.abort(); }
   async request(path, body) {
+    if (window.__TAURI__) {
+      const response = await window.__TAURI__.core.invoke('desktop_request', { path, ...(body === undefined ? {} : { body }) });
+      if (response.status >= 400) throw new ApiError(response.status, response.value.error ?? 'remote_error');
+      return response.value;
+    }
     const controller = new AbortController();
     this.#controllers.add(controller);
     const timeout = setTimeout(() => controller.abort(), 5000);

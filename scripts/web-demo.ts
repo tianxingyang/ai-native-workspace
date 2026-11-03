@@ -11,7 +11,7 @@ import { SnapshotStore } from '../src/private/store.js';
 import { close, listen } from '../src/http.js';
 import { cleanEnvironment } from './process-pair.js';
 
-export async function startWebDemo(options: { port?: number; lifetimeMs?: number } = {}) {
+export async function startWebDemo(options: { port?: number; lifetimeMs?: number; web?: boolean; credentialFile?: boolean } = {}) {
   const lifetimeMs = options.lifetimeMs ?? 30 * 60 * 1000;
   if (!Number.isFinite(lifetimeMs) || lifetimeMs < 1000 || lifetimeMs > 30 * 60 * 1000) throw new Error('invalid_demo_lifetime');
   const directory = await mkdtemp(join(tmpdir(), 'coseat-web-demo-'));
@@ -23,7 +23,7 @@ export async function startWebDemo(options: { port?: number; lifetimeMs?: number
     members: [{ id: 'demo-owner', kind: 'human', name: '林可（演示）', tokenEnv: 'COSEAT_OWNER_TOKEN', tokenExpiresAt: expiresAt, scopes }, { id: 'demo-researcher', kind: 'agent', name: '研究伙伴', tokenEnv: 'COSEAT_AGENT_TOKEN', tokenExpiresAt: expiresAt, scopes }],
     grants: ['demo-owner', 'demo-researcher'].flatMap(memberId => scopes.map((scope, i) => ({ id: `grant-${memberId}-${i}`, memberId, ...scope, revision: 1, actions: memberId === 'demo-owner' ? ['read', 'send', 'cancel'] : ['read', 'send', 'claim', 'request_approval'], expiresAt }))) }, env);
   const store = new SnapshotStore(config.databasePath), engine = new PrivateEngine(store, config.control);
-  const service = privateService(engine, { web: true });
+  const service = privateService(engine, { web: options.web ?? true });
   let worker: ChildProcess | undefined, url = '', stopped: Promise<void> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stop = () => stopped ??= (async () => {
@@ -54,7 +54,7 @@ export async function startWebDemo(options: { port?: number; lifetimeMs?: number
     const workerConfig = join(directory, 'worker.json');
     await writeFile(workerConfig, JSON.stringify({ version: 1, mode: 'private-mock', controlUrl: url, memberId: 'demo-researcher', tokenEnv: 'COSEAT_AGENT_TOKEN', provider: 'fake', workspace: workerDir }));
     const credentialPath = join(directory, 'local-demo-access.txt');
-    await writeFile(credentialPath, ownerToken, { mode: 0o600 });
+    if (options.credentialFile !== false) await writeFile(credentialPath, ownerToken, { mode: 0o600 });
     worker = spawn(process.execPath, [fileURLToPath(new URL('./web-worker-demo.js', import.meta.url))], { cwd: workerDir,
       env: cleanEnvironment({ COSEAT_CONFIG: workerConfig, COSEAT_AGENT_TOKEN: agentToken }), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
     const child = worker;
