@@ -14,7 +14,7 @@ async function sparePort(): Promise<number> {
   await new Promise<void>(resolve => socket.close(() => resolve()));
   return address.port;
 }
-function cleanEnvironment(extra: Record<string, string>): NodeJS.ProcessEnv {
+export function cleanEnvironment(extra: Record<string, string>): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { PI_OFFLINE: '1', DO_NOT_TRACK: '1', NO_COLOR: '1' };
   // No inherited model, cloud, database, GitHub or control-plane administrator secrets.
   for (const name of ['PATH', 'Path', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP', 'ComSpec', 'PATHEXT']) if (process.env[name]) env[name] = process.env[name];

@@ -4,7 +4,7 @@
 
 CoSeat 是一个以即时通讯（IM）为核心的人与 Agent 协作产品设计：人在私聊和群聊中自然讨论，Agent 作为团队成员，在职责与授权范围内判断是否参与、认领工作、邀请协作，并把进展与成果带回原会话。
 
-> 当前状态：设计与受限开发原型。已提供可运行的双进程协议切片：合成群消息 → 参与判断 → 后台执行 → 带合成来源回原线程。没有完整 IM 界面、真实联网调研或持久存储；下述产品能力仍是设计目标，不代表已通过生产验收。
+> 当前状态：设计与受限开发原型。已提供双进程闭环：合成群消息 → 参与判断 → 后台执行 → 带合成来源回原线程；另有私有配置、出站 Worker 与 SQLite 的试用入口。没有完整 IM 界面或真实联网调研，未部署到实际设备；下述产品能力仍是设计目标，不代表已通过生产验收。
 
 ## 产品原则
 
@@ -29,19 +29,23 @@ CoSeat 是一个以即时通讯（IM）为核心的人与 Agent 协作产品设�
 - [阶段规划](docs/roadmap.md)：实施顺序、验证门槛和待决事项。
 - [本地开发切片](docs/development-slice.md)：运行、API、协议边界与验证层级。
 - [临时运行时选择 ADR](docs/adr/0001-runtime-development-slice.md)：固定版本、隐式行为和未验证项。
+- [两端私有试用](docs/private-trial.md)：显式身份配置、出站领取、启动停止、备份恢复及部署前事项。
+- [私有协议与持久化 ADR](docs/adr/0002-private-outbound-sqlite.md)：单实例 SQLite 和未知执行的保守对账。
 
 ## 运行原型
 
-需要 Node.js 24.14 或更高版本。所有示例只使用合成开发身份和资料，不需要模型 API key。
+固定验证版本为 Node.js 24.14.0，支持范围为 Node 24.x（>=24.14）。所有演示只使用合成身份和资料，不需要模型 API key。
 
 ```sh
 npm ci --ignore-scripts --registry=https://registry.npmjs.org --cache .npm-cache
 npm test
 npm run demo
 npm run demo -- --pi-mock
+npm run demo:private
+npm run demo:private -- --pi-mock
 ```
 
-`demo` 自动启动两个本机独立进程并在结束后关闭。`fake` 验证协议；`pi-mock` 通过真实 pi SDK 执行模拟模型的四轮工具循环。两者都不进行真实调研或计费调用。进程内去重不提供重启安全，同机分进程不证明物理隔离。
+`demo` 使用原内存开发入口；`demo:private` 使用临时私有配置、出站 Worker 与 SQLite，并验证退出后的发布回执。它们自动启动两个本机独立进程并在结束后关闭。`fake` 验证协议；`pi-mock` 通过真实 pi SDK 执行模拟模型的四轮工具循环。均不进行真实调研或计费调用，同机分进程不证明物理隔离。原开发入口的去重仅在进程内有效；私有入口持久保存业务事实，但不恢复 Worker 内部执行状态，未知工作不会自动重跑。
 
 Linear 用于内部开发规划；本仓库保留公开设计与后续实现。暂不建立重复的 GitHub issue 任务账本。
 

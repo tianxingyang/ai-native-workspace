@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "mode": "private-mock",
+  "memberId": "agent-trial",
+  "tokenEnv": "COSEAT_AGENT_TOKEN",
+  "controlUrl": "https://coseat.example.invalid",
+  "provider": "pi-mock",
+  "workspace": "/var/lib/coseat-worker/work"
+}
