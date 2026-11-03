@@ -12,6 +12,8 @@ private-config*.json
 test-results/
 playwright-report/
 .impeccable/review/
+.impeccable/config.local.json
+.impeccable/hook.cache.json
 .desktop/
 src-tauri/target/
 src-tauri/gen/

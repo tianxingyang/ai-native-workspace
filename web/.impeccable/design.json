@@ -1,181 +1,172 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-02T16:50:58.552Z",
-  "title": "Design System: CoSeat 同席 — Web IM",
+  "generatedAt": "2026-11-03T07:40:00.000Z",
+  "title": "Design System: CoSeat 同席 — Team IM",
   "extensions": {
     "colorMeta": {
-      "accent": {
-        "role": "primary",
-        "displayName": "Deep teal"
-      },
-      "ink": {
-        "role": "neutral",
-        "displayName": "Ink"
-      },
-      "muted": {
-        "role": "neutral",
-        "displayName": "Muted slate"
-      },
-      "panel": {
-        "role": "neutral",
-        "displayName": "Pale slate"
-      },
-      "reading": {
-        "role": "neutral",
-        "displayName": "Reading white"
-      },
-      "danger": {
-        "displayName": "Danger red"
-      },
-      "warning-surface": {
-        "displayName": "Warm warning surface"
-      }
+      "card-white": { "role": "neutral", "displayName": "Card White", "canonical": "#ffffff", "tonalRamp": ["#0c0b08", "#252420", "#41403b", "#5f5d59", "#82807b", "#a6a49f", "#cccac5", "#f0eee9"] },
+      "table": { "role": "neutral", "displayName": "Table", "canonical": "#f5f7f5", "tonalRamp": ["#090c09", "#222522", "#3d413d", "#5b5f5b", "#7d817d", "#a2a6a2", "#c7ccc7", "#ebf0eb"] },
+      "quiet-fill": { "role": "neutral", "displayName": "Quiet Fill", "canonical": "#edf1ee", "tonalRamp": ["#090c0a", "#212522", "#3d413e", "#5a5f5b", "#7d827e", "#a1a6a2", "#c7ccc8", "#ebf0ec"] },
+      "hairline": { "role": "neutral", "displayName": "Hairline", "canonical": "#dfe5e0", "tonalRamp": ["#080c09", "#212522", "#3c413d", "#5a5f5b", "#7c827d", "#a1a6a2", "#c6ccc7", "#eaf0eb"] },
+      "strong-rule": { "role": "neutral", "displayName": "Strong Rule", "canonical": "#c9d1cb", "tonalRamp": ["#070d09", "#202621", "#3b423d", "#59605a", "#7b827d", "#9fa7a1", "#c5cdc7", "#e9f1eb"] },
+      "control-edge": { "role": "neutral", "displayName": "Control Edge", "canonical": "#858f89", "tonalRamp": ["#060d09", "#1e2622", "#39423d", "#57605b", "#79837d", "#9da8a1", "#c3cec7", "#e7f2eb"] },
+      "muted-ink": { "role": "neutral", "displayName": "Muted Ink", "canonical": "#5f6b64", "tonalRamp": ["#050e09", "#1c2721", "#38433c", "#55615a", "#77847c", "#9ba8a1", "#c1cec6", "#e5f2ea"] },
+      "secondary-ink": { "role": "neutral", "displayName": "Secondary Ink", "canonical": "#3f4a44", "tonalRamp": ["#050d09", "#1d2721", "#38433d", "#55615b", "#78847d", "#9ca8a1", "#c1cec7", "#e5f2eb"] },
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#17201b", "tonalRamp": ["#060d09", "#1d2721", "#39423d", "#56615b", "#78837d", "#9ca8a1", "#c2cec7", "#e6f2eb"] },
+      "felt": { "role": "primary", "displayName": "Felt Green", "canonical": "#1f4337", "tonalRamp": ["#000f09", "#052b20", "#24483c", "#426659", "#648a7c", "#88afa0", "#add5c6", "#d1f9e9"] },
+      "felt-raised": { "role": "primary", "displayName": "Raised Felt", "canonical": "#29503f", "tonalRamp": ["#001007", "#022c1d", "#224938", "#406755", "#628b78", "#86b09c", "#abd6c1", "#cffbe5"] },
+      "felt-deep": { "role": "primary", "displayName": "Deep Felt", "canonical": "#193a2f", "tonalRamp": ["#001009", "#082b20", "#26473c", "#446659", "#66897c", "#8aaea0", "#afd4c6", "#d3f9ea"] },
+      "felt-ink": { "role": "primary", "displayName": "Felt Ink", "canonical": "#eef4f0", "tonalRamp": ["#080c0a", "#212522", "#3c413e", "#5a5f5c", "#7c827e", "#a1a6a2", "#c6ccc8", "#eaf0ec"] },
+      "felt-mute": { "role": "primary", "displayName": "Felt Mute", "canonical": "#b4cbbf", "tonalRamp": ["#010f08", "#162920", "#31453b", "#4f6359", "#71867b", "#94ab9f", "#bad1c5", "#ddf5e9"] },
+      "felt-focus": { "role": "primary", "displayName": "Felt Focus", "canonical": "#9fd8bf", "tonalRamp": ["#001008", "#002c1e", "#104b37", "#336a55", "#578d77", "#7bb39b", "#a0d9c0", "#c4fee4"] },
+      "accent": { "role": "secondary", "displayName": "Ledger Green", "canonical": "#1d6a50", "tonalRamp": ["#001008", "#002c1e", "#024c37", "#216d53", "#489175", "#6eb699", "#93ddbe", "#c0ffe3"] },
+      "accent-soft": { "role": "secondary", "displayName": "Pale Ledger", "canonical": "#e2eee7", "tonalRamp": ["#060d09", "#1d2621", "#39423d", "#56605b", "#78837d", "#9da8a1", "#c2cec7", "#e6f2eb"] },
+      "focus": { "role": "secondary", "displayName": "Focus Green", "canonical": "#2e8a67", "tonalRamp": ["#001007", "#002c1d", "#014c34", "#006f4e", "#399370", "#61b993", "#88e0b9", "#c1ffe1"] },
+      "live": { "role": "tertiary", "displayName": "Live Amber", "canonical": "#b87310", "tonalRamp": ["#160700", "#361d00", "#5c3600", "#845001", "#b36e03", "#da933e", "#febb72", "#feebd7"] },
+      "live-ink": { "role": "tertiary", "displayName": "Live Ink", "canonical": "#865410", "tonalRamp": ["#160700", "#361d00", "#5b3600", "#83510a", "#a87437", "#cf985c", "#f7be81", "#feebd7"] },
+      "live-soft": { "role": "tertiary", "displayName": "Live Wash", "canonical": "#fbf1de", "tonalRamp": ["#110a01", "#2a2314", "#473f2f", "#655d4c", "#887f6e", "#ada392", "#d3c9b7", "#f7edda"] },
+      "live-rule": { "role": "tertiary", "displayName": "Live Rule", "canonical": "#ead2a6", "tonalRamp": ["#130900", "#312100", "#503c12", "#6f5a32", "#937d54", "#b8a177", "#dfc79c", "#feeccb"] },
+      "live-on-felt": { "role": "tertiary", "displayName": "Live on Felt", "canonical": "#f2c879", "tonalRamp": ["#130900", "#312100", "#543b00", "#795701", "#a07926", "#c69e4f", "#eec475", "#ffecca"] },
+      "warn-ink": { "role": "semantic", "displayName": "Warning Ink", "canonical": "#6b4307", "tonalRamp": ["#150700", "#351e00", "#5b3600", "#7d541e", "#a27743", "#c89b67", "#f0c18c", "#ffebd6"] },
+      "warn-soft": { "role": "semantic", "displayName": "Warning Wash", "canonical": "#fcf2df", "tonalRamp": ["#110a01", "#2a2314", "#473f2f", "#655d4c", "#887f6e", "#ada392", "#d3c9b7", "#f7edda"] },
+      "warn-rule": { "role": "semantic", "displayName": "Warning Rule", "canonical": "#ecd3a6", "tonalRamp": ["#130900", "#312100", "#513c11", "#705a30", "#947d52", "#b9a176", "#e0c79a", "#ffeccb"] },
+      "danger": { "role": "semantic", "displayName": "Danger", "canonical": "#b0281f", "tonalRamp": ["#210000", "#4c0000", "#7d0001", "#aa2119", "#d44c3e", "#ff7362", "#ffb5aa", "#fee9e5"] }
     },
     "typographyMeta": {
-      "headline": {
-        "displayName": "Connection heading",
-        "purpose": "Native h1 bold weight; 26px on narrow screens."
-      },
-      "title": {
-        "displayName": "Room title",
-        "purpose": "Room identity, 17px on narrow screens."
-      },
-      "body": {
-        "displayName": "Message body",
-        "purpose": "Chinese-first messages with preserved whitespace and 75ch maximum width."
-      }
+      "display": { "displayName": "Display", "purpose": "Connection-card heading only; the wordmark shares the stack at 24px/20px." },
+      "title": { "displayName": "Title", "purpose": "Conversation title; 15px for pane titles and your seat name." },
+      "body": { "displayName": "Body", "purpose": "Message text, 72ch measure, whitespace preserved." },
+      "label": { "displayName": "Label", "purpose": "Author and room names, run titles, sources summary, permission rows; 13px/700 for the run state cell." },
+      "meta": { "displayName": "Meta", "purpose": "Timestamps (tabular), thread names, previews, progress steps, notes and helper text." },
+      "caption": { "displayName": "Caption", "purpose": "Synthetic label, count badges, source keys, gutter and rail times." },
+      "data": { "displayName": "Data", "purpose": "Placeholder fixture URLs only; never a costume for 'technical' text." }
     },
-    "shadows": [],
+    "shadows": [
+      { "name": "standing-card", "value": "0 1px 0 rgb(23 32 27 / .04), 0 3px 10px -5px rgb(23 32 27 / .3)", "purpose": "A white card placed on the table: tiles, seats, research cards, sources, composer, suggestion chips." },
+      { "name": "card-on-felt", "value": "0 1px 0 rgb(0 0 0 / .22), 0 8px 16px -10px rgb(0 0 0 / .55)", "purpose": "The selected conversation lying on the felt rail." },
+      { "name": "lifted-pane", "value": "-12px 0 36px -18px rgb(23 32 27 / .45)", "purpose": "Details pane while it overlays the chat below 1180px." },
+      { "name": "floating-pill", "value": "0 6px 18px -8px rgb(23 32 27 / .45)", "purpose": "The 查看新消息 button floating over the stream." },
+      { "name": "connection-card", "value": "0 2px 0 rgb(0 0 0 / .14), 0 28px 60px -28px rgb(0 0 0 / .6)", "purpose": "The connection card on the full felt screen." }
+    ],
     "motion": [
-      {
-        "name": "source-focus",
-        "value": "source-focus 1s ease-out",
-        "purpose": "Only when prefers-reduced-motion: no-preference; background moves from #d8ede5 to #f3f7f6."
-      }
+      { "name": "ease-settle", "value": "cubic-bezier(.16, 1, .3, 1)", "purpose": "Exponential ease-out for the pane slide (220ms), composer fold (280ms) and jump flash (1.8s)." },
+      { "name": "breathe-live", "value": "1.6s ease-in-out infinite, opacity to .4", "purpose": "Live marks only: running state mark, live dots, current progress step." },
+      { "name": "hover-state", "value": "150ms ease-out", "purpose": "Background and border colour on buttons, rows and chips." },
+      { "name": "reduced-motion", "value": "prefers-reduced-motion: reduce", "purpose": "All animation and transitions above are removed; states switch instantly." }
     ],
     "breakpoints": [
-      {
-        "name": "narrow",
-        "value": "720px"
-      },
-      {
-        "name": "wide",
-        "value": "1400px"
-      }
+      { "name": "pane-column", "value": "1180px" },
+      { "name": "compact-seats", "value": "980px" },
+      { "name": "narrow-rail", "value": "900px" },
+      { "name": "single-column", "value": "720px" }
     ]
   },
   "components": [
     {
-      "name": "Primary action",
+      "name": "Primary Button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Connect or send, with hover, focus and disabled styling.",
-      "html": "<button type=\"button\" class=\"ds-primary\">发送</button>",
-      "css": ".ds-primary{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:16px;cursor:pointer;border:0;border-radius:8px;min-height:40px;padding:8px 14px;color:#202d35;background:transparent}.ds-primary:hover{background:#e3ebed}.ds-primary:disabled{cursor:default;opacity:.55}.ds-primary:focus-visible{outline:3px solid #268c80;outline-offset:3px}.ds-primary{background:var(--accent,#14675f);color:#fff;font-weight:600}.ds-primary:hover{background:#0e514b}"
+      "description": "Send and connect; felt fill with an optional authored icon.",
+      "html": "<button type=\"button\" class=\"ds-btn-primary\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M20.5 12 4.2 4.3c-.5-.2-1 .3-.8.8L6 12l-2.6 6.9c-.2.5.3 1 .8.8z\"/><path d=\"M6 12h6.5\"/></svg>发送</button>",
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 16px;border:0;border-radius:var(--r-card,6px);background:var(--felt,#1f4337);color:#fff;font:600 14px/1.6 \"Segoe UI Variable Text\",\"Segoe UI\",\"Microsoft YaHei UI\",system-ui,sans-serif;cursor:pointer;transition:background-color .15s ease-out}.ds-btn-primary svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.ds-btn-primary:hover{background:var(--felt-lo,#193a2f)}.ds-btn-primary:active{background:#10271e}.ds-btn-primary:focus-visible{outline:2px solid var(--focus,#2e8a67);outline-offset:2px}.ds-btn-primary:disabled{background:var(--n3,#dfe5e0);color:var(--n6,#5f6b64);cursor:default}"
     },
     {
-      "name": "Quiet action",
+      "name": "Outline Button",
       "kind": "button",
-      "refersTo": "button-quiet",
-      "description": "Secondary actions such as members and disconnect.",
-      "html": "<button type=\"button\" class=\"ds-quiet\">成员</button>",
-      "css": ".ds-quiet{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:16px;cursor:pointer;border:0;border-radius:8px;min-height:40px;padding:8px 14px;color:#202d35;background:transparent}.ds-quiet:hover{background:#e3ebed}.ds-quiet:disabled{cursor:default;opacity:.55}.ds-quiet:focus-visible{outline:3px solid #268c80;outline-offset:3px}.ds-quiet{color:var(--muted,#586974);font-size:13px}"
+      "refersTo": "button-outline",
+      "description": "Secondary actions inside cards: 取消研究, 重试同一条消息.",
+      "html": "<button type=\"button\" class=\"ds-btn-outline\">取消研究</button>",
+      "css": ".ds-btn-outline{display:inline-flex;align-items:center;min-height:30px;padding:0 10px;border:1px solid var(--n4,#c9d1cb);border-radius:var(--r-card,6px);background:#fff;color:var(--n8,#17201b);font:600 12px/1.5 \"Segoe UI Variable Text\",\"Segoe UI\",\"Microsoft YaHei UI\",system-ui,sans-serif;cursor:pointer;transition:border-color .15s ease-out,background-color .15s ease-out}.ds-btn-outline:hover{border-color:var(--n5,#858f89);background:var(--n1,#f5f7f5)}.ds-btn-outline:focus-visible{outline:2px solid var(--focus,#2e8a67);outline-offset:2px}.ds-btn-outline:disabled{color:var(--n6,#5f6b64);background:var(--n1,#f5f7f5);cursor:default}"
     },
     {
-      "name": "Research cancellation",
-      "kind": "button",
-      "refersTo": "button-research",
-      "description": "Compact research action; acceptance still requires a separate stop confirmation.",
-      "html": "<div class=\"ds-research-action\"><button type=\"button\">取消研究</button></div>",
-      "css": ".ds-research-action button{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:16px;cursor:pointer;border:0;border-radius:8px;min-height:40px;padding:8px 14px;color:#202d35;background:transparent}.ds-research-action button:hover{background:#e3ebed}.ds-research-action button:disabled{cursor:default;opacity:.55}.ds-research-action button:focus-visible{outline:3px solid #268c80;outline-offset:3px}.ds-research-action button{font-size:12px;color:var(--accent,#14675f);min-height:32px;padding:5px 10px;background:#e2ede9}"
-    },
-    {
-      "name": "Message source action",
-      "kind": "button",
-      "description": "A compact text action under a message.",
-      "html": "<div class=\"ds-message-actions\"><button type=\"button\">查看这条消息的讨论</button></div>",
-      "css": ".ds-message-actions button{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:16px;cursor:pointer;border:0;border-radius:8px;min-height:40px;padding:8px 14px;color:#202d35;background:transparent}.ds-message-actions button:hover{background:#e3ebed}.ds-message-actions button:disabled{cursor:default;opacity:.55}.ds-message-actions button:focus-visible{outline:3px solid #268c80;outline-offset:3px}.ds-message-actions{margin-top:4px}.ds-message-actions button{font-size:12px;padding:4px 0;min-height:30px;color:var(--accent,#14675f)}"
-    },
-    {
-      "name": "Credential field",
-      "kind": "input",
-      "refersTo": "input-credential",
-      "description": "Local-demo password input. The snippet contains no credential.",
-      "html": "<label class=\"ds-credential-label\" for=\"ds-token\">本地演示访问凭据</label><input id=\"ds-token\" class=\"ds-credential\" type=\"password\" autocomplete=\"off\" spellcheck=\"false\" maxlength=\"512\">",
-      "css": ".ds-credential-label{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;display:block;font-size:14px;font-weight:600;color:#202d35;margin-bottom:12px}.ds-credential{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:16px;width:100%;padding:12px;border:1px solid #9daeb5;border-radius:8px;background:#fff;caret-color:var(--accent,#14675f)}.ds-credential:focus-visible{outline:3px solid #268c80;outline-offset:3px}"
-    },
-    {
-      "name": "Selected conversation",
+      "name": "Conversation Row",
       "kind": "nav",
       "refersTo": "room-selected",
-      "description": "Current room with inline SVG and thread metadata. Example identifiers are illustrative.",
-      "html": "<nav class=\"ds-nav\" aria-label=\"已授权会话\"><button class=\"ds-room\" type=\"button\" aria-current=\"true\"><span class=\"ds-room-icon\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3V6a2 2 0 0 1 2-2Z\"/><path d=\"M7 9h10M7 13h7\"/></svg></span><span class=\"ds-room-copy\"><strong>团队讨论</strong><small>预设线程</small></span></button></nav>",
-      "css": ".ds-room{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:16px;cursor:pointer;border:0;border-radius:8px;min-height:40px;padding:8px 14px;color:#202d35;background:transparent}.ds-room:hover{background:#e3ebed}.ds-room:disabled{cursor:default;opacity:.55}.ds-room:focus-visible{outline:3px solid #268c80;outline-offset:3px}.ds-nav{background:var(--panel,#f2f5f6);padding:8px 12px}.ds-room{display:flex;width:100%;align-items:center;gap:12px;text-align:left;padding:14px 12px;margin:4px 0;min-height:76px;border-radius:10px}.ds-room[aria-current=true]{background:#dfece8}.ds-room-icon{display:grid;place-items:center;width:38px;height:38px;background:#fff;color:#42665e;border:1px solid #d4dfdb;border-radius:11px;flex-shrink:0}.ds-room-icon svg{width:21px;height:21px}.ds-room-copy{min-width:0;display:grid;gap:6px}.ds-room-copy strong{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ds-room-copy small{font-size:12px;color:var(--muted,#586974);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
+      "description": "Rail rows on felt; the selected conversation is the white card on the table.",
+      "html": "<nav class=\"ds-rail\"><button type=\"button\" class=\"ds-room\" aria-current=\"true\"><span class=\"ds-room-tile\">产</span><span class=\"ds-room-copy\"><span class=\"ds-room-top\"><strong>产品讨论</strong><span>日常交流</span><time>15:00</time></span><span class=\"ds-room-preview\">研究伙伴：开发夹具结论…</span></span></button><button type=\"button\" class=\"ds-room\" aria-current=\"false\"><span class=\"ds-room-tile\">研</span><span class=\"ds-room-copy\"><span class=\"ds-room-top\"><strong>研发讨论</strong><span>插件协议</span><time>15:01</time></span><span class=\"ds-room-preview ds-live\"><i></i>研究伙伴 正在调研</span></span></button></nav>",
+      "css": ".ds-rail{width:272px;padding:8px;background:var(--felt,#1f4337);font-family:\"Segoe UI Variable Text\",\"Segoe UI\",\"Microsoft YaHei UI\",system-ui,sans-serif}.ds-room{display:flex;align-items:center;gap:10px;width:100%;min-height:58px;margin:2px 0;padding:8px 10px;border:0;border-radius:6px;background:none;color:var(--felt-ink,#eef4f0);text-align:left;cursor:pointer;transition:background-color .15s ease-out}.ds-room:hover{background:var(--felt-hi,#29503f)}.ds-room:focus-visible{outline:2px solid var(--felt-focus,#9fd8bf);outline-offset:2px}.ds-room[aria-current=true]{background:#fff;color:var(--n8,#17201b);box-shadow:0 1px 0 rgb(0 0 0 / .22),0 8px 16px -10px rgb(0 0 0 / .55)}.ds-room-tile{display:grid;place-items:center;width:36px;height:36px;flex:none;border-radius:6px;background:rgb(255 255 255 / .1);font-weight:700;font-size:15px}.ds-room[aria-current=true] .ds-room-tile{background:var(--felt,#1f4337);color:#fff}.ds-room-copy{display:grid;gap:2px;flex:1;min-width:0}.ds-room-top{display:flex;align-items:baseline;gap:6px}.ds-room-top strong{font-size:14px;font-weight:600}.ds-room-top span,.ds-room-top time,.ds-room-preview{font-size:12px;color:var(--felt-mute,#b4cbbf);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ds-room-top time{margin-left:auto;font-size:11px}.ds-room[aria-current=true] :is(.ds-room-top span,.ds-room-top time,.ds-room-preview){color:var(--n6,#5f6b64)}.ds-live{color:var(--live-on-felt,#f2c879)!important}.ds-live i{display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:50%;background:var(--live-on-felt,#f2c879)}"
     },
     {
-      "name": "Member kind badge",
+      "name": "Seat Name Card",
       "kind": "chip",
-      "refersTo": "role-badge",
-      "description": "Informational role label; it is not an interactive chip.",
-      "html": "<span class=\"ds-kind\">Agent</span>",
-      "css": ".ds-kind{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:11px;border-radius:4px;padding:3px 6px;background:#e1eae8;color:#28574f;font-weight:500;white-space:nowrap}"
+      "refersTo": "seat-card",
+      "description": "A member seated at the table; the live variant lights up while an agent researches.",
+      "html": "<ul class=\"ds-seats\"><li class=\"ds-seat\"><span class=\"ds-tile\">林</span><strong>林可（演示）</strong><span>你</span></li><li class=\"ds-seat ds-seat-live\"><span class=\"ds-tile ds-agent\">研</span><strong>研究伙伴</strong><i></i><span>调研中</span></li></ul>",
+      "css": ".ds-seats{display:flex;gap:6px;margin:0;padding:0;list-style:none;font-family:\"Segoe UI Variable Text\",\"Segoe UI\",\"Microsoft YaHei UI\",system-ui,sans-serif}.ds-seat{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px 0 4px;border:1px solid var(--n3,#dfe5e0);border-radius:6px;background:#fff;box-shadow:0 1px 0 rgb(23 32 27 / .04),0 3px 10px -5px rgb(23 32 27 / .3);font-size:12px;color:var(--n8,#17201b)}.ds-seat span:last-child{color:var(--n6,#5f6b64)}.ds-tile{display:grid;place-items:center;width:22px;height:22px;border-radius:6px;background:var(--n2,#edf1ee);font-weight:700;font-size:11px}.ds-tile.ds-agent{background:var(--accent-soft,#e2eee7);color:var(--felt,#1f4337)}.ds-seat-live{border-color:var(--live,#b87310);background:var(--live-soft,#fbf1de)}.ds-seat-live .ds-tile{background:#fff;color:var(--live-ink,#865410)}.ds-seat-live span:last-child{color:var(--live-ink,#865410);font-weight:600}.ds-seat-live i{width:7px;height:7px;border-radius:50%;background:var(--live,#b87310)}"
     },
     {
-      "name": "Research card",
+      "name": "Research Card",
       "kind": "card",
       "refersTo": "research-card",
-      "description": "Research beside its source message; example shows a pending cancellation state.",
-      "html": "<div class=\"ds-run\"><div class=\"ds-run-top\"><div class=\"ds-run-title\">Agent · 调研<span class=\"ds-status\">等待停止确认</span></div></div><p>已受理取消请求，尚未收到实际停止确认。</p></div>",
-      "css": ".ds-run{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;color:#202d35;margin-top:12px;background:#f3f7f6;border-radius:var(--radius,12px);padding:14px 16px;max-width:660px}.ds-run-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.ds-run-title{font-size:13px;font-weight:600}.ds-status{font-size:11px;font-weight:500;color:var(--accent,#14675f);margin-left:10px}.ds-run p{font-size:12px;color:var(--muted,#586974);line-height:1.7;margin:8px 0 0}@media(max-width:720px){.ds-run{padding:12px}.ds-run-top{align-items:flex-start;flex-wrap:wrap}.ds-run-title{line-height:1.7}.ds-status{display:inline-block}}"
+      "description": "Signature: state in a fixed first cell, code and agent, server-event progress, receipt note.",
+      "html": "<section class=\"ds-run\"><div class=\"ds-run-top\"><span class=\"ds-run-state\"><svg viewBox=\"0 0 16 16\" aria-hidden=\"true\"><circle cx=\"8\" cy=\"8\" r=\"5.6\" fill=\"currentColor\"/></svg>正在研究</span><span class=\"ds-run-title\"><strong>调研 #1</strong>研究伙伴</span><button type=\"button\" class=\"ds-run-cancel\">取消研究</button></div><ol class=\"ds-steps\"><li class=\"done\"><i></i>已认领</li><li class=\"done\"><i></i>开始执行 <time>15:11:04</time></li><li class=\"current\"><i></i>结果回到讨论</li></ol><p>模拟 Agent 正在处理；消息送达不代表研究完成。</p></section>",
+      "css": ".ds-run{max-width:640px;padding:10px 12px;border:1px solid var(--live-rule,#ead2a6);border-radius:6px;background:#fff;box-shadow:0 1px 0 rgb(23 32 27 / .04),0 3px 10px -5px rgb(23 32 27 / .3);font-family:\"Segoe UI Variable Text\",\"Segoe UI\",\"Microsoft YaHei UI\",system-ui,sans-serif;color:var(--n8,#17201b)}.ds-run-top{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px}.ds-run-state{display:inline-flex;align-items:center;gap:6px;min-width:112px;padding-right:12px;border-right:1px solid var(--n3,#dfe5e0);font-size:13px;font-weight:700}.ds-run-state svg{width:14px;height:14px;color:var(--live,#b87310)}.ds-run-title{display:inline-flex;gap:6px;font-size:13px;color:var(--n7,#3f4a44)}.ds-run-title strong{color:var(--n8,#17201b)}.ds-run-cancel{margin-left:auto;min-height:30px;padding:0 10px;border:1px solid var(--n4,#c9d1cb);border-radius:6px;background:#fff;font:600 12px/1.5 inherit;cursor:pointer}.ds-run-cancel:hover{border-color:var(--n5,#858f89);background:var(--n1,#f5f7f5)}.ds-run-cancel:focus-visible{outline:2px solid var(--focus,#2e8a67);outline-offset:2px}.ds-steps{display:flex;flex-wrap:wrap;gap:4px 0;margin:8px 0 0;padding:0;list-style:none;font-size:12px;color:var(--n6,#5f6b64)}.ds-steps li{display:inline-flex;align-items:center;gap:6px}.ds-steps li+li::before{content:\"\";width:16px;height:1px;margin:0 8px 0 2px;background:var(--n4,#c9d1cb)}.ds-steps i{width:8px;height:8px;border-radius:50%;border:1.5px solid var(--n5,#858f89)}.ds-steps .done{color:var(--n7,#3f4a44)}.ds-steps .done i{border-color:var(--accent,#1d6a50);background:var(--accent,#1d6a50)}.ds-steps .current{color:var(--live-ink,#865410);font-weight:600}.ds-steps .current i{border-color:var(--live,#b87310);background:var(--live,#b87310)}.ds-steps time{font-weight:400;color:var(--n6,#5f6b64);font-variant-numeric:tabular-nums}.ds-run p{margin:6px 0 0;font-size:12px;line-height:1.65;color:var(--n7,#3f4a44)}"
     },
     {
-      "name": "Message composer",
-      "kind": "custom",
+      "name": "Composer with Seat Card",
+      "kind": "input",
       "refersTo": "composer",
-      "description": "Field and send action with focus styling. This static snippet does not implement sending or keyboard submission.",
-      "html": "<div class=\"ds-composer\"><textarea class=\"ds-message\" rows=\"3\" maxlength=\"8000\" aria-label=\"发送到当前会话的消息\" placeholder=\"和团队说点什么…\"></textarea><div class=\"ds-composer-bottom\"><span>Enter 发送 · Shift + Enter 换行</span><button class=\"ds-send\" type=\"button\" disabled>发送</button></div></div>",
-      "css": ".ds-send{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;font-size:16px;cursor:pointer;border:0;border-radius:8px;min-height:40px;padding:8px 14px;color:#202d35;background:transparent}.ds-send:hover{background:#e3ebed}.ds-send:disabled{cursor:default;opacity:.55}.ds-send:focus-visible{outline:3px solid #268c80;outline-offset:3px}.ds-composer{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;border:1px solid #bccdce;border-radius:var(--radius,12px);padding:12px 14px;background:#fff}.ds-composer:focus-within{border-color:var(--accent,#14675f)}.ds-message{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;display:block;border:0;resize:none;width:100%;background:transparent;line-height:1.75;font-size:14px;color:#202d35;padding:0;caret-color:var(--accent,#14675f)}.ds-message::placeholder{color:#667780}.ds-message:focus-visible{outline:3px solid #268c80;outline-offset:3px}.ds-message:focus-visible{outline-offset:5px}.ds-composer-bottom{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:8px}.ds-composer-bottom>span{font-size:11px;color:var(--muted,#586974)}.ds-send{min-width:76px;background:var(--accent,#14675f);color:#fff;font-weight:600}.ds-send:hover{background:#0e514b}@media(max-width:720px){.ds-composer-bottom>span{font-size:10px}}"
+      "description": "Signature: your standing name card on the composer; the input folds shut in 列席 read-only.",
+      "html": "<form class=\"ds-composer\"><div class=\"ds-seatcard\"><span class=\"ds-tile\">林</span>林可（演示）<b>出席</b><span>可发言至 15:41（剩 30 分钟）</span></div><label class=\"ds-sr\" for=\"ds-msg\">发送到当前会话的消息</label><textarea id=\"ds-msg\" rows=\"1\" placeholder=\"在「日常交流」中发言…\"></textarea><div class=\"ds-composer-bottom\"><span>Enter 发送 · Shift + Enter 换行</span><button type=\"button\">发送</button></div></form>",
+      "css": ".ds-composer{max-width:720px;padding:8px 10px 8px 12px;border:1px solid var(--n4,#c9d1cb);border-radius:var(--r-field,10px);background:#fff;box-shadow:0 1px 0 rgb(23 32 27 / .04),0 3px 10px -5px rgb(23 32 27 / .3);font-family:\"Segoe UI Variable Text\",\"Segoe UI\",\"Microsoft YaHei UI\",system-ui,sans-serif;transition:border-color .15s ease-out,box-shadow .15s ease-out}.ds-composer:focus-within{border-color:var(--focus,#2e8a67);box-shadow:0 0 0 3px rgb(46 138 103 / .16),0 1px 0 rgb(23 32 27 / .04),0 3px 10px -5px rgb(23 32 27 / .3)}.ds-seatcard{display:inline-flex;align-items:center;gap:8px;margin-bottom:4px;padding:2px 10px 2px 2px;border:1px solid var(--n3,#dfe5e0);border-radius:6px;background:#fff;box-shadow:0 1px 0 rgb(23 32 27 / .04),0 3px 10px -5px rgb(23 32 27 / .3);font-size:12px;color:var(--n7,#3f4a44)}.ds-seatcard b{color:var(--accent,#1d6a50)}.ds-tile{display:grid;place-items:center;width:22px;height:22px;border-radius:6px;background:var(--n2,#edf1ee);font-weight:700;font-size:11px;color:var(--n8,#17201b)}.ds-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}.ds-composer textarea{display:block;width:100%;padding:4px 0;border:0;outline:none;resize:none;background:transparent;font:14px/1.65 inherit;caret-color:var(--accent,#1d6a50)}.ds-composer textarea::placeholder{color:var(--n6,#5f6b64);opacity:1}.ds-composer-bottom{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:4px;font-size:12px;color:var(--n6,#5f6b64)}.ds-composer-bottom button{min-width:84px;min-height:32px;padding:0 14px;border:0;border-radius:6px;background:var(--felt,#1f4337);color:#fff;font:600 14px/1 inherit;cursor:pointer}.ds-composer-bottom button:hover{background:var(--felt-lo,#193a2f)}.ds-composer-bottom button:focus-visible{outline:2px solid var(--focus,#2e8a67);outline-offset:2px}"
     },
     {
-      "name": "Synthetic-source disclosure",
+      "name": "Synthetic Label and Source Key",
+      "kind": "chip",
+      "refersTo": "synthetic-label",
+      "description": "Dashed label for synthetic results; numbered keys repeated by the source list.",
+      "html": "<div class=\"ds-chips\"><span class=\"ds-synthetic\">模拟研究结果 · 合成资料</span><span class=\"ds-key\">1</span><span class=\"ds-key\">2</span></div>",
+      "css": ".ds-chips{display:flex;align-items:center;gap:6px;font-family:\"Segoe UI Variable Text\",\"Segoe UI\",\"Microsoft YaHei UI\",system-ui,sans-serif}.ds-synthetic{padding:0 6px;border:1px dashed var(--n5,#858f89);border-radius:4px;font-size:11px;line-height:18px;color:var(--n7,#3f4a44)}.ds-key{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:4px;background:var(--accent-soft,#e2eee7);color:var(--accent,#1d6a50);font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}"
+    },
+    {
+      "name": "Warning Banner",
       "kind": "custom",
-      "description": "Native details/summary with visible provenance limits and keyboard focus.",
-      "html": "<details class=\"ds-sources\"><summary>合成来源与限制</summary><p>测试占位地址，不可作为证据链接。</p></details>",
-      "css": ".ds-sources{font-family:\"Segoe UI\",\"Microsoft YaHei\",system-ui,sans-serif;margin-top:10px;font-size:13px;max-width:680px}.ds-sources summary{color:var(--accent,#14675f);cursor:pointer;min-height:32px;padding:6px 0}.ds-sources p{font-size:12px;color:var(--muted,#586974);margin:5px 0;line-height:1.75}.ds-sources summary:focus-visible{outline:3px solid #268c80;outline-offset:3px}"
+      "refersTo": "banner-warning",
+      "description": "Sync interruption and expiry notice; words carry the state, the action recovers.",
+      "html": "<div class=\"ds-banner\" role=\"status\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M10.6 4.6 3.3 17.4c-.6 1 .1 2.1 1.3 2.1h14.8c1.2 0 1.9-1.2 1.3-2.1L13.4 4.6c-.6-1-2.2-1-2.8 0z\"/><path d=\"M12 9.5v4.2M12 16.6v.1\"/></svg><span>连接中断或请求超时，结果尚未确认。当前显示 15:00 同步的记录。</span><button type=\"button\">立即重连</button></div>",
+      "css": ".ds-banner{display:flex;align-items:center;gap:10px;padding:8px 20px;border-bottom:1px solid var(--warn-rule,#ecd3a6);background:var(--warn-soft,#fcf2df);color:var(--warn-ink,#6b4307);font:13px/1.5 \"Segoe UI Variable Text\",\"Segoe UI\",\"Microsoft YaHei UI\",system-ui,sans-serif}.ds-banner svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.ds-banner button{margin-left:auto;min-height:28px;padding:0 10px;border:1px solid var(--warn-rule,#ecd3a6);border-radius:6px;background:#fffaf1;color:var(--warn-ink,#6b4307);font:600 12px/1 inherit;cursor:pointer}.ds-banner button:hover{background:#fff}.ds-banner button:focus-visible{outline:2px solid var(--focus,#2e8a67);outline-offset:2px}"
+    },
+    {
+      "name": "Credential Field",
+      "kind": "input",
+      "refersTo": "input-credential",
+      "description": "Connection-card field; a rejected credential gets a danger edge and the error directly beneath.",
+      "html": "<div class=\"ds-field\"><label for=\"ds-token\">本地演示访问凭据</label><input id=\"ds-token\" type=\"password\" aria-invalid=\"true\" aria-describedby=\"ds-token-error\"><p id=\"ds-token-error\">凭据无效或已失效，请重新连接。</p></div>",
+      "css": ".ds-field{display:grid;gap:8px;width:368px;font-family:\"Segoe UI Variable Text\",\"Segoe UI\",\"Microsoft YaHei UI\",system-ui,sans-serif}.ds-field label{font-size:13px;font-weight:600;color:var(--n8,#17201b)}.ds-field input{height:40px;padding:0 12px;border:1px solid var(--n5,#858f89);border-radius:6px;background:#fff;caret-color:var(--accent,#1d6a50)}.ds-field input:focus-visible{outline:2px solid var(--focus,#2e8a67);outline-offset:1px;border-color:var(--focus,#2e8a67)}.ds-field input[aria-invalid=true]{border-color:var(--danger,#b0281f)}.ds-field input[aria-invalid=true]:focus-visible{outline-color:var(--danger,#b0281f)}.ds-field p{margin:0;font-size:13px;line-height:1.6;color:var(--danger,#b0281f)}"
     }
   ],
   "narrative": {
-    "northStar": "同席讨论，工作紧随来源",
-    "overview": "A familiar team messenger keeps people, agents and their work in one chronological conversation. Ink text, pale slate navigation, a white reading surface and deep teal actions support Chinese-first office use. Initial avatars align peers consistently; research stays attached to its source message instead of moving into a separate dashboard.\n\nThis is a source-derived record of the current `web/` interface, based on `index.html`, `style.css`, `app.js` and the product context in `../PRODUCT.md`. The North Star paraphrases the existing body direction contract; it is an implementation assumption, not a newly approved brand identity. This boundary is reusable UI currently verified in a browser local demo. A desktop framework, installer and production service are not implemented by this design record. `../docs/design.md` remains the separate product architecture document.",
+    "northStar": "One table, named seats（同席之桌）",
+    "overview": "CoSeat keeps the skeleton every team-messenger user already knows: a conversation rail, one chronological stream, a composer at the bottom and an optional details pane on the right. The world on top of that skeleton is a meeting table. The rail is felt green, and the open conversation is the white card placed on it. Every member, human or agent, appears as a name-card tile with a word label for their kind. Your own name card sits on the composer and states your standing (出席 to speak, 列席 to read only) and when your speaking grant ends.\n\nWork does not live in a dashboard. It arrives on the table as white cards that stand on a cool grey-green surface: a research card under its source message, with its state in a fixed first cell, and a result whose synthetic sources carry numbered keys. Message text itself is never boxed. Amber is reserved for things in flux, such as an agent researching, a cancellation awaiting its stop receipt, a lost connection or a grant about to expire. Dashed edges mark anything that is not fully real or not fully yours: synthetic results, demo notes, limitations and the read-only composer.\n\nThe density suits an Operate surface. Rail rows are compact, the in-app type ramp stays within 11–17px, and Windows system faces carry Chinese and Latin text. Motion only reports state: live marks breathe, the details pane slides in, the composer folds shut when speaking ends, and a result you jump to flashes. This record describes the built `web/` interface (index.html, style.css, app.js). Under PRODUCT.md these remain implementation decisions for this slice, not a ratified brand identity.",
     "keyCharacteristics": [
-      "Chinese-first, familiar conversation navigation.",
-      "Shared message alignment for human and agent peers.",
-      "Flat surfaces separated by tone, whitespace and thin rules.",
-      "Source-linked research with explicit state and synthetic-result labels.",
-      "Native text, CSS and inline SVG; no raster UI assets."
+      "Familiar IM structure; the metaphor lives in identity, permission and expiry details.",
+      "People and agents share one alignment; kind is a word plus a tile tint, never a different layout.",
+      "White standing cards on a grey-green table; a felt-green rail and connection screen.",
+      "State always in words beside a drawn mark; amber means in flux, green means done.",
+      "Honest synthetic material: dashed labels, plain-text placeholder URLs, visible limitations."
     ],
     "rules": [
-      {
-        "name": "The State-in-Words Rule",
-        "body": "Status text must carry the meaning; color alone never establishes success, failure, role or a confirmed stop.",
-        "section": "colors"
-      }
+      { "name": "The One Ramp Rule", "body": "Every neutral comes from the nine-step ramp `card-white` → `ink`. A new grey is a new token or a mistake.", "section": "colors" },
+      { "name": "The Amber Means In-Flux Rule", "body": "Amber marks work that is still moving or a deadline that is approaching. Completion is green, failure is red, and a confirmed stop is ink. Amber is never decoration.", "section": "colors" },
+      { "name": "The State-in-Words Rule", "body": "Every state pairs its mark or colour with words: 正在研究, 等待停止确认, 已停止, 已连接, 连接中断, 列席（只读）. Colour alone never carries a state at any width.", "section": "colors" },
+      { "name": "The Weight-Not-Size Rule", "body": "Inside the app, rank is carried by weight (400 / 600 / 700) on a tight 11–17px ramp. Only the connection card goes above 17px.", "section": "typography" },
+      { "name": "The Standing Card Rule", "body": "Identities and artifacts stand on the table as white cards with a hairline edge and the standing shadow. Speech never does: no bubbles, no boxed message text.", "section": "elevation" },
+      { "name": "The Dashed Edge Rule", "body": "A dashed edge says \"not the real thing, or not available to you\". It marks the synthetic-result label, the 本地演示 tag, the demo-note rule, the limitations block and the read-only composer. Nothing else is dashed.", "section": "elevation" }
     ],
     "dos": [
-      "**Do** retain Chinese-first labels, composition-safe input and readable message leading.",
-      "**Do** keep human and agent messages in the same alignment, with explicit kind labels.",
-      "**Do** keep research status, results and source disclosure beside the originating message.",
-      "**Do** preserve visible keyboard focus through navigation and asynchronous updates.",
-      "**Do** reuse the existing flat surfaces, token roles and responsive room/chat switch.",
-      "**Do** label synthetic output and uncertain outcomes in words."
+      "Do keep the IM skeleton: rail, one chronological stream, bottom composer, details in the side pane.",
+      "Do keep people and agents in the same alignment, with kind as a word label (人类 / Agent) plus a tile tint.",
+      "Do put research state in the card's fixed first cell as mark + words, and derive progress only from server events.",
+      "Do show standing (出席 / 列席) and the speaking deadline on the viewer's seat card, and fold the composer when speaking lapses.",
+      "Do mark synthetic or unavailable material with dashed edges and words, and render fixture URLs as plain text.",
+      "Do keep every neutral on the `card-white` → `ink` ramp and every card on the 6px corner with the standing shadow."
     ],
     "donts": [
-      "**Don't** describe the current browser demo as an installed desktop or production client.",
-      "**Don't** promote provisional colors, metaphor or spacing into a newly approved brand commitment.",
-      "**Don't** replace this messenger's shared message stream with a dashboard layout.",
-      "**Don't** make role, request acceptance or execution completion depend on color alone.",
-      "**Don't** introduce raster assets or remote icon/font dependencies when reproducing this current interface.",
-      "**Don't** imply attachments, direct-message creation, message editing, unread receipts or arbitrary new threads exist in this slice."
+      "Don't use amber for completion, emphasis or decoration; it means in flux or time-bound.",
+      "Don't box or bubble message text, or move research into a dashboard away from its source message.",
+      "Don't show other members' grants, presence, typing or read state. The session API does not provide them, and the new-message count stays local to the page session.",
+      "Don't let colour alone carry a state at any width; the connection label stays visible on narrow windows.",
+      "Don't load remote fonts, icons or images, or use inline style attributes; the CSP forbids them."
     ]
   }
 }
