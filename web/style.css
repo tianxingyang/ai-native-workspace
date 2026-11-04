@@ -1,12 +1,13 @@
 /* CoSeat 同席 — seating-card world. Felt-green rail, a cool grey-green table,
    white name cards that stand on it. Every neutral comes from one ramp. */
-#message-change { width: min(520px, calc(100% - 32px)); border: 1px solid #bbc7c1; border-radius: 12px; padding: 24px; color: #24352e; }
+#message-change { width: min(520px, calc(100% - 32px)); border: 1px solid #bbc7c1; border-radius: 12px; padding: 24px; color: #24352e; overflow-wrap: anywhere; }
 #message-change::backdrop { background: rgb(22 39 31 / 35%); }
 #message-change h2 { margin-top: 0; }
 #change-text { display: block; width: 100%; margin: 12px 0; padding: 12px; font: inherit; resize: vertical; }
 #change-text[hidden] { display: none; }
 #change-error { color: #9c342b; }
-.change-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
+.change-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; margin-top: 20px; }
+#message-change .change-actions button { max-width: 100%; white-space: normal; }
 .reply-quote { display: flex; flex-direction: column; text-align: left; width: 100%; cursor: pointer; }
 .reply-preview { display: flex; align-items: flex-start; gap: 16px; padding: 12px; border-left: 3px solid #52776a; background: #f0f5f2; margin-bottom: 8px; }
 .reply-preview[hidden] { display: none; }
@@ -323,6 +324,7 @@ h1, h2, h3 { text-wrap: balance; }
 .outbox-item p { margin: 0; }
 .outbox-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 8px 0 0 24px; }
 .outbox-actions .muted { color: var(--warn-ink); }
+.outbox-actions button { max-width: 100%; white-space: normal; }
 .expiry { margin-bottom: 8px; border: 1px solid var(--warn-rule); border-radius: var(--r-card); }
 #composer { padding: 8px 10px 8px 12px; border: 1px solid var(--n4); border-radius: var(--r-field); background: var(--n0); box-shadow: var(--card-shadow); transition: border-color .15s ease-out, box-shadow .15s ease-out; }
 #composer:focus-within { border-color: var(--focus); box-shadow: 0 0 0 3px rgb(46 138 103 / .16), var(--card-shadow); }
