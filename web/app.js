@@ -97,13 +97,26 @@ function flushReadPosition(room) {
   const attempt = {}; state.reads.set(id, attempt);
   void client.markRead(room.scope, messageId).then(result => {
     const latest = state.rooms.get(id);
-    if (client === state.client && state.reads.get(id) === attempt && latest && authorized('read', latest)) applyReadPosition(latest, result.readThroughMessageId);
-  }).catch(() => {
-    // A lost acknowledgement is safe to retry: the server advances monotonically.
-    // The next authorized sync retries; access failures are handled by that sync.
+    if (client === state.client && state.reads.get(id) === attempt && latest?.cacheIdentity === room.cacheIdentity && authorized('read', latest)) applyReadPosition(latest, result.readThroughMessageId);
+  }).catch(error => {
+    if (client !== state.client) return;
+    if (error instanceof ApiError && error.status === 401) { invalidate(error); return; }
+    if (state.reads.get(id) === attempt && error instanceof ApiError && error.status === 403) denyReadScope(client, room);
+    // Other failures retain the fixed target for a later idempotent retry.
   }).finally(() => { if (state.reads.get(id) === attempt) state.reads.delete(id); });
 }
 function accessEnded() { return state.rooms.size > 0 && [...state.rooms.values()].every(room => deadline('read', room) <= serverNow()); }
+
+function denyReadScope(client, room) {
+  const latest = state.rooms.get(key(room.scope));
+  if (client !== state.client || !latest || latest.cacheIdentity !== room.cacheIdentity) return;
+  // A session request already in flight must not recreate this denied cache.
+  state.epoch++; state.syncing = false; clearTimeout(state.timer);
+  latest.scope.permissions.read = 0;
+  expireReadScopes();
+  // Removing the selected room already starts sync through selectRoom().
+  if (state.client && !state.syncing) void sync();
+}
 
 // Known read deadlines apply to cached content too, independently of a pending
 // request or a network outage. Keep other still-authorized conversations usable.
@@ -117,6 +130,7 @@ function expireReadScopes() {
   for (const [id, room] of state.rooms) {
     if (authorized('read', room)) continue;
     for (const run of room.runs) state.cancels.delete(run.id);
+    state.reads.delete(id);
     state.rooms.delete(id);
   }
   if (!state.rooms.size) { invalidate(new ApiError(403, 'grant_expired')); return; }
@@ -165,7 +179,7 @@ function sessionReceived(session) {
   for (const scope of session.scopes) {
     const id = key(scope), old = state.rooms.get(id), known = { ...old?.known };
     for (const [name, until] of Object.entries(scope.permissions)) if (until > 0) known[name] = until;
-    next.set(id, old ? { ...old, scope, known } : { scope, known, messages: [], runs: [], loaded: false, draft: '', pending: null, signature: '', seen: new Set(), rendered: 0, entering: true });
+    next.set(id, old ? { ...old, scope, known } : { scope, known, cacheIdentity: {}, messages: [], runs: [], loaded: false, draft: '', pending: null, signature: '', seen: new Set(), rendered: 0, entering: true });
   }
   state.rooms = next;
   if (!next.has(state.selected)) { state.selected = next.keys().next().value; current().entering = true; state.pane = null; renderPane(); }
@@ -722,9 +736,12 @@ async function submitMessageChange(receiptOnly = false) {
   $('change-error').textContent = t(retry ? 'editor.checking' : 'editor.submitting');
   $('change-error').tabIndex = -1;
   if (restoreFocus) $('change-error').focus();
+  let readingReceipt = false;
   try {
     if (retry) {
+      readingReceipt = true;
       const { receipt } = await client.changeReceipt(room.scope, change.id);
+      readingReceipt = false;
       if (client !== state.client || messageChange !== change) return;
       if (receipt) { acceptMessageChange(change, receipt); return; }
     }
@@ -737,6 +754,7 @@ async function submitMessageChange(receiptOnly = false) {
   } catch (error) {
     if (client !== state.client || messageChange !== change) return;
     if (error instanceof ApiError && error.status === 401) { invalidate(error); return; }
+    if (readingReceipt && error instanceof ApiError && error.status === 403) { denyReadScope(client, room); return; }
     change.conflict = error instanceof ApiError && error.status === 409;
     $('change-error').textContent = change.conflict ? t('editor.conflict') : errorText(error);
     if (change.conflict || (error instanceof ApiError && error.status === 403)) void sync();
@@ -871,11 +889,13 @@ async function reconcilePending(room, id) {
     if (!pending.replyRejected) pending.error = t('send.missingReceipt');
   } catch (error) {
     if (client !== state.client) return false;
-    if (error instanceof ApiError && [401, 403].includes(error.status)) { invalidate(error); return false; }
+    if (error instanceof ApiError && error.status === 401) { invalidate(error); return false; }
+    if (state.rooms.get(id)?.cacheIdentity !== room.cacheIdentity || state.rooms.get(id)?.pending !== pending) return false;
+    if (error instanceof ApiError && error.status === 403) { denyReadScope(client, room); return false; }
     pending.error = errorText(error);
   } finally {
     pending.checking = false;
-    if (client === state.client && id === state.selected) { updateComposer(); renderOutbox(); }
+    if (client === state.client && state.rooms.get(id)?.pending === pending && id === state.selected) { updateComposer(); renderOutbox(); }
   }
   return false;
 }
