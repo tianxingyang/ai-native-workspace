@@ -84,10 +84,67 @@ test('expanded connection copy keeps credential and connect controls usable on a
   await expect(page.locator('#app')).toBeVisible();
 });
 
+test('resource-backed run feedback distinguishes acknowledgement, application and stop evidence', async ({ page }) => {
+  const translated = structuredClone(catalog);
+  for (const key of Object.keys(translated.messages)) if (key.startsWith('run.note.') || key.startsWith('run.step.')) translated.messages[key] = `资源·${translated.messages[key]}`;
+  await page.route('**/locales/zh-CN.js', route => route.fulfill({ contentType: 'text/javascript', body: `export default ${JSON.stringify(translated)};` }));
+  const scope = { conversationId: '产品讨论', threadId: '日常交流' };
+  const { message } = await requestJson(demo.url, demo.ownerToken, '/messages', { ...scope, text: '运行状态展示验证', clientEventId: 'run-feedback' });
+  demo.engine.commit(() => { demo.engine.state.claim('demo-researcher', message.id).run.status = 'unknown'; });
+  const { runs: [original] } = await requestJson(demo.url, demo.ownerToken, `/runs?${new URLSearchParams(scope)}`);
+  // Synthetic server projections exercise presentation; they do not claim real execution evidence.
+  let projected = structuredClone(original);
+  await page.route(url => url.pathname === '/runs' && url.searchParams.get('conversationId') === scope.conversationId,
+    route => route.fulfill({ json: { runs: [projected] } }));
+  await page.goto(demo.url); await page.locator('#token').fill(demo.ownerToken); await page.locator('#connect-button').click();
+  const note = page.locator('#messages .run-note'), steps = page.locator('#messages .run-steps');
+  await expect(note).toHaveText(translated.messages['run.note.unknown']);
+  projected = { ...original, status: 'cancel_requested' };
+  await expect(note).toHaveText(translated.messages['run.note.cancelRequested']);
+  projected = { ...original, status: 'stopped', events: [] };
+  await expect(note).toHaveText(translated.messages['run.note.stopUnconfirmed']);
+  projected = { ...original, status: 'stopped', events: [{ kind: 'stopped', at: Date.now(), data: { executionSettled: true } }] };
+  await expect(note).toHaveText(translated.messages['run.note.executionStopped']);
+  projected = { ...original, status: 'running', work: { ...original.work, contextRevision: 2 }, events: [{ kind: 'input_received', at: Date.now(), data: {} }] };
+  await expect(note).toHaveText(translated.messages['run.note.running']);
+  await expect(steps).not.toContainText(translated.messages['run.step.changeApplied']);
+  projected.events.push({ kind: 'input_applied', at: Date.now(), data: {} });
+  await expect(steps).toContainText(translated.messages['run.step.changeApplied']);
+  projected = { ...original, contextInvalidated: true };
+  await expect(note).toHaveText(translated.messages['run.note.invalidatedUnknown']);
+  projected = { ...original, status: 'completed' };
+  await expect(note).toHaveText(translated.messages['run.note.missingReceipt']);
+  projected = { ...projected, receiptId: 'synthetic-published-receipt' };
+  await expect(note).toHaveText(translated.messages['run.note.published']);
+});
+
+test('result resource templates preserve source data and keep placeholder addresses noninteractive', async ({ page }) => {
+  const translated = structuredClone(catalog);
+  for (const key of Object.keys(translated.messages)) if (key.startsWith('result.')) translated.messages[key] = `资源·${translated.messages[key]}`;
+  await page.route('**/locales/zh-CN.js', route => route.fulfill({ contentType: 'text/javascript', body: `export default ${JSON.stringify(translated)};` }));
+  await page.goto(demo.url); await page.locator('#token').fill(demo.ownerToken); await page.locator('#connect-button').click();
+  await page.locator('#message').fill('请调研用于资源测试的协议'); await page.locator('#send').click();
+  await expect(page.locator('.result-label')).toHaveText(translated.messages['result.synthetic']);
+  const result = [...demo.engine.state.messages.values()].find(message => message.origin === 'research').result;
+  await page.locator('details.sources summary').click();
+  await expect(page.locator('details.sources summary')).toContainText(`资源·${result.sources.length} 条合成来源与限制`);
+  const expectedUrl = `资源·${result.sources[0].url}（测试占位地址，不可作为证据链接）`;
+  await expect(page.locator('details.sources .source-url').first()).toHaveText(expectedUrl);
+  await expect(page.locator('details.sources a')).toHaveCount(0);
+  await expect(page.locator('details.sources .source-title').first()).toHaveText(result.sources[0].title);
+  await page.getByRole('button', { name: '查看来源消息与讨论', exact: true }).click();
+  await expect(page.locator('.thread-synthetic')).toHaveText(translated.messages['result.synthetic']);
+  await expect(page.locator('.thread-sources .source-url').first()).toHaveText(expectedUrl);
+  await expect(page.locator('.thread-sources a')).toHaveCount(0);
+  await expect(page.locator('.thread-limits strong')).toHaveText(translated.messages['result.limitations']);
+  await expect(page.locator('.thread-limits')).toContainText(result.limitations[0]);
+});
+
 for (const width of [320, 390, 1280]) test(`expanded presentation resources remain text and keep actions visible at ${width}px`, async ({ page }) => {
   const expanded = structuredClone(catalog);
   expanded.messages['run.unknown'] = `待核对·${'ExpandedStatus'.repeat(10)}<b>普通文本</b>`;
   expanded.messages['error.connection'] = `连接异常·${'ExpandedConnection'.repeat(10)}`;
+  expanded.messages['run.cancel.action'] = `取消研究·${'ExpandedCancel'.repeat(5)}`;
   await page.route('**/locales/zh-CN.js', route => route.fulfill({ contentType: 'text/javascript', body: `export default ${JSON.stringify(expanded)};` }));
   const scope = { conversationId: '产品讨论', threadId: '日常交流' };
   const { message } = await requestJson(demo.url, demo.ownerToken, '/messages', { ...scope, text: '日期与状态资源验证', clientEventId: 'presentation-source' });
@@ -100,7 +157,7 @@ for (const width of [320, 390, 1280]) test(`expanded presentation resources rema
   await expect(page.locator('.status-label')).toHaveText(expanded.messages['run.unknown']);
   await expect(page.locator('.status-label b')).toHaveCount(0);
   expect(await page.locator('.message time').first().evaluate(node => node.title === new Date(node.dateTime).toLocaleString(document.documentElement.lang))).toBe(true);
-  const cancel = page.getByRole('button', { name: '取消研究', exact: true });
+  const cancel = page.getByRole('button', { name: expanded.messages['run.cancel.action'], exact: true });
   await cancel.scrollIntoViewIfNeeded();
   const bounds = await page.locator('.run').evaluate(node => {
     const box = node.getBoundingClientRect(), label = node.querySelector('.run-state').getBoundingClientRect(), action = node.querySelector('.run-cancel').getBoundingClientRect();
@@ -108,6 +165,7 @@ for (const width of [320, 390, 1280]) test(`expanded presentation resources rema
   });
   expect(bounds.labelLeft).toBeGreaterThanOrEqual(bounds.boxLeft); expect(bounds.labelRight).toBeLessThanOrEqual(bounds.boxRight);
   expect(bounds.actionRight).toBeLessThanOrEqual(bounds.boxRight);
+  expect(await cancel.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
   expect(await page.locator('.status-label').evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
   await page.getByRole('button', { name: '查看这条消息的讨论', exact: true }).click();
   await expect(page.locator('.thread-status > span')).toHaveText(expanded.messages['run.unknown']);

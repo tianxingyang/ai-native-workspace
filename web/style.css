@@ -276,7 +276,7 @@ h1, h2, h3 { text-wrap: balance; }
 .status-label, .thread-status > span { min-width: 0; overflow-wrap: anywhere; }
 .run-title { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 13px; color: var(--n7); }
 .run-title strong { color: var(--n8); font-variant-numeric: tabular-nums; }
-.run .run-cancel { margin-left: auto; }
+.run .run-cancel { margin-left: auto; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .run-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; margin: 8px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--n6); }
 .run-steps li { display: inline-flex; align-items: center; gap: 6px; }
 .run-steps li + li::before { content: ""; width: 16px; height: 1px; margin: 0 8px 0 2px; background: var(--n4); }

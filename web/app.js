@@ -335,8 +335,8 @@ function applySnapshot(room, data, selected) {
   if (!selected || firstLoad) return;
   room.runs.forEach((run, index) => {
     const previous = before.get(run.id);
-    if (previous === undefined) announce(`${memberIn(room, run.memberId).name} 已认领调研 #${index + 1}。`);
-    else if (previous !== run.status && !LIVE.has(run.status)) announce(`调研 #${index + 1}：${labels[run.status] ?? t('run.unrecognized')}。`);
+    if (previous === undefined) announce(t('run.announce.claimed', { name: memberIn(room, run.memberId).name, number: index + 1 }));
+    else if (previous !== run.status && !LIVE.has(run.status)) announce(t('run.announce.status', { number: index + 1, status: labels[run.status] ?? t('run.unrecognized') }));
   });
 }
 
@@ -482,13 +482,13 @@ function renderMessage(room, message, previous, ctx, expanded) {
 
 function resultHead(room, message, ctx) {
   const head = el('div', 'result-head'), nodes = [head];
-  head.append(el('span', 'result-label', '模拟研究结果 · 合成资料'));
+  head.append(el('span', 'result-label', t('result.synthetic')));
   const run = (ctx.runsBySource.get(message.sourceMessageId) ?? []).find(item => item.memberId === message.authorId);
-  if (run) head.append(el('span', 'run-code', `调研 #${ctx.code.get(run.id)}`));
+  if (run) head.append(el('span', 'run-code', t('run.label', { number: ctx.code.get(run.id) })));
   const source = ctx.byId.get(message.sourceMessageId);
   if (source) {
     const quote = el('div', 'quote');
-    quote.append(el('span', 'quote-author', `回应 ${memberIn(room, source.authorId).name}`), el('span', 'quote-text', firstLine(source.text)));
+    quote.append(el('span', 'quote-author', t('result.respondingTo', { name: memberIn(room, source.authorId).name })), el('span', 'quote-text', firstLine(source.text)));
     nodes.push(quote);
   }
   return nodes;
@@ -501,16 +501,16 @@ function sourcesNode(message, expanded) {
   summary.dataset.action = `sources-${message.id}`;
   keys.setAttribute('aria-hidden', 'true');
   sources.forEach((_, index) => keys.append(el('span', 'source-key', String(index + 1))));
-  summary.append(icon('i-chevron'), el('span', '', `${sources.length} 条合成来源与限制`), keys);
+  summary.append(icon('i-chevron'), el('span', '', t('result.sourcesSummary', { count: sources.length })), keys);
   const list = el('ol', 'source-list');
   sources.forEach((source, index) => {
     const item = el('li'), copy = el('div');
-    copy.append(el('strong', 'source-title', source.title), el('p', 'source-excerpt', source.excerpt), el('span', 'source-url', `${source.url}（测试占位地址，不可作为证据链接）`));
+    copy.append(el('strong', 'source-title', source.title), el('p', 'source-excerpt', source.excerpt), el('span', 'source-url', t('result.placeholderUrl', { url: source.url })));
     item.append(el('span', 'source-key', String(index + 1)), copy); list.append(item);
   });
   details.append(summary, list);
   if (limitations.length) {
-    const limits = el('div', 'limits'); limits.append(el('strong', '', '限制'));
+    const limits = el('div', 'limits'); limits.append(el('strong', '', t('result.limitations')));
     for (const limitation of limitations) limits.append(el('p', '', limitation));
     details.append(limits);
   }
@@ -519,40 +519,40 @@ function sourcesNode(message, expanded) {
 
 function runNote(run) {
   if (run.invalidatedBy || run.contextInvalidated) {
-    if (run.status === 'unknown') return '消息变更已收到；旧运行停止未确认，暂不重建，也不发布旧结果。';
-    if (run.replacementRunId) return '旧上下文已失效，已创建新的研究；应用状态见新研究进度。';
-    if (!['completed', 'failed', 'stopped'].includes(run.status)) return '消息变更已收到，等待旧运行停止；旧结果已禁止发布。';
-    return '旧运行已结束，旧上下文已失效。';
+    if (run.status === 'unknown') return t('run.note.invalidatedUnknown');
+    if (run.replacementRunId) return t('run.note.replacementCreated');
+    if (!['completed', 'failed', 'stopped'].includes(run.status)) return t('run.note.invalidatedWaiting');
+    return t('run.note.invalidatedSettled');
   }
   const stoppedEvent = run.events.find(event => event.kind === 'stopped' && event.data.executionSettled === true);
   return {
-    queued: '已认领，正在等待执行设备。', running: '模拟 Agent 正在处理；消息送达不代表研究完成。',
-    cancel_requested: '已受理取消请求，尚未收到实际停止确认。',
-    completed: run.receiptId ? '成果已回到本讨论，发布回执已保存。' : '缺少发布回执，请核对执行记录。',
-    failed: '本次执行失败。不会自动重新研究，请先核对已有结果。',
-    unknown: '暂时无法确认执行结果。不会自动重跑；需核对执行设备。',
-    stopped: stoppedEvent ? '执行设备已确认运行结束，停止回执已保存。' : run.stopEvidence ? '已确认任务未开始执行。' : '停止证据待核对。',
-  }[run.status] ?? '请核对运行记录。';
+    queued: t('run.note.queued'), running: t('run.note.running'),
+    cancel_requested: t('run.note.cancelRequested'),
+    completed: t(run.receiptId ? 'run.note.published' : 'run.note.missingReceipt'),
+    failed: t('run.note.failed'),
+    unknown: t('run.note.unknown'),
+    stopped: t(stoppedEvent ? 'run.note.executionStopped' : run.stopEvidence ? 'run.note.notStarted' : 'run.note.stopUnconfirmed'),
+  }[run.status] ?? t('run.note.unrecognized');
 }
 
 // Progress is derived only from server-recorded runtime events, never from timers.
 function runSteps(run) {
   const at = kind => run.events.find(event => event.kind === kind)?.at;
-  const started = at('input_applied'), steps = [{ label: '已认领', state: 'done' }];
-  if (started) steps.push({ label: run.work.contextRevision > 1 && !run.contextInvalidated ? '修改已应用' : '开始执行', time: started, state: 'done' });
-  else if (run.stopEvidence?.executionStarted === false) steps.push({ label: '未开始执行', state: 'done' });
-  else steps.push({ label: '开始执行', state: run.status === 'queued' ? 'current' : 'todo' });
-  if (run.status === 'cancel_requested') steps.push({ label: '取消已受理', state: 'done' }, { label: '等待停止确认', state: 'current' });
-  else if (run.status === 'stopped') steps.push({ label: '已停止', time: at('stopped'), state: 'done' });
-  else if (run.status === 'failed') steps.push({ label: '执行失败', time: at('failed'), state: 'bad' });
-  else if (run.status === 'unknown') steps.push({ label: '结果待核对', state: 'bad' });
-  else steps.push({ label: '结果回到讨论', time: run.receiptId ? at('output') : undefined, state: run.receiptId ? 'done' : run.status === 'running' ? 'current' : 'todo' });
+  const started = at('input_applied'), steps = [{ label: t('run.step.claimed'), state: 'done' }];
+  if (started) steps.push({ label: t(run.work.contextRevision > 1 && !run.contextInvalidated ? 'run.step.changeApplied' : 'run.step.started'), time: started, state: 'done' });
+  else if (run.stopEvidence?.executionStarted === false) steps.push({ label: t('run.step.notStarted'), state: 'done' });
+  else steps.push({ label: t('run.step.started'), state: run.status === 'queued' ? 'current' : 'todo' });
+  if (run.status === 'cancel_requested') steps.push({ label: t('run.step.cancelAccepted'), state: 'done' }, { label: t('run.cancel_requested'), state: 'current' });
+  else if (run.status === 'stopped') steps.push({ label: t('run.stopped'), time: at('stopped'), state: 'done' });
+  else if (run.status === 'failed') steps.push({ label: t('run.failed'), time: at('failed'), state: 'bad' });
+  else if (run.status === 'unknown') steps.push({ label: t('run.step.unknown'), state: 'bad' });
+  else steps.push({ label: t('run.step.resultReturned'), time: run.receiptId ? at('output') : undefined, state: run.receiptId ? 'done' : run.status === 'running' ? 'current' : 'todo' });
   return steps;
 }
 
 function stepsNode(run) {
   const list = el('ol', 'run-steps');
-  list.setAttribute('aria-label', '调研进度');
+  list.setAttribute('aria-label', t('run.progressLabel'));
   for (const step of runSteps(run)) {
     const item = el('li', `is-${step.state}`);
     item.append(el('span', 'step-dot'), el('span', '', step.label));
@@ -564,20 +564,20 @@ function stepsNode(run) {
 
 function renderRun(room, run, ctx) {
   const code = ctx.code.get(run.id), block = el('section', `run is-${run.status}`);
-  block.dataset.run = run.id; block.setAttribute('aria-label', `调研 #${code}`);
+  block.dataset.run = run.id; block.setAttribute('aria-label', t('run.label', { number: code }));
   const top = el('div', 'run-top'), status = el('span', 'run-state'), title = el('span', 'run-title');
   status.append(icon(`st-${run.status}`, `mark st-${run.status}`), el('span', 'status-label', labels[run.status] ?? t('run.unrecognized')));
-  title.append(el('strong', '', `调研 #${code}`), el('span', '', memberIn(room, run.memberId).name));
+  title.append(el('strong', '', t('run.label', { number: code })), el('span', '', memberIn(room, run.memberId).name));
   top.append(status, title);
   const cancellation = state.cancels.get(run.id);
   if (['queued', 'running', 'unknown'].includes(run.status) && authorized('cancel')) {
-    const cancel = action(cancellation === 'sending' ? '正在请求…' : cancellation === 'failed' ? '重试取消' : '取消研究', `cancel-${run.id}`, () => cancelRun(run.id), 'outline-button run-cancel');
+    const cancel = action(t(cancellation === 'sending' ? 'run.cancel.requesting' : cancellation === 'failed' ? 'run.cancel.retry' : 'run.cancel.action'), `cancel-${run.id}`, () => cancelRun(run.id), 'outline-button run-cancel');
     cancel.disabled = cancellation === 'sending'; top.append(cancel);
   }
   block.append(top, stepsNode(run), el('p', 'run-note', runNote(run)));
-  if (cancellation === 'failed') block.append(el('p', 'error', '取消请求结果未确认，请重试或等待同步；未声称任务已停止。'));
+  if (cancellation === 'failed') block.append(el('p', 'error', t('run.cancel.unconfirmed')));
   const result = (ctx.resultsBySource.get(run.sourceMessageId) ?? []).find(message => message.authorId === run.memberId);
-  if (result) block.append(action('查看结果', `jump-${run.id}`, () => focusMessage(result.id), 'text-button run-jump', 'i-jump'));
+  if (result) block.append(action(t('run.viewResult'), `jump-${run.id}`, () => focusMessage(result.id), 'text-button run-jump', 'i-jump'));
   return block;
 }
 
@@ -623,7 +623,7 @@ async function cancelRun(id) {
       status: ['completed', 'failed', 'stopped'].includes(run.status) ? run.status : result.status,
       receiptId: result.publishedReceiptId ?? run.receiptId,
     } : run);
-    state.cancels.delete(id); announce('取消请求已受理，正在核对停止状态。');
+    state.cancels.delete(id); announce(t('run.cancel.accepted'));
     renderMessages(); renderPane(); renderRooms(); renderSeats(current());
     await sync();
   } catch (error) {
@@ -996,7 +996,7 @@ function threadMessage(room, message, ctx) {
   const member = memberIn(room, message.authorId), item = el('article', 'thread-item'), head = el('div', 'thread-head');
   head.append(el('strong', '', member.name), el('span', 'kind', kindLabel(member)), timeNode(message.createdAt));
   item.append(head);
-  if (message.result) item.append(el('span', 'thread-synthetic', '模拟研究结果 · 合成资料'));
+  if (message.result) item.append(el('span', 'thread-synthetic', t('result.synthetic')));
   if (message.replyToMessageId) item.append(replyQuote(room, message, ctx));
   item.append(el('p', 'thread-text', messageText(message)));
   if (!message.retracted && !message.invalidated && authorized('send', room)) item.append(button('回复消息', () => chooseReply(room, message), 'text-button'));
@@ -1004,10 +1004,10 @@ function threadMessage(room, message, ctx) {
     const list = el('ol', 'thread-sources');
     message.result.sources.forEach((source, index) => {
       const row = el('li'), copy = el('div');
-      copy.append(el('strong', 'source-title', source.title), el('p', 'source-excerpt', source.excerpt), el('span', 'source-url', `${source.url}（测试占位地址，不可作为证据链接）`));
+      copy.append(el('strong', 'source-title', source.title), el('p', 'source-excerpt', source.excerpt), el('span', 'source-url', t('result.placeholderUrl', { url: source.url })));
       row.append(el('span', 'source-key', String(index + 1)), copy); list.append(row);
     });
-    const limits = el('div', 'thread-limits'); limits.append(el('strong', '', '限制'));
+    const limits = el('div', 'thread-limits'); limits.append(el('strong', '', t('result.limitations')));
     for (const limitation of message.result.limitations) limits.append(el('p', '', limitation));
     item.append(list, limits);
   }
@@ -1017,7 +1017,7 @@ function threadMessage(room, message, ctx) {
 function threadRun(room, run, ctx) {
   const box = el('div', 'thread-run'), top = el('div', 'thread-run-top'), status = el('span', 'thread-status');
   status.append(icon(`st-${run.status}`, `mark st-${run.status}`), el('span', '', labels[run.status] ?? t('run.unrecognized')));
-  top.append(status, el('span', 'run-title', `调研 #${ctx.code.get(run.id)} · ${memberIn(room, run.memberId).name}`));
+  top.append(status, el('span', 'run-title', t('run.ownerLabel', { number: ctx.code.get(run.id), name: memberIn(room, run.memberId).name })));
   box.append(top, stepsNode(run), el('p', 'run-note', runNote(run)));
   return box;
 }
