@@ -68,19 +68,21 @@ test('blind packet has no assignment, identity, prompt or fake-score metadata', 
     assert.equal(item.rubricScore, null);
     assert.ok(key.mappings.some(k => k.blindId === item.blindId));
   }
+  const second = blindPacket(plan, records);
+  assert.notDeepEqual(key.mappings.map(k => k.runId), second.key.mappings.map(k => k.runId), 'Packet order must not be reconstructible from the public seed');
 });
 
 test('snapshots and modes stay separate; undefined denominators are null', () => {
   const p = clone(protocol); p.snapshots.push('synthetic-fixture-v2');
   const two = buildPlan(p, tasks);
   const report = summarize(two, simulate(two));
-  assert.equal(report.strata.length, 4);
+  assert.equal(report.strata.length, 8);
   assert.equal(report.realModelCalls, 0);
   assert.equal(report.measuredModelCost, null);
   for (const stratum of report.strata) for (const arm of stratum.arms) {
-    assert.equal(arm.runs, 36);
-    assert.equal(arm.falseWake.denominator, 12);
-    assert.equal(arm.missedEngagement.denominator, 24);
+    assert.equal(arm.runs, 18);
+    assert.equal(arm.falseWake.denominator, stratum.cohort === 'work' ? 0 : 12);
+    assert.equal(arm.missedEngagement.denominator, stratum.cohort === 'work' ? 18 : 6);
     if (stratum.mode === 'personal') assert.equal(arm.handoffs, null);
   }
   const empty = clone(records);
@@ -101,10 +103,27 @@ test('paired task bootstrap recovers known factorial effects without pooling rep
     assert.deepEqual(stratum.contrasts.roleWithoutWorkflow.interval95, [1, 1]);
     assert.equal(stratum.contrasts.roleWithWorkflow.estimate, 2);
     assert.equal(stratum.contrasts.interaction.estimate, 1);
-    assert.equal(stratum.contrasts.interaction.independentTasks, 12);
+    assert.equal(stratum.contrasts.interaction.independentTasks, 6);
   }
   const neutral = summarize(plan, records);
   assert.equal(neutral.strata[0].contrasts.combinedVersusGeneric.estimate, 0);
+});
+
+test('opposing work and participation effects cannot cancel in a pooled contrast', () => {
+  const changed = clone(records);
+  for (const row of changed) {
+    const run = plan.runs.find(r => r.runId === row.runId);
+    const task = tasks.find(t => t.id === run.taskId);
+    row.status = 'ok';
+    row.score = 2 + (run.arm === 'B' ? (task.family === 'participation' ? -1 : 1) : 0);
+  }
+  const report = summarize(plan, changed);
+  assert.equal(report.strata.length, 4);
+  for (const stratum of report.strata) {
+    const expected = stratum.cohort === 'work' ? 1 : -1;
+    assert.equal(stratum.contrasts.roleWithoutWorkflow.estimate, expected);
+    assert.deepEqual(stratum.contrasts.roleWithoutWorkflow.interval95, [expected, expected]);
+  }
 });
 
 test('manifest changes when prompts, controls or task evidence change', () => {

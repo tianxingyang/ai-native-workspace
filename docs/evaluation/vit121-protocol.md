@@ -82,7 +82,7 @@
 
 预注册主要质量对比 B−A（纯角色增量）与 C−A（流程增量），D−C（流程上的角色增量）为关键次要；报告 D−A 和交互 `(D−C)−(B−A)`。每 snapshot × mode 单独报告，不制造跨模型平均赢家；各领域、应参与/应安静另报。模式差异作为独立配对对比，只有上述信息/预算控制成立才解释，当前脚本不计算模式因果效应。
 
-脚本示范按任务先聚合重复、按领域分层的 paired task-cluster bootstrap（2,000 次，95% percentile interval）。同一重抽任务携带四臂全部结果；不把重复运行当作独立 n。正式样本若同源多个窗口，必须按来源 cluster 重抽，当前 smoke 每题视为独立。工作质量与参与质量作为两个独立 cohort 报告，不能用 smoke 的混合总分定产品结论。
+脚本示范按任务先聚合重复、按领域分层的 paired task-cluster bootstrap（2,000 次，95% percentile interval）。同一重抽任务携带四臂全部结果；不把重复运行当作独立 n。正式样本若同源多个窗口，必须按来源 cluster 重抽，当前 smoke 每题视为独立。工作质量与参与质量作为两个独立 cohort 报告，汇总和 contrasts 均按 snapshot × mode × cohort 分开，避免相反效果被混合均值抵消。
 
 正式推断提前固定 primary family、业务最小差异、显著性标准及多重比较校正（如两项 primary 使用 Holm，其他探索性结果明确标注）；脚本不计算 p 值或校正。提供效应量、区间与任务级分布；失败、安全和成本一起呈现，不用一个任意加权总分替代。高代价误唤醒/越权的允许上限由产品负责人先定；角色收益需同时满足质量最小差异及成本、安全、参与非劣门槛，不能事后按结果改阈值。
 
@@ -97,6 +97,6 @@ node --test eval/vit121/harness.test.mjs
 node eval/vit121/harness.mjs demo .local/vit121-demo
 ```
 
-先创建 `.local` 父目录，输出目录必须不存在。产出 plan、results、report、blind-packet、custodian-key 五个 JSON；报告和评分包顶层带合成警示。manifest hash 覆盖配置/提示/样本；排程和假结果可复现，盲号用随机 UUID。`custodian-key`、plan 和 results 仅由组织者保存，给盲评者只发 blind-packet。`.local/` 已被仓库忽略；不得把含 key 的整个输出目录发送给评分者。
+先创建 `.local` 父目录，输出目录必须不存在。产出 plan、results、report、blind-packet、custodian-key 五个 JSON；报告和评分包顶层带合成警示。默认 288 条记录形成 4 个 snapshot × mode × cohort 分层。manifest hash 覆盖配置/提示/样本并进入 run ID，拒绝跨版本旧结果；排程和假结果可复现。盲号用随机 UUID，盲包顺序使用独立密码学随机性，不复用公开排程种子；保存本次盲包与映射以便审计，不要求重新生成相同盲序。`custodian-key`、plan 和 results 仅由组织者保存，给盲评者只发 blind-packet。`.local/` 已被仓库忽略；不得把含 key 的整个输出目录发送给评分者。
 
 验收本阶段：独立分支仅新增评测文件；单元检查涵盖四臂消融、排程、分层、失败与预算完整性、盲化、配对分析与 synthetic-only 门槛。后续真实执行仍待预算/数据批准、两个依赖 issue 的真实能力验收、live adapter/账本/事件链集成、完整人工评分流程及样本量预注册。本协议不变更项目开源协议或第三方许可。

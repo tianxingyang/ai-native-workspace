@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -115,10 +115,11 @@ export function validateResults(plan, results) {
 
 // Blind packet intentionally contains neither arm, snapshot, mode, repeat, runId,
 // system prompt nor synthetic numeric grade. Custodian alone retains key.json.
-export function blindPacket(plan, results, seed = plan.protocol.seed) {
+export function blindPacket(plan, results) {
   validateResults(plan, results);
   const key = [];
-  const items = shuffle(results, rng(seed)).map(row => {
+  // Public scheduling seeds must never reveal blinded assignment by position.
+  const items = shuffle(results, () => randomInt(2 ** 32) / 2 ** 32).map(row => {
     const run = plan.runs.find(r => r.runId === row.runId);
     const task = plan.tasks.find(t => t.id === run.taskId);
     const blindId = randomUUID();
@@ -145,8 +146,11 @@ export function summarize(plan, results) {
   validateResults(plan, results);
   const joined = results.map(row => ({ ...row, ...plan.runs.find(r => r.runId === row.runId) }));
   const strata = [];
-  for (const snapshot of plan.protocol.snapshots) for (const mode of plan.protocol.modes) {
-    const rows = joined.filter(r => r.snapshot === snapshot && r.mode === mode);
+  for (const snapshot of plan.protocol.snapshots) for (const mode of plan.protocol.modes) for (const cohort of ['work', 'participation']) {
+    const cohortTasks = plan.tasks.filter(t => (t.family === 'participation') === (cohort === 'participation'));
+    if (!cohortTasks.length) continue;
+    const taskIds = new Set(cohortTasks.map(t => t.id));
+    const rows = joined.filter(r => r.snapshot === snapshot && r.mode === mode && taskIds.has(r.taskId));
     const arms = ARMS.map(arm => {
       const rs = rows.filter(r => r.arm === arm);
       const sum = field => rs.reduce((n, r) => n + r[field], 0);
@@ -157,7 +161,7 @@ export function summarize(plan, results) {
       const durations = rs.map(r => r.usage.wallMs).sort((a, b) => a - b);
       return {
         arm, runs: rs.length, qualityITT: mean(rs.map(r => r.score)),
-        qualityByFamily: Object.fromEntries([...new Set(plan.tasks.map(t => t.family))].map(f => [f, mean(rs.filter(r => plan.tasks.find(t => t.id === r.taskId).family === f).map(r => r.score))])),
+        qualityByFamily: Object.fromEntries([...new Set(cohortTasks.map(t => t.family))].map(f => [f, mean(rs.filter(r => plan.tasks.find(t => t.id === r.taskId).family === f).map(r => r.score))])),
         completed: rs.filter(r => r.status === 'ok').length, accepted: passed,
         falseWake: { numerator: quiet.filter(r => r.responded).length, denominator: quiet.length, rate: ratio(quiet.filter(r => r.responded).length, quiet.length) },
         missedEngagement: { numerator: engage.filter(r => !r.responded).length, denominator: engage.length, rate: ratio(engage.filter(r => !r.responded).length, engage.length) },
@@ -169,8 +173,8 @@ export function summarize(plan, results) {
         costMicrosPerAccepted: ratio(cost, passed), latencyP50Ms: durations[Math.ceil(durations.length * .5) - 1], latencyP95Ms: durations[Math.ceil(durations.length * .95) - 1]
       };
     });
-    const contrasts = Object.fromEntries(Object.entries({ roleWithoutWorkflow: [-1, 1, 0, 0], workflowWithoutRole: [-1, 0, 1, 0], roleWithWorkflow: [0, 0, -1, 1], combinedVersusGeneric: [-1, 0, 0, 1], interaction: [1, -1, -1, 1] }).map(([name, weights]) => [name, contrast(rows, plan.tasks, weights, plan.protocol.seed)]));
-    strata.push({ snapshot, mode, arms, contrasts });
+    const contrasts = Object.fromEntries(Object.entries({ roleWithoutWorkflow: [-1, 1, 0, 0], workflowWithoutRole: [-1, 0, 1, 0], roleWithWorkflow: [0, 0, -1, 1], combinedVersusGeneric: [-1, 0, 0, 1], interaction: [1, -1, -1, 1] }).map(([name, weights]) => [name, contrast(rows, cohortTasks, weights, plan.protocol.seed)]));
+    strata.push({ snapshot, mode, cohort, arms, contrasts });
   }
   return { disclaimer: DISCLAIMER, manifestHash: plan.manifestHash, evidenceType: 'synthetic', realModelCalls: 0, measuredModelCost: null, strata };
 }
