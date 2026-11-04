@@ -325,7 +325,7 @@ function applySnapshot(room, data, selected) {
       // Keep its identity for a read-only check, but discard the withdrawn body.
       messageChange.targetRetracted = true; messageChange.submittedText = '';
       $('change-text').value = ''; $('change-text').hidden = true; $('change-label').hidden = true;
-      $('change-help').textContent = '消息已撤回，仍需核对该次变更。核对不会恢复正文或重新提交。';
+      $('change-help').textContent = t('editor.retractedPending');
     }
   }
   for (const run of room.runs) if (SETTLED.has(run.status)) state.cancels.delete(run.id);
@@ -657,7 +657,7 @@ function updateMessageChange() {
   const change = messageChange; if (!change || change.sending) return;
   const allowed = authorized('send', state.rooms.get(change.roomId)), submitted = change.submittedText !== undefined;
   $('change-save').disabled = change.conflict || (!submitted && !allowed);
-  $('change-save').textContent = submitted ? (allowed && !change.targetRetracted ? '重试同一变更' : '核对变更结果') : t(change.kind === 'edit' ? 'editor.save' : 'editor.retract');
+  $('change-save').textContent = t(submitted ? (allowed && !change.targetRetracted ? 'editor.retry' : 'editor.check') : change.kind === 'edit' ? 'editor.save' : 'editor.retract');
   if (allowed && !change.targetRetracted) change.autoChecked = false;
 }
 function acceptMessageChange(change, result) {
@@ -668,9 +668,7 @@ function acceptMessageChange(change, result) {
   // Hide cached derived output immediately, before the next snapshot.
   latest.messages = latest.messages.map(m => m.origin === 'research' ? { ...m, text: '', result: undefined, invalidated: true } : m);
   closeMessageChange(); renderMessages(); renderPane(); renderRooms();
-  announce(result.message.revision > result.change.revision
-    ? '该次消息变更已收到，消息随后又有变更，当前显示最新记录。'
-    : '消息变更已收到，正在核对相关研究的停止与应用状态。');
+  announce(t(result.message.revision > result.change.revision ? 'editor.receivedNewer' : 'editor.received'));
   void sync();
 }
 async function submitMessageChange(receiptOnly = false) {
@@ -685,7 +683,7 @@ async function submitMessageChange(receiptOnly = false) {
   change.submittedText = text; change.sending = true;
   const restoreFocus = document.activeElement === $('change-save');
   $('change-text').disabled = true; $('change-save').disabled = true; $('change-close').disabled = true;
-  $('change-error').textContent = retry ? '正在核对变更结果…' : '正在提交变更…';
+  $('change-error').textContent = t(retry ? 'editor.checking' : 'editor.submitting');
   $('change-error').tabIndex = -1;
   if (restoreFocus) $('change-error').focus();
   try {
@@ -695,7 +693,7 @@ async function submitMessageChange(receiptOnly = false) {
       if (receipt) { acceptMessageChange(change, receipt); return; }
     }
     if (receiptOnly || change.targetRetracted || !authorized('send', state.rooms.get(change.roomId))) {
-      $('change-error').textContent = '暂未查到该次变更，请求仍可能到达。保留待确认；当前不会重新提交。'; return;
+      $('change-error').textContent = t('editor.missingReceipt'); return;
     }
     const result = await client.change(change.messageId, change.kind, change.revision, change.id, text);
     if (client !== state.client || messageChange !== change) return;
@@ -704,7 +702,7 @@ async function submitMessageChange(receiptOnly = false) {
     if (client !== state.client || messageChange !== change) return;
     if (error instanceof ApiError && error.status === 401) { invalidate(error); return; }
     change.conflict = error instanceof ApiError && error.status === 409;
-    $('change-error').textContent = change.conflict ? '消息版本已变化，请返回讨论并重新打开最新消息。' : errorText(error);
+    $('change-error').textContent = change.conflict ? t('editor.conflict') : errorText(error);
     if (change.conflict || (error instanceof ApiError && error.status === 403)) void sync();
   } finally {
     if (client === state.client && messageChange === change) {
@@ -785,21 +783,21 @@ function renderOutbox() {
   const focusedAction = hadFocus && document.activeElement.dataset.action;
   if (focusedAction && focusedAction !== 'pending-status') pending.focusAction = focusedAction;
   const failed = pending.status === 'failed', node = el('div', `outbox-item is-${failed ? 'failed' : 'sending'}`), head = el('div', 'outbox-head');
-  const status = el('p', '', pending.checking ? '正在核对发送结果…' : failed ? pending.error : '正在发送，请稍候…');
+  const status = el('p', '', pending.checking ? t('send.checking') : failed ? pending.error : t('send.sending'));
   status.tabIndex = -1; status.dataset.action = 'pending-status';
   head.append(icon(failed ? 'i-alert' : 'i-clock'), status);
   node.append(head);
   if (failed) {
     const actions = el('div', 'outbox-actions');
-    const check = button(pending.checking ? '正在核对…' : '核对发送结果', () => reconcilePending(current(), state.selected), 'outline-button');
+    const check = button(t(pending.checking ? 'send.checkingAction' : 'send.check'), () => reconcilePending(current(), state.selected), 'outline-button');
     check.dataset.action = 'check-receipt'; check.disabled = Boolean(pending.checking); actions.append(check);
     if (authorized('send', room)) {
-      const retry = button('重试同一条消息', () => sendPending(current(), state.selected), 'outline-button');
+      const retry = button(t('send.retry'), () => sendPending(current(), state.selected), 'outline-button');
       retry.dataset.action = 'retry-send'; retry.disabled = Boolean(pending.checking); actions.append(retry);
     }
-    actions.append(el('p', 'muted', '核对只查询原发送结果；重试沿用同一消息标识。刷新会丢失此待确认请求。'));
+    actions.append(el('p', 'muted', t('send.receiptHelp')));
     if (pending.replyRejected) {
-      const cancel = button('取消引用并保留草稿', () => {
+      const cancel = button(t('send.cancelReply'), () => {
         const room = current(); room.pending = null; room.replyToMessageId = undefined; updateComposer(); renderOutbox(); $('message').focus();
       }, 'outline-button');
       cancel.dataset.action = 'cancel-reply'; cancel.disabled = Boolean(pending.checking); actions.append(cancel);
@@ -822,7 +820,7 @@ function acceptPending(id, pending, result) {
     $('message').value = ''; renderMessages(!result.duplicate); updateComposer(); renderOutbox();
     if (!result.duplicate && (!state.pane || !paneOverlay.matches)) (authorized('send', latest) ? $('message') : $('timeline')).focus();
   }
-  renderRooms(); announce(result.duplicate ? '已核对：这条消息已送达，没有重复发送。' : '消息已送达。');
+  renderRooms(); announce(t(result.duplicate ? 'send.duplicateConfirmed' : 'send.delivered'));
   return true;
 }
 async function reconcilePending(room, id) {
@@ -833,7 +831,7 @@ async function reconcilePending(room, id) {
     const result = await client.receipt(room.scope, pending.id);
     if (client !== state.client || state.rooms.get(id)?.pending !== pending) return false;
     if (result.message) return acceptPending(id, pending, { ...result, duplicate: true });
-    if (!pending.replyRejected) pending.error = '暂未查到已送达记录，请求仍可能到达。保留原标识继续核对；有发言权限时可重试。';
+    if (!pending.replyRejected) pending.error = t('send.missingReceipt');
   } catch (error) {
     if (client !== state.client) return false;
     if (error instanceof ApiError && [401, 403].includes(error.status)) { invalidate(error); return false; }
@@ -862,7 +860,7 @@ async function sendPending(room, id) {
     if (client !== state.client) return;
     if (error instanceof ApiError && error.status === 401) { invalidate(error); return; }
     pending.replyRejected = error instanceof ApiError && error.code === 'reply_source_unavailable';
-    pending.status = 'failed'; pending.error = pending.replyRejected ? '原消息已不可用，本次回复未发送。可以取消引用并保留草稿。' : errorText(error); announce(pending.error);
+    pending.status = 'failed'; pending.error = pending.replyRejected ? t('send.replyRejected') : errorText(error); announce(pending.error);
     if (error instanceof ApiError && error.status === 403) await sync();
   }
   if (client === state.client && id === state.selected) { updateComposer(); renderOutbox(); }
