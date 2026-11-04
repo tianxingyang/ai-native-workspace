@@ -33,14 +33,14 @@ export function serveWeb(request: IncomingMessage, response: ServerResponse, url
 const same = (a: Scope, b: Scope) => a.conversationId === b.conversationId && a.threadId === b.threadId;
 export function clientSession(state: ControlState, actor: string) {
   const now = Date.now();
-  const scopes = (state.config.memberships[actor] ?? []).filter((s, i, all) => all.findIndex(a => same(a, s)) === i)
+  const scopes = state.memberScopes(actor).filter((s, i, all) => all.findIndex(a => same(a, s)) === i)
     .flatMap(scope => {
       // Discovery uses the same read authorization as message access. The action
       // deadlines below are presentation hints, never an alternative authorizer.
       if (!state.visible(actor, scope)) return [];
       const permissions = Object.fromEntries((['read', 'send', 'cancel'] as Action[]).map(action =>
         [action, state.authorization(actor, action, scope).grant?.expiresAt ?? 0]));
-      const members = state.config.members.filter(m => state.config.memberships[m.id]?.some(s => same(s, scope)));
+      const members = state.config.members.filter(m => state.memberScopes(m.id).some(s => same(s, scope)));
       return [{ ...scope, permissions, members }];
     });
   requireCondition(scopes.length > 0, 403, 'no_readable_scope');
