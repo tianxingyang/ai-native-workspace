@@ -1,7 +1,8 @@
 import { Client, ApiError, errorText } from './client.js';
-import { presentation, text as t } from './presentation.js';
+import { presentation, text as t, applyStaticText } from './presentation.js';
 
 document.documentElement.lang = presentation.locale;
+applyStaticText(document);
 
 const $ = id => document.getElementById(id);
 const desktop = window.__TAURI__;
@@ -144,11 +145,11 @@ function invalidate(error) {
   updatePaneAccessibility();
   $('announcement').textContent = '';
   $('sync-error').hidden = true; $('new-messages').hidden = true; $('expiry').hidden = true;
-  $('connection-status').dataset.state = 'pending'; $('connection-status').textContent = '正在连接';
+  $('connection-status').dataset.state = 'pending'; $('connection-status').textContent = t('connection.pending');
   // Only a rejected credential is a field error; expiry and denial are about access, not input.
   $('token').setAttribute('aria-invalid', String(!desktop && error instanceof ApiError && error.status === 401));
   $('connect-error').textContent = error ? errorText(error) : '';
-  $('connect-button').disabled = false; $('connect-button').textContent = desktop ? '进入本地演示' : '连接会话';
+  $('connect-button').disabled = false; $('connect-button').textContent = t(desktop ? 'desktop.enter' : 'connect.submit');
   (desktop ? $('connect-button') : $('token')).focus();
 }
 
@@ -310,7 +311,7 @@ async function sync() {
 
 function setConnection(value) {
   const node = $('connection-status'); node.dataset.state = value;
-  setText(node, value === 'ok' ? '已连接' : '连接中断');
+  setText(node, t(value === 'ok' ? 'connection.connected' : 'connection.disconnected'));
 }
 
 function applySnapshot(room, data, selected) {
@@ -642,11 +643,11 @@ function closeMessageChange() {
 }
 function openMessageChange(room, message, kind) {
   messageChange = { roomId: key(room.scope), messageId: message.id, revision: message.revision, kind, id: crypto.randomUUID(), sending: false, submittedText: undefined };
-  $('change-title').textContent = kind === 'edit' ? '编辑消息' : '撤回消息';
+  $('change-title').textContent = t(kind === 'edit' ? 'editor.editTitle' : 'editor.retractTitle');
   $('change-text').value = message.text; $('change-text').hidden = kind === 'retract'; $('change-label').hidden = kind === 'retract';
   $('change-text').disabled = false; $('change-save').disabled = false; $('change-close').disabled = false;
-  $('change-save').textContent = kind === 'edit' ? '保存修改' : '确认撤回';
-  $('change-help').textContent = kind === 'edit' ? '保存后，相关研究会停止使用旧内容；确认旧运行结束后重新处理。' : '撤回后，相关旧结果将失效。已完成的外部动作不会被撤销。';
+  $('change-save').textContent = t(kind === 'edit' ? 'editor.save' : 'editor.retract');
+  $('change-help').textContent = t(kind === 'edit' ? 'editor.editHelp' : 'editor.retractHelp');
   $('change-error').textContent = ''; $('message-change').showModal();
   (kind === 'edit' ? $('change-text') : $('change-save')).focus();
 }
@@ -656,7 +657,7 @@ function updateMessageChange() {
   const change = messageChange; if (!change || change.sending) return;
   const allowed = authorized('send', state.rooms.get(change.roomId)), submitted = change.submittedText !== undefined;
   $('change-save').disabled = change.conflict || (!submitted && !allowed);
-  $('change-save').textContent = submitted ? (allowed && !change.targetRetracted ? '重试同一变更' : '核对变更结果') : change.kind === 'edit' ? '保存修改' : '确认撤回';
+  $('change-save').textContent = submitted ? (allowed && !change.targetRetracted ? '重试同一变更' : '核对变更结果') : t(change.kind === 'edit' ? 'editor.save' : 'editor.retract');
   if (allowed && !change.targetRetracted) change.autoChecked = false;
 }
 function acceptMessageChange(change, result) {
@@ -739,12 +740,12 @@ function updateComposer() {
       cancel.disabled = Boolean(room.pending); preview.append(copy, cancel);
     }
   }
-  setText($('send-label'), room.pending?.status === 'sending' ? '发送中…' : '发送');
+  setText($('send-label'), t(room.pending?.status === 'sending' ? 'composer.sending' : 'composer.send'));
   $('composer').classList.toggle('is-readonly', !allowed);
   // The input folds away when speaking ends; keep keyboard focus somewhere visible.
   if (!allowed && document.activeElement === $('message')) $('timeline').focus();
-  setText($('send-help'), allowed ? 'Enter 发送 · Shift + Enter 换行' : readOnlyReason(room));
-  const placeholder = allowed ? `在「${room.scope.threadId}」中发言…` : '只读讨论';
+  setText($('send-help'), allowed ? t('composer.keyboardHint') : readOnlyReason(room));
+  const placeholder = allowed ? t('composer.threadPlaceholder', { thread: room.scope.threadId }) : t('composer.readOnlyPlaceholder');
   if ($('message').placeholder !== placeholder) $('message').placeholder = placeholder;
   renderSeatCard(room, allowed); renderExpiry(room, allowed);
 }
@@ -1024,7 +1025,7 @@ function threadRun(room, run, ctx) {
 $('connect-form').addEventListener('submit', async event => {
   event.preventDefault(); if ($('connect-button').disabled) return;
   const token = desktop ? 'local-demo' : $('token').value.trim(); if (!token) return;
-  $('connect-button').disabled = true; $('connect-button').textContent = '正在连接…'; $('connect-error').textContent = '';
+  $('connect-button').disabled = true; $('connect-button').textContent = t('connect.connecting'); $('connect-error').textContent = '';
   const client = new Client(token); $('token').value = ''; $('token').setAttribute('aria-invalid', 'false');
   try {
     const session = await client.session(); state.client = client; state.epoch++;
@@ -1100,16 +1101,16 @@ window.addEventListener('beforeunload', event => { if ([...state.rooms.values()]
 if (desktop) {
   $('token').required = false; $('token').hidden = true;
   document.querySelector('label[for="token"]').hidden = true;
-  $('connect-button').textContent = '进入本地演示';
-  $('credential-help').textContent = '安装版已内置模拟服务。临时身份只保留在后台内存，启动 30 分钟后失效。关闭窗口会留在托盘；退出应用可结束并清理本次演示。通知点击会重新校验授权；已结束或重启前的演示不会恢复旧消息。';
-  document.querySelector('.demo-note').textContent = 'CoSeat Demo 0.1.3 · 未签名测试版 · 无真实模型调用';
-  $('logout').querySelector('span').textContent = '断开连接';
+  $('connect-button').textContent = t('desktop.enter');
+  $('credential-help').textContent = t('desktop.help');
+  document.querySelector('.demo-note').textContent = t('desktop.demoNote', { version: '0.1.3' });
+  $('logout').querySelector('span').textContent = t('desktop.disconnect');
   const actions = el('div', 'desktop-actions'), quit = button('', () => desktop.core.invoke('desktop_quit'), 'rail-button');
-  quit.append(icon('i-power'), el('span', '', '退出应用'));
+  quit.append(icon('i-power'), el('span', '', t('desktop.quit')));
   $('logout').before(actions); actions.append($('logout'), quit);
-  document.querySelector('.connect-body').append(button('退出应用', () => desktop.core.invoke('desktop_quit'), 'quiet connect-quit'));
+  document.querySelector('.connect-body').append(button(t('desktop.quit'), () => desktop.core.invoke('desktop_quit'), 'quiet connect-quit'));
   const noticePanel = el('section', 'connection-page'); noticePanel.hidden = true;
-  noticePanel.append(el('p', '', '正在核对通知来源与当前授权…')); document.body.append(noticePanel);
+  noticePanel.append(el('p', '', t('desktop.checkingNotice'))); document.body.append(noticePanel);
   let noticeBusy = false, noticePending = false;
   async function openNotification() {
     noticePending = true;
@@ -1139,8 +1140,8 @@ if (desktop) {
             } else {
               invalidate();
               $('connect-error').textContent = result.reason === 'disconnected'
-                ? '当前已断开连接。请手动进入演示后查看获准访问的消息。'
-                : '这条通知属于已结束或不可用的演示，旧消息不会恢复。可手动进入本次本地演示。';
+                ? t('desktop.noticeDisconnected')
+                : t('desktop.noticeUnavailable');
             }
             noticePanel.hidden = true;
           }

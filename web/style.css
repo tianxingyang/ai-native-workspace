@@ -111,7 +111,7 @@ h1, h2, h3 { text-wrap: balance; }
 .connect-panel { width: min(440px, 100%); background: var(--n0); color: var(--n8); border-radius: 8px; box-shadow: 0 2px 0 rgb(0 0 0 / .14), 0 28px 60px -28px rgb(0 0 0 / .6); }
 .connect-card-top { display: grid; place-items: center; height: 76px; border-bottom: 1px solid var(--n3); background: linear-gradient(var(--n0), var(--n1)); border-radius: 8px 8px 0 0; }
 .connect-card-top .wordmark { font-size: 24px; }
-.connect-body { padding: 28px 36px 28px; }
+.connect-body { padding: 28px 36px 28px; overflow-wrap: anywhere; }
 .connect-body h1 { margin: 0 0 6px; font: 700 22px/1.35 var(--font-display); letter-spacing: -.01em; }
 .connect-lede { margin: 0; color: var(--n7); line-height: 1.7; }
 #connect-form { display: grid; gap: 8px; margin-top: 22px; }

@@ -39,42 +39,42 @@
   <div class="connect-panel">
     <div class="connect-card-top"><div class="wordmark">CoSeat <span>同席</span></div></div>
     <div class="connect-body">
-      <h1 id="connect-title">回到团队的讨论中</h1>
-      <p class="connect-lede">人与 Agent，同席协作。连接后查看你获准访问的会话。</p>
+      <h1 id="connect-title" data-i18n="connect.title">回到团队的讨论中</h1>
+      <p class="connect-lede" data-i18n="connect.lede">人与 Agent，同席协作。连接后查看你获准访问的会话。</p>
       <form id="connect-form">
-        <label for="token">本地演示访问凭据</label>
+        <label for="token" data-i18n="connect.credential">本地演示访问凭据</label>
         <input id="token" type="password" autocomplete="off" spellcheck="false" required maxlength="512" aria-describedby="connect-error credential-help" aria-invalid="false">
         <p id="connect-error" class="error" role="alert"></p>
-        <button class="primary" id="connect-button">连接会话</button>
+        <button class="primary" id="connect-button" data-i18n="connect.submit">连接会话</button>
       </form>
-      <p id="credential-help" class="muted">使用启动演示时生成的临时凭据。仅在当前页面内存中保留；刷新或退出后需重新连接。</p>
-      <div class="demo-note">本地模拟演示 · Agent 使用合成资料，不进行真实调研。</div>
+      <p id="credential-help" class="muted" data-i18n="connect.help">使用启动演示时生成的临时凭据。仅在当前页面内存中保留；刷新或退出后需重新连接。</p>
+      <div class="demo-note" data-i18n="connect.demoNote">本地模拟演示 · Agent 使用合成资料，不进行真实调研。</div>
     </div>
   </div>
 </section>
 
 <div id="app" class="shell" hidden>
-  <aside id="sidebar" class="sidebar" aria-label="会话导航">
-    <div class="brand-row"><div class="wordmark">CoSeat <span>同席</span></div><span class="tag">本地演示</span></div>
-    <div class="section-title"><h1>会话</h1><span id="room-count"></span></div>
-    <nav id="rooms" aria-label="已授权会话"></nav>
-    <div class="sidebar-footer"><div id="identity" class="identity"></div><button id="logout" class="rail-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-logout"/></svg><span>退出连接</span></button></div>
+  <aside id="sidebar" class="sidebar" aria-label="会话导航" data-i18n-aria-label="shell.navigation">
+    <div class="brand-row"><div class="wordmark">CoSeat <span>同席</span></div><span class="tag" data-i18n="shell.demo">本地演示</span></div>
+    <div class="section-title"><h1 data-i18n="shell.conversations">会话</h1><span id="room-count"></span></div>
+    <nav id="rooms" aria-label="已授权会话" data-i18n-aria-label="shell.authorizedConversations"></nav>
+    <div class="sidebar-footer"><div id="identity" class="identity"></div><button id="logout" class="rail-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-logout"/></svg><span data-i18n="shell.logout">退出连接</span></button></div>
   </aside>
 
   <main id="chat" class="chat" aria-labelledby="room-title">
     <header class="chat-header">
-      <button id="back" class="quiet back" type="button"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg><span>会话列表</span></button>
+      <button id="back" class="quiet back" type="button"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg><span data-i18n="shell.conversationList">会话列表</span></button>
       <span id="room-tile" class="tile room-tile" aria-hidden="true"></span>
       <div class="heading"><h2 id="room-title" tabindex="-1"></h2><p id="thread-title"></p></div>
-      <ul id="seats" class="seats" aria-label="在座成员"></ul>
-      <span id="connection-status" class="connection" role="status" data-state="pending">正在连接</span>
-      <button id="search-toggle" class="icon-button" type="button" aria-label="查找当前讨论的消息" aria-expanded="false" aria-controls="details"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg></button>
-      <button id="members-toggle" class="quiet members-toggle" type="button" aria-expanded="false" aria-controls="details"><svg class="icon" aria-hidden="true"><use href="#i-users"/></svg><span id="members-count">成员</span><span id="members-short" aria-hidden="true"></span></button>
+      <ul id="seats" class="seats" aria-label="在座成员" data-i18n-aria-label="shell.members"></ul>
+      <span id="connection-status" class="connection" role="status" data-state="pending" data-i18n="connection.pending">正在连接</span>
+      <button id="search-toggle" class="icon-button" type="button" aria-label="查找当前讨论的消息" data-i18n-aria-label="shell.search" aria-expanded="false" aria-controls="details"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg></button>
+      <button id="members-toggle" class="quiet members-toggle" type="button" aria-expanded="false" aria-controls="details"><svg class="icon" aria-hidden="true"><use href="#i-users"/></svg><span id="members-count" data-i18n="member.unknown">成员</span><span id="members-short" aria-hidden="true"></span></button>
     </header>
-    <div id="sync-error" class="banner warn" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span id="sync-error-text"></span><button id="reconnect" type="button">立即重连</button></div>
+    <div id="sync-error" class="banner warn" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span id="sync-error-text"></span><button id="reconnect" type="button" data-i18n="shell.reconnect">立即重连</button></div>
     <div class="timeline-wrap">
-      <section id="timeline" class="timeline" aria-label="消息记录" tabindex="0"><div id="messages"></div></section>
-      <button id="new-messages" class="new-messages" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-down"/></svg><span>查看新消息</span></button>
+      <section id="timeline" class="timeline" aria-label="消息记录" data-i18n-aria-label="shell.history" tabindex="0"><div id="messages"></div></section>
+      <button id="new-messages" class="new-messages" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-down"/></svg><span data-i18n="shell.newMessages">查看新消息</span></button>
     </div>
     <div class="composer-wrap">
       <div id="outbox" aria-live="polite"></div>
@@ -83,9 +83,9 @@
         <div id="seat" class="seat-card"></div>
         <div class="composer-fold"><div class="composer-fold-inner">
           <div id="reply-preview" class="reply-preview" hidden></div>
-          <label class="sr-only" for="message">发送到当前会话的消息</label>
-          <textarea id="message" rows="1" maxlength="8000" placeholder="和团队说点什么…"></textarea>
-          <div class="composer-bottom"><span id="send-help">Enter 发送 · Shift + Enter 换行</span><button id="send" class="primary" type="submit"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg><span id="send-label">发送</span></button></div>
+          <label class="sr-only" for="message" data-i18n="composer.label">发送到当前会话的消息</label>
+          <textarea id="message" rows="1" maxlength="8000" placeholder="和团队说点什么…" data-i18n-placeholder="composer.placeholder"></textarea>
+          <div class="composer-bottom"><span id="send-help" data-i18n="composer.keyboardHint">Enter 发送 · Shift + Enter 换行</span><button id="send" class="primary" type="submit"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg><span id="send-label" data-i18n="composer.send">发送</span></button></div>
         </div></div>
       </form>
       <p id="scope-note" class="scope-note"></p>
@@ -93,19 +93,19 @@
   </main>
 
   <aside id="details" class="details" aria-labelledby="details-title" hidden>
-    <header class="details-header"><h2 id="details-title" tabindex="-1"></h2><button id="details-close" class="icon-button" type="button" aria-label="关闭详情"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></header>
+    <header class="details-header"><h2 id="details-title" tabindex="-1"></h2><button id="details-close" class="icon-button" type="button" aria-label="关闭详情" data-i18n-aria-label="details.close"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></header>
     <div id="details-members" class="details-body" hidden>
-      <section id="my-seat" class="my-seat" aria-label="你的席位"></section>
-      <h3 class="pane-section-title">在座成员</h3>
+      <section id="my-seat" class="my-seat" aria-label="你的席位" data-i18n-aria-label="details.mySeat"></section>
+      <h3 class="pane-section-title" data-i18n="shell.members">在座成员</h3>
       <ul id="members" class="member-list"></ul>
-      <p class="pane-note">本演示中的 Agent 在讨论出现明确的调研请求时自动参与，无需 @；只使用合成资料，不访问互联网。</p>
-      <p class="pane-note">每项操作仍由服务端校验授权。这里只显示你自己的权限，不显示其他成员的授权。</p>
+      <p class="pane-note" data-i18n="details.agentNote">本演示中的 Agent 在讨论出现明确的调研请求时自动参与，无需 @；只使用合成资料，不访问互联网。</p>
+      <p class="pane-note" data-i18n="details.permissionNote">每项操作仍由服务端校验授权。这里只显示你自己的权限，不显示其他成员的授权。</p>
     </div>
     <div id="details-thread" class="details-body" hidden></div>
     <div id="details-search" class="details-body" hidden>
-      <label for="search-query">查找消息正文</label>
-      <input id="search-query" type="search" maxlength="200" autocomplete="off" placeholder="输入关键词…">
-      <p class="pane-note">仅查找当前讨论已同步的消息正文；断网时结果可能过时。</p>
+      <label for="search-query" data-i18n="search.label">查找消息正文</label>
+      <input id="search-query" type="search" maxlength="200" autocomplete="off" placeholder="输入关键词…" data-i18n-placeholder="search.placeholder">
+      <p class="pane-note" data-i18n="search.note">仅查找当前讨论已同步的消息正文；断网时结果可能过时。</p>
       <p id="search-count" class="pane-note" role="status"></p>
       <div id="search-results"></div>
     </div>
@@ -113,12 +113,12 @@
 </div>
 <dialog id="message-change" aria-labelledby="change-title">
   <form id="change-form">
-    <h2 id="change-title">编辑消息</h2>
-    <label for="change-text" id="change-label">消息内容</label>
+    <h2 id="change-title" data-i18n="editor.editTitle">编辑消息</h2>
+    <label for="change-text" id="change-label" data-i18n="editor.content">消息内容</label>
     <textarea id="change-text" rows="5" maxlength="8000"></textarea>
-    <p id="change-help">保存后，相关研究会停止使用旧内容；确认旧运行结束后重新处理。</p>
+    <p id="change-help" data-i18n="editor.editHelp">保存后，相关研究会停止使用旧内容；确认旧运行结束后重新处理。</p>
     <p id="change-error" role="alert"></p>
-    <div class="change-actions"><button type="button" id="change-close" class="quiet">返回讨论</button><button type="submit" id="change-save" class="primary">保存修改</button></div>
+    <div class="change-actions"><button type="button" id="change-close" class="quiet" data-i18n="editor.return">返回讨论</button><button type="submit" id="change-save" class="primary" data-i18n="editor.save">保存修改</button></div>
   </form>
 </dialog>
 <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>

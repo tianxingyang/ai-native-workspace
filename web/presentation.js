@@ -23,3 +23,16 @@ export function createPresentation(catalog) {
 
 export const presentation = createPresentation(demoCatalog);
 export const text = presentation.text;
+
+/** Initialize explicitly marked static slots; never replace rich content or form values. */
+export function applyStaticText(root, view = presentation) {
+  for (const node of root.querySelectorAll('[data-i18n]')) {
+    if (node.childElementCount || ['INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName)) throw new Error('Presentation text requires a leaf text slot');
+    node.textContent = view.text(node.getAttribute('data-i18n'));
+  }
+  for (const attribute of ['aria-label', 'placeholder', 'title']) {
+    for (const node of root.querySelectorAll(`[data-i18n-${attribute}]`)) {
+      node.setAttribute(attribute, view.text(node.getAttribute(`data-i18n-${attribute}`)));
+    }
+  }
+}
