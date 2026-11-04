@@ -208,6 +208,17 @@ test('configuration accepts composed roles and denies, rejects malformed authori
 // Synthetic, process-local test values, never deployment credentials.
 const secrets = { COSEAT_OWNER_TOKEN: randomBytes(32).toString('hex'), COSEAT_AGENT_TOKEN: randomBytes(32).toString('hex'), COSEAT_OTHER_TOKEN: randomBytes(32).toString('hex') };
 const scope = { conversationId: 'trial-room', threadId: 'research-thread' };
+
+test('private conversation provisioning configuration is explicit and rejects unsafe action delegation', () => {
+  const raw = rawConfig(join(tmpdir(), 'configuration-only.sqlite'));
+  assert.equal(parseControlConfig(raw, secrets).control.conversationCreation, undefined);
+  const conversationCreation = { authorityScope: scope, allowedActions: ['read', 'send'], maxGrantDurationMs: 60000 };
+  assert.deepEqual(parseControlConfig({ ...raw, conversationCreation }, secrets).control.conversationCreation, conversationCreation);
+  for (const invalid of [{ ...conversationCreation, allowedActions: ['grant_permissions'] },
+    { ...conversationCreation, maxGrantDurationMs: 0 }, { ...conversationCreation, authorityScope: {} }]) {
+    assert.throws(() => parseControlConfig({ ...raw, conversationCreation: invalid }, secrets));
+  }
+});
 test('reply delivery is durable, parent-bound and still idempotent after parent retraction', async t => {
   const env = await setup(t), { message } = await env.post();
   const payload = { ...scope, text: '针对这条消息补充讨论', clientEventId: 'reply-once', replyToMessageId: message.id };
