@@ -1,4 +1,7 @@
 import { Client, ApiError, errorText } from './client.js';
+import { presentation, text as t } from './presentation.js';
+
+document.documentElement.lang = presentation.locale;
 
 const $ = id => document.getElementById(id);
 const desktop = window.__TAURI__;
@@ -10,7 +13,7 @@ const state = {
   // Render signatures keep focus, selection and open disclosures stable across polling.
   ui: { nav: '', seats: '', seat: '', expiry: '', pane: '', outbox: '' },
 };
-const labels = { queued: '等待执行', running: '正在研究', cancel_requested: '等待停止确认', completed: '已完成', failed: '执行失败', stopped: '已停止', unknown: '执行结果待核对' };
+const labels = Object.fromEntries(['queued', 'running', 'cancel_requested', 'completed', 'failed', 'stopped', 'unknown'].map(status => [status, t(`run.${status}`)]));
 const LIVE = new Set(['queued', 'running', 'cancel_requested']);
 const SETTLED = new Set(['cancel_requested', 'completed', 'failed', 'stopped']);
 const GROUP_WINDOW = 5 * 60 * 1000;
@@ -47,24 +50,27 @@ function permission(action, room = current()) {
   return { allowed: false, reason: last <= now ? 'expired' : 'withdrawn', until: last };
 }
 function announce(text) { $('announcement').textContent = text; }
-function clock(ts) { return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }); }
-function clockSeconds(ts) { return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
-function remaining(ms) { const minutes = Math.max(1, Math.ceil(ms / 60000)); return minutes >= 60 ? `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟` : `${minutes} 分钟`; }
+function clock(ts) { return presentation.format('time', ts); }
+function clockSeconds(ts) { return presentation.format('timeSeconds', ts); }
+function remaining(ms) {
+  const minutes = Math.max(1, Math.ceil(ms / 60000));
+  return minutes >= 60 ? t('duration.hoursMinutes', { hours: Math.floor(minutes / 60), minutes: minutes % 60 }) : t('duration.minutes', { minutes });
+}
 function initial(name) { return [...name.trim()][0] ?? '?'; }
-function kindLabel(member) { return member.kind === 'agent' ? 'Agent' : '人类'; }
+function kindLabel(member) { return t(member.kind === 'agent' ? 'member.agent' : 'member.human'); }
 function isMe(id) { return id === state.session?.member.id; }
-function memberIn(room, id) { return room.scope.members.find(member => member.id === id) ?? { id, name: '成员', kind: 'human' }; }
+function memberIn(room, id) { return room.scope.members.find(member => member.id === id) ?? { id, name: t('member.unknown'), kind: 'human' }; }
 function firstLine(text) { return text.split('\n').find(line => line.trim()) ?? text; }
 function tile(member, className = '') { const node = el('span', `tile ${member.kind} ${className}`.trim(), initial(member.name)); node.setAttribute('aria-hidden', 'true'); return node; }
-function timeNode(ts, text = clock(ts)) { const node = el('time', '', text); node.dateTime = new Date(ts).toISOString(); node.title = new Date(ts).toLocaleString('zh-CN'); return node; }
+function timeNode(ts, text = clock(ts)) { const node = el('time', '', text); node.dateTime = new Date(ts).toISOString(); node.title = presentation.format('dateTime', ts); return node; }
 function startOfDay(ts) { const day = new Date(ts); return new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime(); }
 function dayLabel(ts) {
   const diff = Math.round((startOfDay(Date.now()) - startOfDay(ts)) / 86400000);
-  if (diff === 0) return '今天';
-  if (diff === 1) return '昨天';
-  return new Date(ts).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' });
+  if (diff === 0) return t('date.today');
+  if (diff === 1) return t('date.yesterday');
+  return presentation.format('day', ts);
 }
-function roomTime(ts) { return startOfDay(ts) === startOfDay(Date.now()) ? clock(ts) : new Date(ts).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }); }
+function roomTime(ts) { return startOfDay(ts) === startOfDay(Date.now()) ? clock(ts) : presentation.format('compactDate', ts); }
 function unreadMessages(room) { return room.messages.filter(message => !room.seen.has(message.id) && !isMe(message.authorId) && !message.retracted && !message.invalidated); }
 function unseen(room) { return unreadMessages(room).length; }
 function applyReadPosition(room, messageId) {
@@ -329,7 +335,7 @@ function applySnapshot(room, data, selected) {
   room.runs.forEach((run, index) => {
     const previous = before.get(run.id);
     if (previous === undefined) announce(`${memberIn(room, run.memberId).name} 已认领调研 #${index + 1}。`);
-    else if (previous !== run.status && !LIVE.has(run.status)) announce(`调研 #${index + 1}：${labels[run.status] ?? '状态待核对'}。`);
+    else if (previous !== run.status && !LIVE.has(run.status)) announce(`调研 #${index + 1}：${labels[run.status] ?? t('run.unrecognized')}。`);
   });
 }
 
@@ -559,7 +565,7 @@ function renderRun(room, run, ctx) {
   const code = ctx.code.get(run.id), block = el('section', `run is-${run.status}`);
   block.dataset.run = run.id; block.setAttribute('aria-label', `调研 #${code}`);
   const top = el('div', 'run-top'), status = el('span', 'run-state'), title = el('span', 'run-title');
-  status.append(icon(`st-${run.status}`, `mark st-${run.status}`), el('span', 'status-label', labels[run.status] ?? '状态待核对'));
+  status.append(icon(`st-${run.status}`, `mark st-${run.status}`), el('span', 'status-label', labels[run.status] ?? t('run.unrecognized')));
   title.append(el('strong', '', `调研 #${code}`), el('span', '', memberIn(room, run.memberId).name));
   top.append(status, title);
   const cancellation = state.cancels.get(run.id);
@@ -1009,7 +1015,7 @@ function threadMessage(room, message, ctx) {
 
 function threadRun(room, run, ctx) {
   const box = el('div', 'thread-run'), top = el('div', 'thread-run-top'), status = el('span', 'thread-status');
-  status.append(icon(`st-${run.status}`, `mark st-${run.status}`), el('span', '', labels[run.status] ?? '状态待核对'));
+  status.append(icon(`st-${run.status}`, `mark st-${run.status}`), el('span', '', labels[run.status] ?? t('run.unrecognized')));
   top.append(status, el('span', 'run-title', `调研 #${ctx.code.get(run.id)} · ${memberIn(room, run.memberId).name}`));
   box.append(top, stepsNode(run), el('p', 'run-note', runNote(run)));
   return box;

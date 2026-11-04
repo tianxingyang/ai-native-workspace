@@ -209,6 +209,7 @@ h1, h2, h3 { text-wrap: balance; }
 .banner.warn { background: var(--warn-soft); color: var(--warn-ink); border-bottom: 1px solid var(--warn-rule); }
 .banner button { flex: none; margin-left: auto; min-height: 28px; padding: 0 10px; border: 1px solid var(--warn-rule); border-radius: var(--r-card); background: #fffaf1; color: var(--warn-ink); font-size: 12px; font-weight: 600; }
 .banner button:hover { background: var(--n0); }
+#sync-error-text { min-width: 0; overflow-wrap: anywhere; }
 
 /* Timeline: the table. Speech sits on it; work arrives as cards. */
 .timeline-wrap { position: relative; display: flex; flex: 1; min-height: 0; }
@@ -271,6 +272,8 @@ h1, h2, h3 { text-wrap: balance; }
 .run.is-queued, .run.is-running, .run.is-cancel_requested { border-color: var(--live-rule); }
 .run-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-height: 30px; }
 .run-state { display: inline-flex; align-items: center; gap: 6px; min-width: 112px; padding-right: 12px; border-right: 1px solid var(--n3); font-size: 13px; font-weight: 700; }
+.run-state, .thread-status { max-width: 100%; }
+.status-label, .thread-status > span { min-width: 0; overflow-wrap: anywhere; }
 .run-title { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 13px; color: var(--n7); }
 .run-title strong { color: var(--n8); font-variant-numeric: tabular-nums; }
 .run .run-cancel { margin-left: auto; }
