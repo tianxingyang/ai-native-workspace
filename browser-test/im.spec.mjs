@@ -169,7 +169,7 @@ test('conversation switching restores a history anchor despite edits above it', 
   demo.engine.commit(() => demo.engine.changeMessage('demo-researcher', messages[0].id, 'edit', 1, 'edit-above-anchor', '变长的原文\n'.repeat(25)));
   await expect.poll(() => page.locator('.room').filter({ hasText: '产品讨论' }).getAttribute('aria-current')).toBe('false');
   // Wait for the background snapshot containing the edit, not a fixed timeout.
-  await page.waitForResponse(async response => response.url().includes('/messages?') && response.request().method() === 'GET'
+  await page.waitForResponse(async response => response.url().includes('/sync?') && response.request().method() === 'GET'
     && (await response.json()).messages?.some(message => message.id === messages[0].id && message.revision === 2));
   await page.getByRole('button', { name: '产品讨论 日常交流' }).click();
   await expect.poll(async () => Math.round((await page.locator(`[data-message="${anchor.id}"]`).boundingBox()).y - (await page.locator('#timeline').boundingBox()).y)).toBe(Math.round(anchor.offset));
@@ -672,7 +672,7 @@ test('running cancellation is accepted before a real stopped receipt', async ({ 
     const response = await forward(route); acceptedStatus = (await response.json()).status; holdRuns = true; await route.fulfill({ response });
   });
   // Briefly hold run polling so acceptance-before-stop is observable evidence, not a race.
-  await page.route(url => url.pathname === '/runs', async route => {
+  await page.route(url => url.pathname === '/sync', async route => {
     if (holdRuns) await new Promise(resolve => setTimeout(resolve, 2500));
     await route.continue();
   });
@@ -742,7 +742,7 @@ for (const inFlight of [false, true]) {
     let failReads = false, releasePoll, pollReady;
     const ready = new Promise(resolve => { pollReady = resolve; });
     const release = new Promise(resolve => { releasePoll = resolve; });
-    await page.route('**/runs?*', async route => {
+    await page.route('**/sync?*', async route => {
       if (inFlight && !failReads) {
         const response = await forward(route);
         pollReady(); await release;
@@ -770,7 +770,7 @@ for (const inFlight of [false, true]) {
       releasePoll();
       await expect(page.locator('#sync-error')).toBeVisible();
       await expect(card.locator('.status-label')).toHaveText('等待停止确认');
-      await page.unroute('**/runs?*'); await page.unroute('**/session');
+      await page.unroute('**/sync?*'); await page.unroute('**/session');
       await page.getByRole('button', { name: '立即重连' }).click();
       await expect(card.locator('.status-label')).toHaveText('已停止');
       await expect(card).toContainText('执行设备已确认运行结束');

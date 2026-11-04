@@ -6,6 +6,16 @@ import { requestJson } from '../src/http.js';
 import { fakeExecution, fixtureResult } from '../src/worker/fake.js';
 import type { Run } from '../src/contracts.js';
 import { environment, expectStatus, gate, query, runResult, scope, waitFor } from './helpers.js';
+import type { SyncBatch } from '../src/control/delivery.js';
+
+test('development sync shares current-value cursor semantics and read authorization', async t => {
+  const env = await environment(); t.after(() => env.dispose());
+  const first = await requestJson<SyncBatch>(env.url, DEV.humanToken, `/sync?${query}`);
+  const { message } = await env.post('ordinary sync message');
+  const next = await requestJson<SyncBatch>(env.url, DEV.humanToken, `/sync?${query}&cursor=${first.cursor}`);
+  assert.equal(next.reset, false); assert.deepEqual(next.messages, [message]);
+  await expectStatus(requestJson(env.url, DEV.strangerToken, `/sync?${query}&cursor=${next.cursor}`), 403);
+});
 test('development change receipts require current read and the authenticated actor', async t => {
   const env = await environment(); t.after(() => env.dispose());
   const { message } = await env.post('ordinary source');

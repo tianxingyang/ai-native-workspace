@@ -20,6 +20,79 @@ import { close, listen, requestJson } from '../src/http.js';
 import { type Message, type Run, terminal } from '../src/contracts.js';
 import { expectStatus, gate, waitFor } from './helpers.js';
 import { defaultPolicy } from '../src/control/authorization.js';
+import type { SyncBatch } from '../src/control/delivery.js';
+
+test('scope sync survives restart, keeps read positions actor-local and rejects denied/foreign cursors', async t => {
+  const env = await setup(t), path = `/sync?${new URLSearchParams(scope)}`;
+  const sent = await requestJson<{ message: Message }>(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...scope, text: 'ordinary', clientEventId: 'sync-source' });
+  const first = await requestJson<SyncBatch>(env.url, secrets.COSEAT_OWNER_TOKEN, path);
+  await env.restart();
+  const resumed = await requestJson<SyncBatch>(env.url, secrets.COSEAT_OWNER_TOKEN, `${path}&cursor=${first.cursor}`);
+  assert.equal(resumed.reset, false); assert.deepEqual(resumed.messages, []); assert.equal(resumed.cursor, first.cursor);
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/read-position', { ...scope, messageId: sent.message.id });
+  const read = await requestJson<SyncBatch>(env.url, secrets.COSEAT_OWNER_TOKEN, `${path}&cursor=${first.cursor}`);
+  assert.equal(read.readThroughMessageId, sent.message.id); assert.deepEqual(read.messages, []);
+  await expectStatus(requestJson(env.url, secrets.COSEAT_AGENT_TOKEN, `${path}&cursor=${first.cursor}`), 400, 'sync_cursor_scope_mismatch');
+  const agent = await requestJson<SyncBatch>(env.url, secrets.COSEAT_AGENT_TOKEN, path);
+  assert.equal(agent.readThroughMessageId, null);
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/sync?conversationId=hidden&threadId=hidden&cursor=malformed'), 403);
+  env.config.control.grants.find(g => g.memberId === 'owner1')!.revoked = true;
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `${path}&cursor=${first.cursor}`), 403);
+});
+
+test('scope sync commits journal atomically and resets after an explicitly restored backup', async t => {
+  const env = await setup(t), path = `/sync?${new URLSearchParams(scope)}`;
+  const first = await requestJson<SyncBatch>(env.url, secrets.COSEAT_OWNER_TOKEN, path);
+  const backup = env.engine.store.load();
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...scope, text: 'after backup', clientEventId: 'sync-after-backup' });
+  const before = env.engine.state.snapshot().delivery, save = env.engine.store.save;
+  env.engine.store.save = () => { throw new Error('synthetic_disk_failure'); };
+  try { await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `${path}&cursor=${first.cursor}`), 500); }
+  finally { env.engine.store.save = save; }
+  assert.deepEqual(env.engine.state.snapshot().delivery, before);
+  const retried = await requestJson<SyncBatch>(env.url, secrets.COSEAT_OWNER_TOKEN, `${path}&cursor=${first.cursor}`);
+  assert.equal(retried.messages.length, 1); assert.equal(retried.reset, false);
+  env.engine.store.save(backup); await env.restart(true);
+  const reset = await requestJson<SyncBatch>(env.url, secrets.COSEAT_OWNER_TOKEN, `${path}&cursor=${retried.cursor}`);
+  assert.ok(reset.reset); assert.notEqual(reset.streamId, first.streamId); assert.deepEqual(reset.messages, []);
+});
+
+test('scope sync sends restart uncertainty and only sanitized current values after retraction', async t => {
+  const env = await setup(t), { message } = await env.post(), path = `/sync?${new URLSearchParams(scope)}`;
+  env.engine.commit(() => env.engine.poll('agent1', 'sync-worker'));
+  const first = await requestJson<SyncBatch>(env.url, secrets.COSEAT_OWNER_TOKEN, path);
+  await env.restart();
+  const resumed = await requestJson<SyncBatch>(env.url, secrets.COSEAT_OWNER_TOKEN, `${path}&cursor=${first.cursor}`);
+  assert.equal(resumed.reset, false); assert.equal(resumed.runs[0]!.status, 'unknown');
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages/${message.id}/retract`, { expectedRevision: 1, clientEventId: 'sync-retract' });
+  const retracted = await requestJson<SyncBatch>(env.url, secrets.COSEAT_OWNER_TOKEN, `${path}&cursor=${first.cursor}`);
+  assert.equal(retracted.messages[0]!.text, ''); assert.ok(retracted.messages[0]!.retracted);
+  assert.ok(retracted.runs[0]!.contextInvalidated); assert.equal(JSON.stringify(retracted).includes(message.text), false);
+});
+
+test('scope sync removes obsolete published output from message and public-run deltas', async t => {
+  const env = await setup(t), worker = env.worker(), { message } = await env.post();
+  await env.run(worker);
+  const path = `/sync?${new URLSearchParams(scope)}`, first = await requestJson<SyncBatch>(env.url, secrets.COSEAT_OWNER_TOKEN, path);
+  assert.equal(first.runs[0]!.status, 'completed'); assert.equal(first.messages.length, 2);
+  assert.ok(JSON.stringify(first).includes(fixtureResult().conclusion));
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages/${message.id}/retract`, { expectedRevision: 1, clientEventId: 'sync-published-retract' });
+  const delta = await requestJson<SyncBatch>(env.url, secrets.COSEAT_OWNER_TOKEN, `${path}&cursor=${first.cursor}`);
+  assert.equal(delta.reset, false); assert.equal(delta.messages.length, 2); assert.equal(delta.runs.length, 1);
+  assert.equal(JSON.stringify(delta).includes(fixtureResult().conclusion), false);
+  assert.ok(delta.messages.find(m => m.origin === 'research')!.invalidated);
+  assert.ok(delta.runs[0]!.contextInvalidated);
+});
+
+test('legacy snapshots without a delivery journal require a fresh full baseline', async t => {
+  const env = await setup(t), path = `/sync?${new URLSearchParams(scope)}`;
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...scope, text: 'legacy retained', clientEventId: 'legacy-sync' });
+  const first = await requestJson<SyncBatch>(env.url, secrets.COSEAT_OWNER_TOKEN, path);
+  const saved = env.engine.store.load<{ state: Record<string, unknown> }>()!; delete saved.state.delivery;
+  env.engine.store.save(saved); await env.restart();
+  const reset = await requestJson<SyncBatch>(env.url, secrets.COSEAT_OWNER_TOKEN, `${path}&cursor=${first.cursor}`);
+  assert.ok(reset.reset); assert.notEqual(reset.streamId, first.streamId); assert.equal(reset.messages[0]!.text, 'legacy retained');
+});
 
 test('change receipt survives restart without repeating an edit after speaking is withdrawn', async t => {
   const env = await setup(t);

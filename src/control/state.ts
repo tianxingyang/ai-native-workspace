@@ -3,6 +3,7 @@ import { PROTOCOL_VERSION, requireCondition, resultValue, terminal, type Action,
 import { decideParticipation } from '../participation.js';
 import { decideAuthorization, policyDigest, type AuthorizationDecision } from './authorization.js';
 import type { MessageChange } from '../contracts.js';
+import { DeliveryJournal } from './delivery.js';
 
 export interface ControlConfig {
   members: Member[]; grants: Grant[]; tokens: Record<string, string>;
@@ -12,6 +13,7 @@ export interface ControlConfig {
   policy?: AuthorizationPolicy;
 }
 export class ControlState {
+  private readonly delivery = new DeliveryJournal();
   readonly messages = new Map<string, Message>();
   readonly changes = new Map<string, MessageChange>();
   private readonly changeKeys = new Map<string, { fingerprint: string; changeId: string }>();
@@ -31,7 +33,7 @@ export class ControlState {
     return structuredClone({ messages: [...this.messages], runs: [...this.runs], approvals: [...this.approvals],
       decisions: this.decisions, audit: this.audit.slice(-1000), messageKeys: [...this.messageKeys],
       claims: [...this.claims], resultKeys: [...this.resultKeys], toolCalls: [...this.toolCalls],
-      changes: [...this.changes], changeKeys: [...this.changeKeys], contextRevisions: [...this.contextRevisions], readPositions: [...this.readPositions] });
+      changes: [...this.changes], changeKeys: [...this.changeKeys], contextRevisions: [...this.contextRevisions], readPositions: [...this.readPositions], delivery: this.delivery.snapshot() });
   }
   restore(data: ReturnType<ControlState['snapshot']>): void {
     const restoreMap = <K, V>(map: Map<K, V>, entries: [K, V][]) => { map.clear(); for (const [key, value] of entries) map.set(key, value); };
@@ -41,6 +43,7 @@ export class ControlState {
     restoreMap(this.changes, data.changes ?? []); restoreMap(this.changeKeys, data.changeKeys ?? []);
     restoreMap(this.contextRevisions, data.contextRevisions ?? []);
     restoreMap(this.readPositions, data.readPositions ?? []);
+    this.delivery.restore(data.delivery);
     this.decisions.splice(0, this.decisions.length, ...data.decisions);
     this.restoreAudit(data.audit);
   }
@@ -109,6 +112,12 @@ export class ControlState {
   readPosition(actorId: string, scope: Scope): string | null {
     this.authorize(actorId, 'read', scope);
     return this.readPositions.get(JSON.stringify([actorId, scope.conversationId, scope.threadId])) ?? null;
+  }
+  resetDelivery(): void { this.delivery.restore(); }
+  syncScope(actorId: string, scope: Scope, cursor?: string) {
+    const messages = this.readMessages(actorId, scope);
+    const runs = [...this.runs.values()].filter(r => r.work.route.conversationId === scope.conversationId && r.work.route.threadId === scope.threadId).map(r => this.presentRun(r));
+    return this.delivery.read(actorId, scope, messages, runs, this.readPosition(actorId, scope), cursor);
   }
   messageReceipt(actorId: string, scope: Scope, clientEventId: string): Message | null {
     this.authorize(actorId, 'read', scope);

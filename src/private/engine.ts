@@ -20,6 +20,7 @@ export class PrivateEngine {
     const audit = store.loadAudit<ControlState['audit']>();
     if (saved) {
       this.state.restore(saved.state);
+      if (restoredBackup) this.state.resetDelivery();
       if (audit) this.state.restoreAudit(audit);
       for (const [id, lease] of saved.leases) this.leases.set(id, lease);
       if (restoredBackup) for (const run of this.state.runs.values()) {
