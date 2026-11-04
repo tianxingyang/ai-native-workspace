@@ -113,3 +113,12 @@ test('manifest changes when prompts, controls or task evidence change', () => {
   const evidence = clone(tasks); evidence[0].sources[0] += ' revised';
   assert.notEqual(buildPlan(protocol, evidence).manifestHash, plan.manifestHash);
 });
+
+test('records from a different prompt, evidence or budget manifest cannot be reused', () => {
+  const prompt = clone(protocol); prompt.prompts.role += ' revised';
+  const budget = clone(protocol); budget.controls.budget.calls += 1;
+  const evidence = clone(tasks); evidence[0].sources[0] += ' revised';
+  for (const updated of [buildPlan(prompt, tasks), buildPlan(budget, tasks), buildPlan(protocol, evidence)]) {
+    assert.throws(() => validateResults(updated, records), /Unknown/);
+  }
+});

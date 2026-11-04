@@ -48,6 +48,7 @@ export function validateProtocol(protocol, tasks) {
 
 export function buildPlan(protocol, tasks) {
   validateProtocol(protocol, tasks);
+  const manifestHash = hash({ protocol, tasks });
   const random = rng(protocol.seed);
   const runs = [];
   for (const snapshot of protocol.snapshots) for (const mode of protocol.modes) {
@@ -57,11 +58,11 @@ export function buildPlan(protocol, tasks) {
         const workflow = protocol.prompts.workflow.replace('{procedure}', task.procedure);
         const system = [protocol.prompts.common, ...(['B', 'D'].includes(arm) ? [role] : []), ...(['C', 'D'].includes(arm) ? [workflow] : [])].join('\n');
         const fields = { snapshot, mode, taskId: task.id, repeat, arm };
-        runs.push({ ...fields, runId: hash(fields).slice(0, 24), system, task: task.prompt, sources: task.sources, controls: protocol.controls });
+        runs.push({ ...fields, runId: hash({ manifestHash, ...fields }).slice(0, 24), system, task: task.prompt, sources: task.sources, controls: protocol.controls });
       }
     }
   }
-  return { disclaimer: DISCLAIMER, manifestHash: hash({ protocol, tasks }), protocol, tasks, runs };
+  return { disclaimer: DISCLAIMER, manifestHash, protocol, tasks, runs };
 }
 
 // Pure in-process fixture: no SDK, credentials, subprocess, network, or real-model adapter.
