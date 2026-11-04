@@ -21,6 +21,17 @@ test('desktop route boundary excludes URLs, authority changes, arbitrary command
   assert.equal(permittedRequest('/runs/run_1/cancel', {}), true);
   assert.equal(permittedRequest('/messages/msg_1/edit', {}), true);
   assert.equal(permittedRequest('/messages/msg_1/retract', {}), true);
+  assert.equal(permittedRequest('/read-position', {}), true);
+  assert.equal(permittedRequest('/read-position', undefined), false);
+  assert.equal(permittedRequest('/read-position?conversationId=a&threadId=b', {}), false);
+  for (const route of ['/messages/receipt', '/messages/change-receipt']) {
+    const query = `${route}?conversationId=a&threadId=b&clientEventId=original`;
+    assert.equal(permittedRequest(query, undefined), true);
+    assert.equal(permittedRequest(query, {}), false);
+    for (const suffix of ['', '&clientEventId=', '&clientEventId=one&clientEventId=two', '&clientEventId=one&admin=1', '&clientEventId=one&cursor=extra']) {
+      assert.equal(permittedRequest(`${route}?conversationId=a&threadId=b${suffix}`, undefined), false);
+    }
+  }
   for (const path of ['/messages/../edit', '/messages/a%2fretract/retract', '/messages/a/delete']) assert.equal(permittedRequest(path, {}), false);
 });
 
@@ -58,11 +69,24 @@ test('native sidecar performs real authorized HTTP, rejects unshared scope, dedu
   const syncPath = `/sync?${new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId })}`;
   const baseline = await request(syncPath); assert.equal(baseline.status, 200); assert.equal(baseline.value.reset, true);
   const body = { conversationId: scope.conversationId, threadId: scope.threadId, text: '桌面接口验证', clientEventId: 'desktop-retry-001' };
-  assert.equal((await request('/messages', body)).status, 201);
+  const sent = await request('/messages', body); assert.equal(sent.status, 201);
   assert.equal((await request('/messages', body)).value.duplicate, true);
   const delta = await request(`${syncPath}&cursor=${encodeURIComponent(baseline.value.cursor)}`);
   assert.equal(delta.status, 200); assert.equal(delta.value.reset, false);
   assert.deepEqual(delta.value.messages.map((m: { text: string }) => m.text), [body.text]);
+  const query = new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId });
+  const receiptPath = `/messages/receipt?${query}&clientEventId=${body.clientEventId}`;
+  assert.equal((await request(receiptPath)).value.message.id, sent.value.message.id);
+  assert.equal((await request('/read-position', { conversationId: scope.conversationId, threadId: scope.threadId, messageId: sent.value.message.id })).value.readThroughMessageId, sent.value.message.id);
+  assert.equal((await request(syncPath)).value.readThroughMessageId, sent.value.message.id);
+  const editId = 'desktop-edit-receipt';
+  assert.equal((await request(`/messages/${sent.value.message.id}/edit`, { expectedRevision: 1, clientEventId: editId, text: '桌面修改核对' })).status, 200);
+  const receipt = await request(`/messages/change-receipt?${query}&clientEventId=${editId}`);
+  assert.equal(receipt.status, 200); assert.equal(receipt.value.receipt.message.text, '桌面修改核对');
+  assert.equal((await request(receiptPath)).value.message.revision, 2);
+  assert.equal((await request('/messages/receipt?conversationId=unshared&threadId=private&clientEventId=desktop-retry-001')).status, 403);
+  assert.equal((await request('/messages/change-receipt?conversationId=unshared&threadId=private&clientEventId=desktop-edit-receipt')).status, 403);
+  assert.equal((await request('/read-position', { conversationId: 'unshared', threadId: 'private', messageId: sent.value.message.id })).status, 403);
   await request('/messages', { ...body, text: '请调研一下桌面通知。', clientEventId: 'desktop-notice-001' });
   const deadline = setTimeout(() => observed({ error: 'notification_timeout' }), 12000);
   const notice = await incoming; clearTimeout(deadline);
