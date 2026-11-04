@@ -1,6 +1,9 @@
 //! Windows handles protocol activation even after a banner moves to Notification
 //! Center. The URI is an opaque, in-memory navigation reference, never authority.
-use crate::Host;
+use crate::{
+    presentation::{DemoPresentation, DEMO_ZH_CN},
+    Host,
+};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -126,6 +129,26 @@ fn authorized_scope(session: &Value, scope: &Value) -> bool {
     })
 }
 
+fn toast_xml(id: &str, text: DemoPresentation) -> String {
+    fn escape(value: &str) -> String {
+        value
+            .chars()
+            .map(|c| match c {
+                '&' => "&amp;".into(),
+                '<' => "&lt;".into(),
+                '>' => "&gt;".into(),
+                '"' => "&quot;".into(),
+                '\'' => "&apos;".into(),
+                _ => c.to_string(),
+            })
+            .collect()
+    }
+    let title = escape(text.notification_title);
+    let body = escape(text.notification_body);
+    // id is the existing generated lowercase-hex reference, never resource text.
+    format!("<toast activationType=\"protocol\" launch=\"{PREFIX}{id}\"><visual><binding template=\"ToastGeneric\"><text>{title}</text><text>{body}</text></binding></visual></toast>")
+}
+
 pub fn show(app_id: &str, id: &str, expires_at: u64) -> windows::core::Result<()> {
     // This function runs on the dedicated reader thread, not the UI STA.
     unsafe {
@@ -141,8 +164,7 @@ pub fn show(app_id: &str, id: &str, expires_at: u64) -> windows::core::Result<()
     }
     let _apartment = Apartment;
     let document = XmlDocument::new()?;
-    // All values are fixed strings or generated lowercase hex, never user XML.
-    document.LoadXml(&HSTRING::from(format!("<toast activationType=\"protocol\" launch=\"{PREFIX}{id}\"><visual><binding template=\"ToastGeneric\"><text>CoSeat 同席</text><text>团队讨论有新消息。点击返回会话；仅本地模拟资料。</text></binding></visual></toast>")))?;
+    document.LoadXml(&HSTRING::from(toast_xml(id, DEMO_ZH_CN)))?;
     let toast = ToastNotification::CreateToastNotification(&document)?;
     toast.SetTag(&HSTRING::from(&id[..16]))?;
     toast.SetGroup(&HSTRING::from("local-demo"))?;
@@ -163,6 +185,48 @@ pub fn show(app_id: &str, id: &str, expires_at: u64) -> windows::core::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn notification_resources_round_trip_as_text_without_extra_nodes() {
+        unsafe {
+            RoInitialize(RO_INIT_MULTITHREADED).unwrap();
+        }
+        let text = DemoPresentation {
+            notification_title: "中文 <&>\"' &amp;",
+            notification_body: "</text><audio src='injected'/><text>原样 &amp;",
+            ..DEMO_ZH_CN
+        };
+        let id = "0123456789abcdef0123456789abcdef";
+        let document = XmlDocument::new().unwrap();
+        document
+            .LoadXml(&HSTRING::from(toast_xml(id, text)))
+            .unwrap();
+        let nodes = document
+            .GetElementsByTagName(&HSTRING::from("text"))
+            .unwrap();
+        assert_eq!(nodes.Length().unwrap(), 2);
+        assert_eq!(
+            nodes.Item(0).unwrap().InnerText().unwrap().to_string(),
+            text.notification_title
+        );
+        assert_eq!(
+            nodes.Item(1).unwrap().InnerText().unwrap().to_string(),
+            text.notification_body
+        );
+        assert_eq!(
+            document
+                .GetElementsByTagName(&HSTRING::from("audio"))
+                .unwrap()
+                .Length()
+                .unwrap(),
+            0
+        );
+        assert!(toast_xml(id, text).contains(&format!("launch=\"{PREFIX}{id}\"")));
+        drop(nodes);
+        drop(document);
+        unsafe {
+            RoUninitialize();
+        }
+    }
     #[test]
     fn uri_is_only_an_opaque_reference() {
         let id = "0123456789abcdef0123456789abcdef";
