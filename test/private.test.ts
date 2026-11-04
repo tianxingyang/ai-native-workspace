@@ -21,6 +21,21 @@ import { type Message, type Run, terminal } from '../src/contracts.js';
 import { expectStatus, gate, waitFor } from './helpers.js';
 import { defaultPolicy } from '../src/control/authorization.js';
 
+test('send receipt survives restart and remains readable after send permission is withdrawn', async t => {
+  const env = await setup(t);
+  const sent = await requestJson<{ message: Message }>(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...scope, text: 'receipt body', clientEventId: 'durable-receipt' });
+  const path = `/messages/receipt?${new URLSearchParams({ ...scope, clientEventId: 'durable-receipt' })}`;
+  await env.restart();
+  const grant = env.config.control.grants.find(g => g.memberId === 'owner1')!;
+  grant.actions = ['read'];
+  const receipt = await requestJson<{ message: Message }>(env.url, secrets.COSEAT_OWNER_TOKEN, path);
+  assert.equal(receipt.message.id, sent.message.id);
+  assert.equal((await requestJson<{ message: null }>(env.url, secrets.COSEAT_AGENT_TOKEN, path)).message, null);
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...scope, text: 'receipt body', clientEventId: 'durable-receipt' }), 403, 'scope_denied');
+  grant.revoked = true;
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, path), 403, 'scope_denied');
+});
+
 test('read positions survive restart, reject spoofing and never regress on delayed devices', async t => {
   const env = await setup(t);
   const send = (id: string) => requestJson<{ message: Message }>(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...scope, text: id, clientEventId: id });

@@ -278,6 +278,9 @@ async function sync() {
       if (room && result.status === 'fulfilled') applySnapshot(room, result.value, id === state.selected);
     });
     renderRooms(); renderSeats(current()); renderMessages(); renderPane(); renderOutbox(); markSeen(current());
+    for (const [id, room] of state.rooms) {
+      if (room.pending?.status === 'failed' && !authorized('send', room)) void reconcilePending(room, id);
+    }
     state.lastSync = Date.now(); setConnection('ok'); $('sync-error').hidden = true;
     return true;
   } catch (error) {
@@ -718,44 +721,95 @@ function renderExpiry(room, allowed) {
 
 function renderOutbox() {
   const room = current(), pending = room?.pending;
-  const signature = pending ? JSON.stringify([state.selected, pending.id, pending.status, pending.error]) : '';
+  const signature = pending ? JSON.stringify([state.selected, pending.id, pending.status, pending.error, pending.checking, authorized('send', room)]) : '';
   if (signature === state.ui.outbox) return;
   state.ui.outbox = signature;
-  if (!pending) { $('outbox').replaceChildren(); return; }
+  const hadFocus = $('outbox').contains(document.activeElement);
+  if (!pending) {
+    $('outbox').replaceChildren(); if (hadFocus) $('timeline').focus({ preventScroll: true }); return;
+  }
+  const focusedAction = hadFocus && document.activeElement.dataset.action;
+  if (focusedAction && focusedAction !== 'pending-status') pending.focusAction = focusedAction;
   const failed = pending.status === 'failed', node = el('div', `outbox-item is-${failed ? 'failed' : 'sending'}`), head = el('div', 'outbox-head');
-  head.append(icon(failed ? 'i-alert' : 'i-clock'), el('p', '', failed ? pending.error : '正在发送，请稍候…'));
+  const status = el('p', '', pending.checking ? '正在核对发送结果…' : failed ? pending.error : '正在发送，请稍候…');
+  status.tabIndex = -1; status.dataset.action = 'pending-status';
+  head.append(icon(failed ? 'i-alert' : 'i-clock'), status);
   node.append(head);
   if (failed) {
     const actions = el('div', 'outbox-actions');
-    actions.append(button('重试同一条消息', () => sendPending(current(), state.selected), 'outline-button'), el('p', 'muted', '重试会使用同一个消息标识，避免重复发送。刷新会丢失此待确认请求，请先核对消息记录。'));
-    if (pending.replyRejected) actions.append(button('取消引用并保留草稿', () => {
-      const room = current(); room.pending = null; room.replyToMessageId = undefined; updateComposer(); renderOutbox(); $('message').focus();
-    }, 'outline-button'));
+    const check = button(pending.checking ? '正在核对…' : '核对发送结果', () => reconcilePending(current(), state.selected), 'outline-button');
+    check.dataset.action = 'check-receipt'; check.disabled = Boolean(pending.checking); actions.append(check);
+    if (authorized('send', room)) {
+      const retry = button('重试同一条消息', () => sendPending(current(), state.selected), 'outline-button');
+      retry.dataset.action = 'retry-send'; retry.disabled = Boolean(pending.checking); actions.append(retry);
+    }
+    actions.append(el('p', 'muted', '核对只查询原发送结果；重试沿用同一消息标识。刷新会丢失此待确认请求。'));
+    if (pending.replyRejected) {
+      const cancel = button('取消引用并保留草稿', () => {
+        const room = current(); room.pending = null; room.replyToMessageId = undefined; updateComposer(); renderOutbox(); $('message').focus();
+      }, 'outline-button');
+      cancel.dataset.action = 'cancel-reply'; cancel.disabled = Boolean(pending.checking); actions.append(cancel);
+    }
     node.append(actions);
   }
   $('outbox').replaceChildren(node);
+  if (hadFocus) {
+    const buttons = [...node.querySelectorAll('button:not(:disabled)')];
+    (pending.checking ? status : buttons.find(button => button.dataset.action === pending.focusAction) ?? buttons[0] ?? status).focus({ preventScroll: true });
+  }
 }
 
+function acceptPending(id, pending, result) {
+  const latest = state.rooms.get(id);
+  if (!latest || latest.pending !== pending || !authorized('read', latest)) return false;
+  latest.pending = null; latest.draft = ''; latest.replyToMessageId = undefined; latest.seen.add(result.message.id);
+  if (!result.duplicate && !latest.messages.some(m => m.id === result.message.id)) latest.messages.push(result.message);
+  if (id === state.selected) {
+    $('message').value = ''; renderMessages(!result.duplicate); updateComposer(); renderOutbox();
+    if (!result.duplicate && (!state.pane || !paneOverlay.matches)) (authorized('send', latest) ? $('message') : $('timeline')).focus();
+  }
+  renderRooms(); announce(result.duplicate ? '已核对：这条消息已送达，没有重复发送。' : '消息已送达。');
+  return true;
+}
+async function reconcilePending(room, id) {
+  const pending = room?.pending, client = state.client;
+  if (!pending || pending.status === 'sending' || pending.checking || !client) return false;
+  pending.checking = true; if (id === state.selected) renderOutbox();
+  try {
+    const result = await client.receipt(room.scope, pending.id);
+    if (client !== state.client || state.rooms.get(id)?.pending !== pending) return false;
+    if (result.message) return acceptPending(id, pending, { ...result, duplicate: true });
+    if (!pending.replyRejected) pending.error = '暂未查到已送达记录，请求仍可能到达。保留原标识继续核对；有发言权限时可重试。';
+  } catch (error) {
+    if (client !== state.client) return false;
+    if (error instanceof ApiError && [401, 403].includes(error.status)) { invalidate(error); return false; }
+    pending.error = errorText(error);
+  } finally {
+    pending.checking = false;
+    if (client === state.client && id === state.selected) { updateComposer(); renderOutbox(); }
+  }
+  return false;
+}
 async function sendPending(room, id) {
   const pending = room.pending, client = state.client;
-  if (!pending || pending.status === 'sending' || !client) return;
+  if (!pending || pending.status === 'sending' || pending.checking || !client) return;
+  if (pending.status === 'failed') {
+    if (await reconcilePending(room, id) || client !== state.client || state.rooms.get(id)?.pending !== pending) return;
+  }
+  const latest = state.rooms.get(id);
+  if (!latest || !authorized('send', latest)) return;
   pending.status = 'sending'; if (id === state.selected) { updateComposer(); renderOutbox(); }
   try {
     const result = await client.send(room.scope, pending.text, pending.id, pending.replyToMessageId);
     if (client !== state.client) return;
-    // Session polling may replace room wrappers while this request is in flight.
-    const latest = state.rooms.get(id); if (!latest || latest.pending !== pending) return;
-    latest.pending = null; latest.draft = ''; latest.replyToMessageId = undefined; latest.seen.add(result.message.id);
-    if (!latest.messages.some(m => m.id === result.message.id)) latest.messages.push(result.message);
-    if (id === state.selected) { $('message').value = ''; renderMessages(true); $('message').disabled = false; $('message').focus(); }
-    renderRooms();
-    announce(result.duplicate ? '已核对：这条消息已送达，没有重复发送。' : '消息已送达。');
+    acceptPending(id, pending, result);
     await sync();
   } catch (error) {
     if (client !== state.client) return;
-    if (error instanceof ApiError && [401, 403].includes(error.status)) { invalidate(error); return; }
+    if (error instanceof ApiError && error.status === 401) { invalidate(error); return; }
     pending.replyRejected = error instanceof ApiError && error.code === 'reply_source_unavailable';
     pending.status = 'failed'; pending.error = pending.replyRejected ? '原消息已不可用，本次回复未发送。可以取消引用并保留草稿。' : errorText(error); announce(pending.error);
+    if (error instanceof ApiError && error.status === 403) await sync();
   }
   if (client === state.client && id === state.selected) { updateComposer(); renderOutbox(); }
 }

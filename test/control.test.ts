@@ -6,6 +6,15 @@ import { requestJson } from '../src/http.js';
 import { fakeExecution, fixtureResult } from '../src/worker/fake.js';
 import type { Run } from '../src/contracts.js';
 import { environment, expectStatus, gate, query, runResult, scope, waitFor } from './helpers.js';
+test('development send receipt is a read-only lookup of the authenticated sender', async t => {
+  const env = await environment(); t.after(() => env.dispose());
+  const sent = await requestJson<{ message: { id: string } }>(env.url, DEV.humanToken, '/messages', { ...scope, text: 'receipt', clientEventId: 'dev-receipt' });
+  const path = `/messages/receipt?${query}&clientEventId=dev-receipt`;
+  env.state.config.grants.find(g => g.memberId === DEV.humanId)!.actions = ['read'];
+  assert.equal((await requestJson<{ message: { id: string } }>(env.url, DEV.humanToken, path)).message.id, sent.message.id);
+  assert.equal((await requestJson<{ message: null }>(env.url, DEV.agentToken, path)).message, null);
+});
+
 test('development read-position transport remains scoped and authenticated', async t => {
   const env = await environment(); t.after(() => env.dispose());
   const { message } = await env.post('ordinary discussion');

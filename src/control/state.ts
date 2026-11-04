@@ -110,6 +110,15 @@ export class ControlState {
     this.authorize(actorId, 'read', scope);
     return this.readPositions.get(JSON.stringify([actorId, scope.conversationId, scope.threadId])) ?? null;
   }
+  messageReceipt(actorId: string, scope: Scope, clientEventId: string): Message | null {
+    this.authorize(actorId, 'read', scope);
+    const entry = this.messageKeys.get(JSON.stringify([actorId, clientEventId]));
+    const message = entry && this.messages.get(entry.messageId);
+    // Reveal only this authenticated sender's current message in this scope.
+    // The original fingerprint/text is deliberately not part of the receipt.
+    return message && message.authorId === actorId && message.conversationId === scope.conversationId
+      && message.threadId === scope.threadId ? message : null;
+  }
   advanceReadPosition(actorId: string, scope: Scope, messageId: string): { readThroughMessageId: string } {
     const messages = this.readMessages(actorId, scope), ids = messages.map(message => message.id);
     const index = ids.indexOf(messageId);
