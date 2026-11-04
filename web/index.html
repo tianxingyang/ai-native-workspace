@@ -85,9 +85,12 @@
         <div id="seat" class="seat-card"></div>
         <div class="composer-fold"><div class="composer-fold-inner">
           <div id="reply-preview" class="reply-preview" hidden></div>
+          <div id="attachment-draft" class="attachment-draft" hidden><span id="attachment-name"></span><button id="attachment-remove" class="quiet" type="button" data-i18n="attachment.remove">移除附件</button></div>
+          <p id="attachment-error" class="attachment-error" role="alert"></p>
+          <input id="attachment-file" type="file" accept=".txt,.md,text/plain,text/markdown" hidden>
           <label class="sr-only" for="message" data-i18n="composer.label">发送到当前会话的消息</label>
           <textarea id="message" rows="1" maxlength="8000" placeholder="和团队说点什么…" data-i18n-placeholder="composer.placeholder"></textarea>
-          <div class="composer-bottom"><span id="send-help" data-i18n="composer.keyboardHint">Enter 发送 · Shift + Enter 换行</span><button id="send" class="primary" type="submit"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg><span id="send-label" data-i18n="composer.send">发送</span></button></div>
+          <div class="composer-bottom"><button id="attach" class="quiet" type="button" data-i18n="attachment.attach">添加文本附件</button><span id="send-help" data-i18n="composer.keyboardHint">Enter 发送 · Shift + Enter 换行</span><button id="send" class="primary" type="submit"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg><span id="send-label" data-i18n="composer.send">发送</span></button></div>
         </div></div>
       </form>
       <p id="scope-note" class="scope-note"></p>
@@ -132,5 +135,6 @@
     <div class="change-actions"><button id="management-close" type="button" class="quiet" data-i18n="management.close">关闭</button><button id="management-save" type="submit" class="primary" data-i18n="management.save">确认提交</button></div>
   </form>
 </dialog>
+<dialog id="attachment-view" aria-labelledby="attachment-title"><h2 id="attachment-title"></h2><p id="attachment-status" role="status"></p><pre id="attachment-content" tabindex="0"></pre><button id="attachment-close" class="quiet" type="button" data-i18n="attachment.close">关闭附件</button></dialog>
 <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
 </body></html>

@@ -8,6 +8,7 @@ const assets = new Map([
   ['/client.js', ['client.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']],
   ['/presentation.js', ['presentation.js', 'text/javascript']], ['/locales/zh-CN.js', ['locales/zh-CN.js', 'text/javascript']],
   ['/conversation-management.js', ['conversation-management.js', 'text/javascript']],
+  ['/attachments.js', ['attachments.js', 'text/javascript']],
 ]);
 const contents = new Map<string, Buffer>();
 

@@ -5,6 +5,7 @@ import { actionList, decideAuthorization, policyDigest, type AuthorizationDecisi
 import type { MessageChange } from '../contracts.js';
 import { DeliveryJournal } from './delivery.js';
 import { MembershipRegistry } from './memberships.js';
+import { textAttachment } from './attachments.js';
 import { ConversationRegistry, creationRuleValue, conversationInput, digest, type ConversationCreationRule, type GrantSource, type InitialGrant } from './conversations.js';
 
 export interface ControlConfig {
@@ -20,6 +21,7 @@ export class ControlState {
   private readonly memberships = new MembershipRegistry();
   private readonly conversations = new ConversationRegistry();
   readonly messages = new Map<string, Message>();
+  private readonly attachments = new Map<string, string>();
   readonly changes = new Map<string, MessageChange>();
   private readonly changeKeys = new Map<string, { fingerprint: string; changeId: string }>();
   private readonly contextRevisions = new Map<string, number>();
@@ -35,7 +37,7 @@ export class ControlState {
   constructor(readonly config: ControlConfig, private readonly now = Date.now) {}
 
   snapshot() {
-    return structuredClone({ messages: [...this.messages], runs: [...this.runs], approvals: [...this.approvals],
+    return structuredClone({ messages: [...this.messages], attachments: [...this.attachments], runs: [...this.runs], approvals: [...this.approvals],
       decisions: this.decisions, audit: this.audit.slice(-1000), messageKeys: [...this.messageKeys],
       claims: [...this.claims], resultKeys: [...this.resultKeys], toolCalls: [...this.toolCalls],
       changes: [...this.changes], changeKeys: [...this.changeKeys], contextRevisions: [...this.contextRevisions], readPositions: [...this.readPositions], delivery: this.delivery.snapshot(), memberships: this.memberships.snapshot(), conversations: this.conversations.snapshot() });
@@ -43,6 +45,7 @@ export class ControlState {
   restore(data: ReturnType<ControlState['snapshot']>): void {
     const restoreMap = <K, V>(map: Map<K, V>, entries: [K, V][]) => { map.clear(); for (const [key, value] of entries) map.set(key, value); };
     restoreMap(this.messages, data.messages); restoreMap(this.runs, data.runs); restoreMap(this.approvals, data.approvals);
+    restoreMap(this.attachments, data.attachments ?? []);
     restoreMap(this.messageKeys, data.messageKeys); restoreMap(this.claims, data.claims);
     restoreMap(this.resultKeys, data.resultKeys); restoreMap(this.toolCalls, data.toolCalls);
     restoreMap(this.changes, data.changes ?? []); restoreMap(this.changeKeys, data.changeKeys ?? []);
@@ -231,13 +234,15 @@ export class ControlState {
   visible(actorId: string, scope: Scope): boolean {
     try { this.authorize(actorId, 'read', scope); return true; } catch { return false; }
   }
-  createMessage(actorId: string, scope: Scope, text: string, clientEventId: string, replyToMessageId?: string, expectedMembershipGeneration?: unknown): { message: Message; duplicate: boolean } {
+  createMessage(actorId: string, scope: Scope, text: string, clientEventId: string, replyToMessageId?: string, expectedMembershipGeneration?: unknown, attachment?: unknown): { message: Message; duplicate: boolean } {
     this.authorize(actorId, 'send', scope);
     this.requireMembershipGeneration(actorId, scope, expectedMembershipGeneration);
     if (replyToMessageId !== undefined) this.authorize(actorId, 'read', scope);
     const key = JSON.stringify([actorId, clientEventId]);
     // Preserve existing no-reply keys across upgrades; a reply is part of its identity.
-    const fingerprint = JSON.stringify([scope.conversationId, scope.threadId, text, ...(replyToMessageId === undefined ? [] : [replyToMessageId])]);
+    const file = attachment === undefined ? undefined : textAttachment(attachment);
+    const identity = [scope.conversationId, scope.threadId, text, ...(replyToMessageId === undefined ? [] : [replyToMessageId])];
+    const fingerprint = file ? `attachment-v1:${createHash('sha256').update(JSON.stringify([...identity, file.metadata])).digest('hex')}` : JSON.stringify(identity);
     const prior = this.messageKeys.get(key);
     if (prior) {
       requireCondition(prior.fingerprint === fingerprint, 409, 'idempotency_key_conflict');
@@ -250,6 +255,7 @@ export class ControlState {
     }
     const message: Message = { ...scope, id: randomUUID(), authorId: actorId, text, revision: 1, origin: 'chat', createdAt: Date.now() };
     if (replyToMessageId !== undefined) message.replyToMessageId = replyToMessageId;
+    if (file) { message.attachment = file.metadata; this.attachments.set(message.id, file.text); }
     this.messages.set(message.id, message);
     this.messageKeys.set(key, { fingerprint, messageId: message.id });
     return { message, duplicate: false };
@@ -262,6 +268,19 @@ export class ControlState {
       this.useTool(run);
     }
     return [...this.messages.values()].filter(m => m.conversationId === scope.conversationId && m.threadId === scope.threadId);
+  }
+  readAttachment(actorId: string, scope: Scope, messageId: string, expectedMembershipGeneration?: unknown, runId?: string) {
+    this.authorize(actorId, 'read', scope);
+    this.requireMembershipGeneration(actorId, scope, expectedMembershipGeneration);
+    if (runId) {
+      const run = this.currentRun(actorId, runId, 'read');
+      requireCondition(run.work.route.conversationId === scope.conversationId && run.work.route.threadId === scope.threadId, 403, 'run_scope_denied');
+      this.useTool(run);
+    }
+    const message = this.messages.get(messageId), text = this.attachments.get(messageId);
+    requireCondition(message && message.conversationId === scope.conversationId && message.threadId === scope.threadId
+      && !message.retracted && !message.invalidated && message.attachment && text !== undefined, 404, 'attachment_unavailable');
+    return { attachment: { ...message.attachment }, text };
   }
   readPosition(actorId: string, scope: Scope): string | null {
     this.authorize(actorId, 'read', scope);
@@ -329,6 +348,7 @@ export class ControlState {
     const change: MessageChange = { id: randomUUID(), messageId, actorId, kind, revision: source.revision + 1,
       contextRevision: revision, conversationId: source.conversationId, threadId: source.threadId, at: this.now(), affectedRunIds: [] };
     const updated: Message = { ...source, revision: change.revision, text: kind === 'retract' ? '' : text!, retracted: kind === 'retract', changedAt: change.at };
+    if (kind === 'retract') { this.attachments.delete(messageId); delete updated.attachment; }
     this.messages.set(messageId, updated);
     for (const run of this.runs.values()) {
       if (run.work.route.conversationId !== source.conversationId || run.work.route.threadId !== source.threadId || terminal(run.status)) continue;

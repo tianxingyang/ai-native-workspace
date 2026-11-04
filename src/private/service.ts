@@ -17,6 +17,16 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
     // Body reads and idle long polls await I/O: recheck credentials immediately before each operation.
     const commit = <T>(fn: () => T) => engine.commit(() => { state.authenticate(token); return fn(); });
     const guard = (runId: string) => engine.guardTool(actor, stringValue(request.headers['x-coseat-instance'], 'instance', 128), stringValue(request.headers['x-coseat-lease'], 'lease', 128), runId);
+    if (url.pathname === '/attachments' && request.method === 'GET') {
+      const runId = url.searchParams.get('runId') ?? undefined;
+      requireCondition(runId || (!request.headers['x-coseat-instance'] && !request.headers['x-coseat-lease']), 400, 'run_required');
+      const value = commit(() => {
+        if (runId) guard(runId);
+        return state.readAttachment(actor, scopeValue(Object.fromEntries(url.searchParams)), stringValue(url.searchParams.get('messageId'), 'messageId', 128),
+          stringValue(url.searchParams.get('expectedMembershipGeneration'), 'membership_generation', 128), runId);
+      });
+      respond(response, 200, value); return;
+    }
     if (url.pathname === '/conversations/options' && request.method === 'GET') {
       respond(response, 200, commit(() => state.conversationOptions(actor))); return;
     }
@@ -65,7 +75,7 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
     if (url.pathname === '/messages' && body) {
       const value = commit(() => {
         const result = state.createMessage(actor, scopeValue(body), stringValue(body.text, 'text'), stringValue(body.clientEventId, 'client_event_id', 128),
-          body.replyToMessageId === undefined ? undefined : stringValue(body.replyToMessageId, 'replyToMessageId', 128), body.expectedMembershipGeneration);
+          body.replyToMessageId === undefined ? undefined : stringValue(body.replyToMessageId, 'replyToMessageId', 128), body.expectedMembershipGeneration, body.attachment);
         if (!result.duplicate && state.evaluate(result.message)) {
           // Missing execution permissions do not reject otherwise valid chat.
           try { state.claim(state.config.researchMemberId, result.message.id); } catch { /* audit retains the denial */ }

@@ -356,7 +356,18 @@ h1, h2, h3 { text-wrap: balance; }
 #composer.is-readonly .composer-fold { grid-template-rows: 0fr; visibility: hidden; }
 #message { display: block; width: 100%; min-height: calc(1.65em + 8px); max-height: 40vh; padding: 4px 0; border: 0; outline: none; resize: none; background: transparent; font-size: 14px; line-height: 1.65; field-sizing: content; }
 #message:disabled { cursor: not-allowed; color: var(--n6); }
-.composer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 4px; }
+.composer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
+.attachment-draft { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 13px; }
+.attachment-draft span { min-width: 0; overflow-wrap: anywhere; flex: 1; }
+.attachment-draft[hidden] { display: none; }
+.attachment-error { font-size: 13px; margin: 4px 0; }
+.attachment-error:empty { display: none; }
+.attachment-link { display: block; text-align: left; max-width: 100%; overflow-wrap: anywhere; border: 1px solid var(--n4); border-radius: 6px; padding: 8px 10px; margin-top: 8px; background: transparent; color: inherit; }
+#attachment-view { box-sizing: border-box; width: min(620px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; border: 1px solid var(--n4); border-radius: 12px; padding: 20px; color: inherit; }
+#attachment-view::backdrop { background: #1118; }
+#attachment-title { margin: 0; font-size: 18px; overflow-wrap: anywhere; }
+#attachment-status { font-size: 13px; }
+#attachment-content { white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.6 monospace; max-height: 55dvh; overflow: auto; }
 #send-help { min-width: 0; font-size: 12px; color: var(--n6); }
 .is-readonly #send-help { color: var(--n7); font-weight: 600; }
 #send { flex: none; min-width: 84px; min-height: 32px; padding: 0 14px; }

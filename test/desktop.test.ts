@@ -32,6 +32,11 @@ test('desktop route boundary excludes URLs, authority changes, arbitrary command
   assert.equal(permittedRequest('/conversations/options', {}), false);
   assert.equal(permittedRequest('/conversations/options?scope=all', undefined), false);
   assert.equal(permittedRequest('/memberships?conversationId=a&threadId=b', undefined), true);
+  const attachmentPath = '/attachments?conversationId=a&threadId=b&messageId=m&expectedMembershipGeneration=initial';
+  assert.equal(permittedRequest(attachmentPath, undefined), true);
+  for (const suffix of ['&runId=r', '&messageId=duplicate', '#fragment']) assert.equal(permittedRequest(attachmentPath + suffix, undefined), false);
+  assert.equal(permittedRequest('/attachments?conversationId=a&threadId=b&messageId=m', undefined), false);
+  assert.equal(permittedRequest(attachmentPath, {}), false);
   for (const path of ['/memberships?conversationId=a', '/memberships?conversationId=a&threadId=b&admin=1', '/memberships?conversationId=a&threadId=b&threadId=duplicate', '/memberships?conversationId=a&threadId=b#fragment']) assert.equal(permittedRequest(path, undefined), false);
   for (const route of ['/messages/receipt', '/messages/change-receipt']) {
     const query = `${route}?conversationId=a&threadId=b&clientEventId=original`;
@@ -77,13 +82,14 @@ test('native sidecar performs real authorized HTTP, rejects unshared scope, dedu
   const scope = session.value.scopes[0];
   const syncPath = `/sync?${new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId })}`;
   const baseline = await request(syncPath); assert.equal(baseline.status, 200); assert.equal(baseline.value.reset, true);
-  const body = { conversationId: scope.conversationId, threadId: scope.threadId, text: '桌面接口验证', clientEventId: 'desktop-retry-001' };
+  const body = { conversationId: scope.conversationId, threadId: scope.threadId, text: '桌面接口验证', clientEventId: 'desktop-retry-001', attachment: { name: 'desktop.txt', text: 'synthetic desktop attachment' } };
   const sent = await request('/messages', body); assert.equal(sent.status, 201);
   assert.equal((await request('/messages', body)).value.duplicate, true);
   const delta = await request(`${syncPath}&cursor=${encodeURIComponent(baseline.value.cursor)}`);
   assert.equal(delta.status, 200); assert.equal(delta.value.reset, false);
   assert.deepEqual(delta.value.messages.map((m: { text: string }) => m.text), [body.text]);
   const query = new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId });
+  assert.equal((await request(`/attachments?${query}&messageId=${sent.value.message.id}&expectedMembershipGeneration=initial`)).value.text, body.attachment.text);
   assert.equal((await request('/conversations/options')).status, 403);
   assert.equal((await request('/conversations', { kind: 'group' })).status, 403);
   assert.equal((await request(`/memberships?${query}`)).status, 403);

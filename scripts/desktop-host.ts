@@ -17,6 +17,8 @@ export function permittedRequest(path: unknown, body: unknown): path is string {
     return keys === 'clientEventId,conversationId,threadId' && Boolean(url.searchParams.get('clientEventId'));
   }
   if (url.hash) return false;
+  if (url.pathname === '/attachments') return keys === 'conversationId,expectedMembershipGeneration,messageId,threadId'
+    && Boolean(url.searchParams.get('messageId')) && Boolean(url.searchParams.get('expectedMembershipGeneration'));
   return ['/messages', '/runs', '/sync', '/memberships'].includes(url.pathname)
     && (keys === 'conversationId,threadId' || (url.pathname === '/sync' && keys === 'conversationId,cursor,threadId' && Boolean(url.searchParams.get('cursor'))));
 }

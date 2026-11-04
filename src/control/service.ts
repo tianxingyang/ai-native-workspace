@@ -91,6 +91,10 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
   const service = server(async (request, response, url) => {
     if (url.pathname === '/health' && request.method === 'GET') { respond(response, 200, { service: 'control', pid: process.pid, mode: 'development-fixture' }); return; }
     const actor = state.authenticate(bearer(request));
+    if (url.pathname === '/attachments' && request.method === 'GET') {
+      respond(response, 200, state.readAttachment(actor, scopeValue(Object.fromEntries(url.searchParams)), stringValue(url.searchParams.get('messageId'), 'messageId', 128),
+        stringValue(url.searchParams.get('expectedMembershipGeneration'), 'membership_generation', 128), url.searchParams.get('runId') ?? undefined)); return;
+    }
     if (url.pathname === '/sync' && request.method === 'GET') {
       respond(response, 200, state.syncScope(actor, scopeValue(Object.fromEntries(url.searchParams)), url.searchParams.get('cursor') ?? undefined)); return;
     }
@@ -132,7 +136,7 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
       const body = await jsonBody(request);
       requireCondition(body.authorId === undefined && body.memberId === undefined, 400, 'identity_is_authenticated');
       const result = state.createMessage(actor, scopeValue(body), stringValue(body.text, 'text'), stringValue(body.clientEventId, 'clientEventId', 128),
-        body.replyToMessageId === undefined ? undefined : stringValue(body.replyToMessageId, 'replyToMessageId', 128));
+        body.replyToMessageId === undefined ? undefined : stringValue(body.replyToMessageId, 'replyToMessageId', 128), body.expectedMembershipGeneration, body.attachment);
       respond(response, result.duplicate ? 200 : 201, result);
       if (!result.duplicate && options.autoDispatch !== false) setImmediate(() => {
         try {

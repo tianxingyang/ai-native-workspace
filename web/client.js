@@ -5,6 +5,10 @@ import { text as t } from './presentation.js';
 export class ApiError extends Error {
   constructor(status, code) { super(code); this.status = status; this.code = code; }
 }
+export function messageBody(scope, text, clientEventId, replyToMessageId, attachment) {
+  return { conversationId: scope.conversationId, threadId: scope.threadId, text, clientEventId,
+    expectedMembershipGeneration: scope.membershipGeneration ?? 'initial', ...(replyToMessageId ? { replyToMessageId } : {}), ...(attachment ? { attachment } : {}) };
+}
 export class Client {
   #token;
   #controllers = new Set();
@@ -42,7 +46,8 @@ export class Client {
     const query = new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId, clientEventId });
     return this.request(`/messages/receipt?${query}`);
   }
-  send(scope, text, clientEventId, replyToMessageId) { return this.request('/messages', { conversationId: scope.conversationId, threadId: scope.threadId, text, clientEventId, expectedMembershipGeneration: scope.membershipGeneration ?? 'initial', ...(replyToMessageId ? { replyToMessageId } : {}) }); }
+  send(scope, text, clientEventId, replyToMessageId, attachment) { return this.request('/messages', messageBody(scope, text, clientEventId, replyToMessageId, attachment)); }
+  attachment(scope, messageId) { return this.request(`/attachments?${new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId, messageId, expectedMembershipGeneration: scope.membershipGeneration ?? 'initial' })}`); }
   cancel(runId) { return this.request(`/runs/${encodeURIComponent(runId)}/cancel`, {}); }
   changeReceipt(scope, clientEventId) {
     const query = new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId, clientEventId });
