@@ -7,7 +7,8 @@ import { resolve } from 'node:path';
 // created by this process can be reached. HTTP still performs all authorization.
 export function permittedRequest(path: unknown, body: unknown): path is string {
   if (typeof path !== 'string' || path.length > 2048 || !path.startsWith('/') || path.startsWith('//') || path.includes('\\')) return false;
-  if (body !== undefined) return path === '/messages' || /^\/runs\/[a-zA-Z0-9_-]{1,100}\/cancel$/.test(path);
+  if (body !== undefined) return path === '/messages' || /^\/runs\/[a-zA-Z0-9_-]{1,100}\/cancel$/.test(path)
+    || /^\/messages\/[a-zA-Z0-9_-]{1,100}\/(edit|retract)$/.test(path);
   if (path === '/session') return true;
   const url = new URL(path, 'http://127.0.0.1');
   return url.origin === 'http://127.0.0.1' && ['/messages', '/runs'].includes(url.pathname)

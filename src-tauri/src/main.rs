@@ -81,6 +81,12 @@ fn permitted(path: &str, body: &Option<Value>) -> bool {
             || path
                 .strip_prefix("/runs/")
                 .and_then(|p| p.strip_suffix("/cancel"))
+                .or_else(|| {
+                    path.strip_prefix("/messages/").and_then(|p| {
+                        p.strip_suffix("/edit")
+                            .or_else(|| p.strip_suffix("/retract"))
+                    })
+                })
                 .is_some_and(|id| {
                     !id.is_empty()
                         && id.len() <= 100
@@ -288,11 +294,15 @@ mod tests {
             "/admin",
             "/runs/a/../cancel",
             "/runs/a%2f/cancel",
+            "/messages/a%2f/edit",
+            "/messages/../retract",
         ] {
             assert!(!permitted(path, &Some(json!({}))));
         }
         assert!(permitted("/messages", &Some(json!({"text":"hello"}))));
         assert!(permitted("/runs/run_123/cancel", &Some(json!({}))));
+        assert!(permitted("/messages/msg_123/edit", &Some(json!({}))));
+        assert!(permitted("/messages/msg_123/retract", &Some(json!({}))));
         assert!(!permitted(
             "/messages",
             &Some(json!({"text":"x".repeat(60001)}))

@@ -19,6 +19,7 @@ const paneOverlay = matchMedia('(max-width: 1179px)');
 const SUGGESTIONS = ['请调研一下插件协议', '大家好，同步一下今天的进展。'];
 
 let cancellationRevision = 0;
+let messageChange = null;
 function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
 function button(text, fn, className = 'quiet') { const node = el('button', className, text); node.type = 'button'; node.addEventListener('click', fn); return node; }
 function icon(name, className = 'icon') {
@@ -73,6 +74,10 @@ function accessEnded() { return state.rooms.size > 0 && [...state.rooms.values()
 function expireReadScopes() {
   clearTimeout(state.expiryTimer);
   if (!state.client) return;
+  if (messageChange) {
+    const editingRoom = state.rooms.get(messageChange.roomId);
+    if (!editingRoom || !authorized('read', editingRoom)) closeMessageChange();
+  }
   for (const [id, room] of state.rooms) {
     if (authorized('read', room)) continue;
     for (const run of room.runs) state.cancels.delete(run.id);
@@ -90,6 +95,7 @@ function expireReadScopes() {
 }
 
 function invalidate(error) {
+  closeMessageChange();
   if (desktop) void desktop.core.invoke('desktop_connected', { connected: false });
   state.client?.close(); state.client = null; state.epoch++; clearTimeout(state.timer); clearTimeout(state.expiryTimer); state.syncing = false;
   state.session = null; state.rooms.clear(); state.cancels.clear(); state.selected = ''; state.lastSync = 0;
@@ -182,7 +188,7 @@ function renderHeader() {
   setText($('room-tile'), initial(conversationId));
   setText($('members-count'), `${members.length} 位成员`);
   setText($('members-short'), String(members.length));
-  setText($('scope-note'), `消息发送到「${conversationId} › ${threadId}」。暂不支持附件、私聊和消息编辑。`);
+  setText($('scope-note'), `消息发送到「${conversationId} › ${threadId}」。可编辑或撤回自己的消息；暂不支持附件和私聊。`);
   renderSeats(room); updateComposer();
 }
 
@@ -264,6 +270,7 @@ function setConnection(value) {
 function applySnapshot(room, data, selected) {
   const before = new Map(room.runs.map(run => [run.id, run.status])), firstLoad = !room.loaded;
   room.messages = data.messages; room.runs = data.runs; room.loaded = true;
+  if (messageChange?.roomId === key(room.scope) && room.messages.find(m => m.id === messageChange.messageId)?.retracted) closeMessageChange();
   for (const run of room.runs) if (SETTLED.has(run.status)) state.cancels.delete(run.id);
   // Activity counts are local to this page session; nothing is reported back as a read receipt.
   if (firstLoad || selected) markSeen(room);
@@ -341,9 +348,14 @@ function renderMessage(room, message, previous, ctx, expanded) {
     head.append(timeNode(message.createdAt)); body.append(head);
   }
   if (message.result) body.append(...resultHead(room, message, ctx));
-  body.append(el('p', 'message-text', message.text));
+  body.append(el('p', 'message-text', message.retracted ? '消息已撤回' : message.invalidated ? '原上下文已变更，此结果已失效。' : message.text));
+  if (message.changedAt && !message.retracted) body.append(el('span', 'kind', '已编辑'));
   if (message.result) body.append(sourcesNode(message, expanded));
   const actions = el('div', 'message-actions');
+  if (message.origin === 'chat' && isMe(message.authorId) && !message.retracted && authorized('send', room)) {
+    actions.append(action('编辑消息', `edit-${message.id}`, () => openMessageChange(room, message, 'edit')),
+      action('撤回消息', `retract-${message.id}`, () => openMessageChange(room, message, 'retract')));
+  }
   if (message.sourceMessageId) actions.append(action('查看来源消息与讨论', `source-${message.id}`, event => openPane({ kind: 'discussion', messageId: message.sourceMessageId }, event.currentTarget)));
   else if (runs.length || ctx.resultsBySource.has(message.id)) actions.append(action('查看这条消息的讨论', `source-${message.id}`, event => openPane({ kind: 'discussion', messageId: message.id }, event.currentTarget)));
   if (actions.firstElementChild) body.append(actions);
@@ -390,6 +402,12 @@ function sourcesNode(message, expanded) {
 }
 
 function runNote(run) {
+  if (run.invalidatedBy || run.contextInvalidated) {
+    if (run.status === 'unknown') return '消息变更已收到；旧运行停止未确认，暂不重建，也不发布旧结果。';
+    if (run.replacementRunId) return '旧上下文已失效，已创建新的研究；应用状态见新研究进度。';
+    if (!['completed', 'failed', 'stopped'].includes(run.status)) return '消息变更已收到，等待旧运行停止；旧结果已禁止发布。';
+    return '旧运行已结束，旧上下文已失效。';
+  }
   const stoppedEvent = run.events.find(event => event.kind === 'stopped' && event.data.executionSettled === true);
   return {
     queued: '已认领，正在等待执行设备。', running: '模拟 Agent 正在处理；消息送达不代表研究完成。',
@@ -405,7 +423,7 @@ function runNote(run) {
 function runSteps(run) {
   const at = kind => run.events.find(event => event.kind === kind)?.at;
   const started = at('input_applied'), steps = [{ label: '已认领', state: 'done' }];
-  if (started) steps.push({ label: '开始执行', time: started, state: 'done' });
+  if (started) steps.push({ label: run.work.contextRevision > 1 && !run.contextInvalidated ? '修改已应用' : '开始执行', time: started, state: 'done' });
   else if (run.stopEvidence?.executionStarted === false) steps.push({ label: '未开始执行', state: 'done' });
   else steps.push({ label: '开始执行', state: run.status === 'queued' ? 'current' : 'todo' });
   if (run.status === 'cancel_requested') steps.push({ label: '取消已受理', state: 'done' }, { label: '等待停止确认', state: 'current' });
@@ -499,6 +517,54 @@ async function cancelRun(id) {
   }
   if (client === state.client) { renderMessages(); renderPane(); renderRooms(); }
 }
+
+function closeMessageChange() {
+  messageChange = null;
+  $('message-change').close(); $('change-text').value = ''; $('change-error').textContent = '';
+}
+function openMessageChange(room, message, kind) {
+  messageChange = { roomId: key(room.scope), messageId: message.id, revision: message.revision, kind, id: crypto.randomUUID(), sending: false, submittedText: undefined };
+  $('change-title').textContent = kind === 'edit' ? '编辑消息' : '撤回消息';
+  $('change-text').value = message.text; $('change-text').hidden = kind === 'retract'; $('change-label').hidden = kind === 'retract';
+  $('change-text').disabled = false; $('change-save').disabled = false; $('change-close').disabled = false;
+  $('change-save').textContent = kind === 'edit' ? '保存修改' : '确认撤回';
+  $('change-help').textContent = kind === 'edit' ? '保存后，相关研究会停止使用旧内容；确认旧运行结束后重新处理。' : '撤回后，相关旧结果将失效。已完成的外部动作不会被撤销。';
+  $('change-error').textContent = ''; $('message-change').showModal();
+  (kind === 'edit' ? $('change-text') : $('change-save')).focus();
+}
+$('change-close').addEventListener('click', closeMessageChange);
+$('message-change').addEventListener('cancel', event => { if (messageChange?.sending) event.preventDefault(); else closeMessageChange(); });
+$('change-form').addEventListener('submit', async event => {
+  event.preventDefault(); const change = messageChange, client = state.client;
+  if (!change || !client || change.sending) return;
+  const room = state.rooms.get(change.roomId);
+  if (!room || !authorized('read', room) || !authorized('send', room)) { closeMessageChange(); return; }
+  const text = change.submittedText ?? $('change-text').value.trim();
+  if (change.kind === 'edit' && !text) return;
+  change.submittedText = text; change.sending = true;
+  $('change-text').disabled = true; $('change-save').disabled = true; $('change-close').disabled = true;
+  try {
+    const result = await client.change(change.messageId, change.kind, change.revision, change.id, text);
+    if (client !== state.client || messageChange !== change) return;
+    cancellationRevision++;
+    const latest = state.rooms.get(change.roomId);
+    if (latest) {
+      latest.messages = latest.messages.map(m => m.id === result.message.id && m.revision <= result.message.revision ? result.message : m);
+      // Hide cached derived output immediately, before the next snapshot.
+      latest.messages = latest.messages.map(m => m.origin === 'research' ? { ...m, text: '', result: undefined, invalidated: true } : m);
+    }
+    closeMessageChange(); renderMessages(); renderPane(); renderRooms();
+    announce('消息变更已收到，正在核对相关研究的停止与应用状态。'); await sync();
+  } catch (error) {
+    if (client !== state.client || messageChange !== change) return;
+    if (error instanceof ApiError && [401, 403].includes(error.status)) { invalidate(error); return; }
+    const conflict = error instanceof ApiError && error.status === 409;
+    $('change-error').textContent = conflict ? '消息版本已变化，请返回讨论并重新打开最新消息。' : errorText(error);
+    $('change-save').disabled = conflict; $('change-save').textContent = '重试同一变更';
+    $('change-close').disabled = false; change.sending = false;
+    if (conflict) void sync();
+  }
+});
 
 function lapse(grant) {
   return grant.reason === 'expired' ? `已于 ${clock(grant.until)} 到期` : grant.reason === 'withdrawn' ? '已被收回' : '未授权';

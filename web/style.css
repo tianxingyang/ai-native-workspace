@@ -1,5 +1,12 @@
 /* CoSeat 同席 — seating-card world. Felt-green rail, a cool grey-green table,
    white name cards that stand on it. Every neutral comes from one ramp. */
+#message-change { width: min(520px, calc(100% - 32px)); border: 1px solid #bbc7c1; border-radius: 12px; padding: 24px; color: #24352e; }
+#message-change::backdrop { background: rgb(22 39 31 / 35%); }
+#message-change h2 { margin-top: 0; }
+#change-text { display: block; width: 100%; margin: 12px 0; padding: 12px; font: inherit; resize: vertical; }
+#change-text[hidden] { display: none; }
+#change-error { color: #9c342b; }
+.change-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
 :root {
   color-scheme: light;
   --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;

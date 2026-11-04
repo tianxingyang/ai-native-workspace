@@ -21,6 +21,7 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
       const { events } = await runtime.events(run.sessionId!, run.events.length);
       for (const event of events) state.recordEvent(run, event);
       if (terminal(run.status)) delete run.error;
+      if (options.autoDispatch !== false) for (const replacement of state.rebuildInvalidated()) dispatch(replacement);
     })().finally(() => reads.delete(run.id));
     reads.set(run.id, read);
     return read;
@@ -56,6 +57,9 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
   const dispatch = (run: Run) => {
     const job = (async () => {
       try {
+        // Accepted new messages remain queued while an old context is unconfirmed.
+        while (state.contextBlocked(run) && !terminal(run.status) && !shuttingDown) await delay(25);
+        if (terminal(run.status) || shuttingDown) return;
         // Recheck visibility, grant and revisions immediately before dispatch.
         state.currentRun(run.memberId, run.id, 'read');
         const capabilities = await runtime.capabilities();
@@ -87,6 +91,26 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
   const service = server(async (request, response, url) => {
     if (url.pathname === '/health' && request.method === 'GET') { respond(response, 200, { service: 'control', pid: process.pid, mode: 'development-fixture' }); return; }
     const actor = state.authenticate(bearer(request));
+    const changeMatch = /^\/messages\/([^/]+)\/(edit|retract)$/.exec(url.pathname);
+    if (changeMatch && request.method === 'POST') {
+      const body = await jsonBody(request);
+      state.authenticate(bearer(request));
+      requireCondition(body.authorId === undefined && body.memberId === undefined, 400, 'identity_is_authenticated');
+      const result = state.changeMessage(actor, changeMatch[1]!, changeMatch[2] as 'edit' | 'retract',
+        body.expectedRevision as number, stringValue(body.clientEventId, 'clientEventId', 128),
+        changeMatch[2] === 'edit' ? stringValue(body.text, 'text') : undefined);
+      if (!result.duplicate) for (const id of result.change.affectedRunIds) {
+        const run = state.runs.get(id)!;
+        if (!run.sessionId && !creatingSessions.has(id) && run.status !== 'unknown') {
+          run.status = 'stopped'; run.stopEvidence = { scope: 'runtime_session_not_created', executionStarted: false };
+        } else {
+          cancellationDeadlines.set(id, Date.now() + cancellationReconcileMs);
+          if (run.sessionId) { void cancelOnce(run); void ensurePolling(run); }
+        }
+      }
+      if (options.autoDispatch !== false) for (const replacement of state.rebuildInvalidated()) dispatch(replacement);
+      respond(response, 200, result); return;
+    }
     if (url.pathname === '/messages' && request.method === 'POST') {
       const body = await jsonBody(request);
       requireCondition(body.authorId === undefined && body.memberId === undefined, 400, 'identity_is_authenticated');
@@ -94,7 +118,7 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
       respond(response, result.duplicate ? 200 : 201, result);
       if (!result.duplicate && options.autoDispatch !== false) setImmediate(() => {
         try {
-          if (state.evaluate(result.message)) {
+          if (state.evaluate(state.messages.get(result.message.id)!)) {
             const claimed = state.claim(state.config.researchMemberId, result.message.id);
             if (!claimed.duplicate) dispatch(claimed.run);
           }
@@ -131,7 +155,7 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
     if (url.pathname === '/runs' && request.method === 'GET') {
       const scope = scopeValue(Object.fromEntries(url.searchParams));
       state.authorize(actor, 'read', scope);
-      respond(response, 200, { runs: [...state.runs.values()].filter(r => r.work.route.conversationId === scope.conversationId && r.work.route.threadId === scope.threadId) }); return;
+      respond(response, 200, { runs: [...state.runs.values()].filter(r => r.work.route.conversationId === scope.conversationId && r.work.route.threadId === scope.threadId).map(run => state.presentRun(run)) }); return;
     }
     const match = /^\/runs\/([^/]+)(\/cancel)?$/.exec(url.pathname);
     if (match && request.method === 'GET' && !match[2]) { respond(response, 200, state.visibleRun(actor, match[1]!)); return; }

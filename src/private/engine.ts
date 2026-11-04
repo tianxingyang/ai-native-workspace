@@ -50,7 +50,7 @@ export class PrivateEngine {
     let value: T;
     try {
       value = operation();
-      requireCondition(this.state.messages.size <= 5000 && this.state.runs.size <= 1000, 507, 'trial_capacity_reached');
+      requireCondition(this.state.messages.size <= 5000 && this.state.runs.size <= 1000 && this.state.changes.size <= 5000, 507, 'trial_capacity_reached');
     } catch (error) {
       rollback(); this.persistAudit(); throw error;
     }
@@ -85,6 +85,7 @@ export class PrivateEngine {
     requireCondition(scope, 403, 'worker_poll_denied');
     for (const action of actions) this.state.authorize(actor, action, scope);
     this.sweep();
+    this.state.rebuildInvalidated();
     const held = [...this.leases.values()].find(l => l.memberId === actor && !l.finished);
     if (held) {
       const run = this.state.runs.get(held.runId)!;
@@ -103,7 +104,10 @@ export class PrivateEngine {
     for (const run of this.state.runs.values()) {
       if (run.memberId !== actor || run.status !== 'queued' || [...this.leases.values()].some(l => l.runId === run.id)) continue;
       try { this.state.currentRun(actor, run.id, 'claim'); }
-      catch { run.status = 'failed'; run.error = 'dispatch_authorization_denied'; continue; }
+      catch (error) {
+        if (error instanceof ApiError && error.code === 'context_rebuild_waiting') continue;
+        run.status = 'failed'; run.error = 'dispatch_authorization_denied'; continue;
+      }
       const lease: Lease = { id: randomUUID(), runId: run.id, memberId: actor, instanceId, expiresAt: this.now() + this.leaseMs, cancel: false, finished: false };
       this.leases.set(lease.id, lease);
       return { command: 'execute', leaseId: lease.id, runId: run.id, work: run.work, after: 0, leaseTtlMs: this.leaseMs };
@@ -131,6 +135,19 @@ export class PrivateEngine {
       else { run.status = 'stopped'; run.stopEvidence = { scope: 'runtime_session_not_created', executionStarted: false }; }
     }
     return { status: run.status, publishedReceiptId: run.receiptId ?? null };
+  }
+  changeMessage(actor: string, messageId: string, kind: 'edit' | 'retract', expectedRevision: number, clientEventId: string, text?: string) {
+    const result = this.state.changeMessage(actor, messageId, kind, expectedRevision, clientEventId, text);
+    if (!result.duplicate) for (const id of result.change.affectedRunIds) {
+      const run = this.state.runs.get(id)!;
+      const lease = [...this.leases.values()].find(l => l.runId === id);
+      if (lease) lease.cancel = true;
+      else if (run.status !== 'unknown') {
+        run.status = 'stopped'; run.stopEvidence = { scope: 'runtime_session_not_created', executionStarted: false };
+      }
+    }
+    this.state.rebuildInvalidated();
+    return result;
   }
   notStarted(actor: string, instanceId: string, leaseId: string) {
     const lease = this.owned(actor, instanceId, leaseId), run = this.state.runs.get(lease.runId)!;
