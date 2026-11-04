@@ -10,9 +10,10 @@ export type PiModelFactory = () => Promise<PiModelConfig>;
 
 /** Actual pinned SDK integration. The model is injected explicitly; no ambient provider selection. */
 export function piExecution(modelFactory: PiModelFactory, workspace: string): Execute {
-  return async (work, input, tools, signal, output) => {
+  return async (work, input, tools, signal, output, onInputApplied) => {
     signal.throwIfAborted();
     const { runtime, model, callCount } = await modelFactory();
+    signal.throwIfAborted();
     const resourceLoader: ResourceLoader = {
       getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
       getSkills: () => ({ skills: [], diagnostics: [] }),
@@ -40,6 +41,20 @@ export function piExecution(modelFactory: PiModelFactory, workspace: string): Ex
     const activeTools = session.getActiveToolNames().sort();
     const sdkEvents: string[] = [];
     const unsubscribe = session.subscribe(event => {
+      // An abort during asynchronous prompt preflight can precede the SDK's
+      // active run. Reassert it at this boundary, before the first model call.
+      // Do not await abort here: it waits for this same run to settle.
+      if (event.type === 'agent_start' && signal.aborted) void session.abort();
+      // pi 1.4.0 appends to agent state before delivering message_end. A prompt
+      // invocation or preflight callback alone does not establish application.
+      if (event.type === 'message_end' && event.message.role === 'user') {
+        const content = event.message.content;
+        const text = typeof content === 'string' ? content : content.filter(part => part.type === 'text').map(part => part.text).join('');
+        if (text === input.text) {
+          sdkEvents.push('user_message_end');
+          onInputApplied();
+        }
+      }
       if (['tool_execution_start', 'tool_execution_end', 'agent_settled'].includes(event.type)) sdkEvents.push(event.type);
     });
     const abort = () => { void session.abort(); };

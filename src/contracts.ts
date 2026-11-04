@@ -1,12 +1,16 @@
 /** Versioned wire types; provider sessions never identify CoSeat members or tasks. */
 export const PROTOCOL_VERSION = 'coseat.runtime.v0' as const;
-export type Action = 'read' | 'send' | 'claim' | 'request_approval' | 'cancel';
+export const ACTIONS = ['read', 'send', 'claim', 'request_approval', 'cancel', 'manage_resource', 'manage_workspace', 'grant_permissions', 'external_send', 'permanent_delete', 'continuous_run'] as const;
+export type Action = typeof ACTIONS[number];
+export interface RoleTemplate { id: string; revision: number; actions: Action[] }
+export interface AuthorizationPolicy { version: number; roles: RoleTemplate[]; disabledActions: Action[] }
 export type RunStatus = 'queued' | 'running' | 'cancel_requested' | 'completed' | 'failed' | 'stopped' | 'unknown';
 export const terminal = (status: RunStatus) => ['completed', 'failed', 'stopped'].includes(status);
 export interface Scope { conversationId: string; threadId: string }
 export interface Member { id: string; kind: 'human' | 'agent'; name: string; workMode?: string }
 export interface Grant extends Scope {
   id: string; revision: number; memberId: string; actions: Action[]; expiresAt: number; revoked: boolean;
+  effect?: 'allow' | 'deny'; roleIds?: string[];
 }
 export interface Message extends Scope {
   id: string; revision: number; authorId: string; text: string; createdAt: number;
@@ -23,6 +27,7 @@ export interface WorkPackage {
   source: Scope & { messageId: string; revision: number };
   contextRevision: number;
   grant: { id: string; revision: number; expiresAt: number };
+  authorization?: { policyVersion: number; policyDigest: string; grants: { action: Action; id: string; revision: number; expiresAt: number }[] };
   tools: readonly ['read_messages', 'send_message', 'claim_task', 'request_approval'];
   budget: { maxToolCalls: number; maxDurationMs: number };
   route: Scope;
@@ -99,6 +104,20 @@ export function validateWork(work: WorkPackage): void {
   requireCondition(Number.isInteger(work.source.revision) && work.source.revision > 0 && Number.isInteger(work.contextRevision) && work.contextRevision > 0, 400, 'missing_revision');
   requireCondition(work.route.conversationId === work.source.conversationId && work.route.threadId === work.source.threadId, 400, 'route_mismatch');
   requireCondition(Number.isInteger(work.grant.revision) && work.grant.revision > 0 && Number.isFinite(work.grant.expiresAt) && work.grant.expiresAt > Date.now(), 403, 'invalid_grant');
+  if (work.authorization !== undefined) {
+    const authorization = objectValue(work.authorization);
+    requireCondition(Number.isSafeInteger(authorization.policyVersion) && Number(authorization.policyVersion) >= 0 && typeof authorization.policyDigest === 'string' && /^[a-f0-9]{64}$/.test(authorization.policyDigest), 400, 'invalid_authorization_policy');
+    requireCondition(Array.isArray(authorization.grants) && authorization.grants.length === 4, 400, 'invalid_authorization_bindings');
+    const actions = new Set<string>();
+    for (const raw of authorization.grants) {
+      const binding = objectValue(raw);
+      requireCondition(['read', 'send', 'claim', 'request_approval'].includes(String(binding.action)) && !actions.has(String(binding.action)), 400, 'invalid_authorization_bindings');
+      actions.add(String(binding.action)); stringValue(binding.id, 'grantId', 128);
+      requireCondition(Number.isSafeInteger(binding.revision) && Number(binding.revision) > 0 && Number.isFinite(binding.expiresAt) && Number(binding.expiresAt) >= work.grant.expiresAt, 400, 'invalid_authorization_bindings');
+    }
+    const claim = work.authorization.grants.find(g => g.action === 'claim');
+    requireCondition(claim?.id === work.grant.id && claim.revision === work.grant.revision, 400, 'invalid_authorization_bindings');
+  }
   requireCondition(Number.isInteger(work.budget?.maxToolCalls) && work.budget.maxToolCalls > 0 && work.budget.maxToolCalls <= 20 && Number.isInteger(work.budget.maxDurationMs) && work.budget.maxDurationMs > 0 && work.budget.maxDurationMs <= 60000, 400, 'invalid_budget');
   requireCondition(JSON.stringify(work.tools) === JSON.stringify(['read_messages', 'send_message', 'claim_task', 'request_approval']), 400, 'invalid_tools');
   requireCondition(Array.isArray(work.constraints) && work.constraints.length > 0, 400, 'missing_constraints');

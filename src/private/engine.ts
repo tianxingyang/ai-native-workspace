@@ -14,6 +14,7 @@ export class PrivateEngine {
   private readonly leases = new Map<string, Lease>();
   constructor(readonly store: SnapshotStore, config: ControlConfig, readonly leaseMs = 10000, private readonly now = Date.now, restoredBackup = false) {
     requireCondition(config.credentialExpiresAt && config.members.every(m => Number.isSafeInteger(config.credentialExpiresAt![m.id]) && config.credentialExpiresAt![m.id]! > 0), 400, 'private_credential_expiry_required');
+    store.recordAuthorizationConfiguration(config);
     this.state = new ControlState(config, now);
     const saved = store.load<Saved>();
     const audit = store.loadAudit<ControlState['audit']>();
@@ -75,16 +76,14 @@ export class PrivateEngine {
     }
   }
   private agent(actor: string): void {
-    requireCondition(this.state.config.members.find(m => m.id === actor)?.kind === 'agent', 403, 'worker_identity_required');
+    requireCondition(this.state.config.members.some(m => m.id === actor), 403, 'worker_identity_required');
   }
   poll(actor: string, instanceId: string): Delivery {
     this.agent(actor);
     const actions = ['read', 'send', 'claim', 'request_approval'] as const;
-    const grant = this.state.config.grants.find(g => g.memberId === actor && !g.revoked && g.expiresAt > this.now()
-      && actions.every(action => g.actions.includes(action))
-      && this.state.config.memberships[actor]?.some(s => s.conversationId === g.conversationId && s.threadId === g.threadId));
-    requireCondition(grant, 403, 'worker_poll_denied');
-    this.state.authorize(actor, 'claim', grant, grant);
+    const scope = this.state.config.memberships[actor]?.find(scope => actions.every(action => this.state.authorization(actor, action, scope).allowed));
+    requireCondition(scope, 403, 'worker_poll_denied');
+    for (const action of actions) this.state.authorize(actor, action, scope);
     this.sweep();
     const held = [...this.leases.values()].find(l => l.memberId === actor && !l.finished);
     if (held) {

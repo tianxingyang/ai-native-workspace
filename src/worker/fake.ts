@@ -12,7 +12,10 @@ export function fixtureResult(): ResearchResult {
   };
 }
 export function fakeExecution(delayMs = 50): Execute {
-  return async (_work, _input, tools, signal, output) => {
+  return async (_work, _input, tools, signal, output, onInputApplied) => {
+    signal.throwIfAborted();
+    // The fixture starts processing this input here, before invoking its tools.
+    onInputApplied();
     await tools.readMessages();
     await tools.claimTask();
     await delay(delayMs, undefined, { signal });
