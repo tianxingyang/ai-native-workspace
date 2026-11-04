@@ -99,6 +99,7 @@ fn permitted(path: &str, body: &Option<Value>) -> bool {
                 });
     }
     path == "/session"
+        || path.starts_with("/sync?")
         || path.starts_with("/messages?")
         || path.starts_with("/messages/receipt?")
         || path.starts_with("/messages/change-receipt?")
@@ -313,6 +314,11 @@ mod tests {
             &Some(json!({"messageId":"msg_123"}))
         ));
         assert!(!permitted("/read-position", &None));
+        assert!(permitted("/sync?conversationId=test&threadId=one", &None));
+        assert!(!permitted(
+            "/sync?conversationId=test&threadId=one",
+            &Some(json!({}))
+        ));
         assert!(permitted("/messages/receipt?clientEventId=test", &None));
         assert!(!permitted("/messages/receipt", &Some(json!({}))));
         assert!(permitted(

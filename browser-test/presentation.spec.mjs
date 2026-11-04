@@ -94,8 +94,11 @@ test('resource-backed run feedback distinguishes acknowledgement, application an
   const { runs: [original] } = await requestJson(demo.url, demo.ownerToken, `/runs?${new URLSearchParams(scope)}`);
   // Synthetic server projections exercise presentation; they do not claim real execution evidence.
   let projected = structuredClone(original);
-  await page.route(url => url.pathname === '/runs' && url.searchParams.get('conversationId') === scope.conversationId,
-    route => route.fulfill({ json: { runs: [projected] } }));
+  await page.route(url => url.pathname === '/sync' && url.searchParams.get('conversationId') === scope.conversationId, async route => {
+    const url = new URL(route.request().url()); url.searchParams.delete('cursor');
+    const response = await route.fetch({ url: url.toString() }).catch(() => { throw new Error('Synthetic sync forwarding failed; authorization headers omitted.'); });
+    await route.fulfill({ json: { ...await response.json(), runs: [projected] } });
+  });
   await page.goto(demo.url); await page.locator('#token').fill(demo.ownerToken); await page.locator('#connect-button').click();
   const note = page.locator('#messages .run-note'), steps = page.locator('#messages .run-steps');
   await expect(note).toHaveText(translated.messages['run.note.unknown']);

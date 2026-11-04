@@ -17,6 +17,11 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
     // Body reads and idle long polls await I/O: recheck credentials immediately before each operation.
     const commit = <T>(fn: () => T) => engine.commit(() => { state.authenticate(token); return fn(); });
     const guard = (runId: string) => engine.guardTool(actor, stringValue(request.headers['x-coseat-instance'], 'instance', 128), stringValue(request.headers['x-coseat-lease'], 'lease', 128), runId);
+    if (url.pathname === '/sync' && request.method === 'GET') {
+      const scope = scopeValue(Object.fromEntries(url.searchParams));
+      const value = commit(() => { state.authorize(actor, 'read', scope); engine.sweep(); return state.syncScope(actor, scope, url.searchParams.get('cursor') ?? undefined); });
+      respond(response, 200, value); return;
+    }
     if (url.pathname === '/messages/receipt' && request.method === 'GET') {
       const scope = scopeValue(Object.fromEntries(url.searchParams));
       respond(response, 200, commit(() => ({ message: state.messageReceipt(actor, scope, stringValue(url.searchParams.get('clientEventId'), 'clientEventId', 128)) }))); return;

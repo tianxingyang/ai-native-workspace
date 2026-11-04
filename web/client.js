@@ -30,10 +30,10 @@ export class Client {
     } finally { clearTimeout(timeout); this.#controllers.delete(controller); }
   }
   session() { return this.request('/session'); }
-  async snapshot(scope) {
+  snapshot(scope, cursor) {
     const query = new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId });
-    const [messages, runs] = await Promise.all([this.request(`/messages?${query}`), this.request(`/runs?${query}`)]);
-    return { messages: messages.messages, runs: runs.runs, readThroughMessageId: messages.readThroughMessageId };
+    if (cursor !== undefined) query.set('cursor', cursor);
+    return this.request(`/sync?${query}`);
   }
   markRead(scope, messageId) { return this.request('/read-position', { conversationId: scope.conversationId, threadId: scope.threadId, messageId }); }
   receipt(scope, clientEventId) {

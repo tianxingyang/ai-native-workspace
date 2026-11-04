@@ -14,6 +14,10 @@ test('desktop route boundary excludes URLs, authority changes, arbitrary command
   for (const path of ['https://example.invalid/messages?conversationId=a&threadId=b', '//example.invalid/messages?conversationId=a&threadId=b', '/session?token=a', '/messages?conversationId=a&threadId=b&admin=1', '/messages?conversationId=a&conversationId=b&threadId=c', '/admin']) assert.equal(permittedRequest(path, undefined), false);
   for (const path of ['/runs/a%2fcancel/cancel', '/runs/../cancel', '/session', 'file:///anything']) assert.equal(permittedRequest(path, {}), false);
   assert.equal(permittedRequest('/messages?conversationId=a&threadId=b', undefined), true);
+  assert.equal(permittedRequest('/sync?conversationId=a&threadId=b', undefined), true);
+  assert.equal(permittedRequest('/sync?conversationId=a&threadId=b&cursor=opaque', undefined), true);
+  assert.equal(permittedRequest('/sync?conversationId=a&threadId=b', {}), false);
+  for (const path of ['/sync?conversationId=a&threadId=b&cursor=', '/sync?conversationId=a&threadId=b&cursor=x&cursor=y', '/sync?conversationId=a&threadId=b&admin=1', '/sync?conversationId=a', '/messages?conversationId=a&threadId=b&cursor=x']) assert.equal(permittedRequest(path, undefined), false);
   assert.equal(permittedRequest('/runs/run_1/cancel', {}), true);
   assert.equal(permittedRequest('/messages/msg_1/edit', {}), true);
   assert.equal(permittedRequest('/messages/msg_1/retract', {}), true);
@@ -48,11 +52,17 @@ test('native sidecar performs real authorized HTTP, rejects unshared scope, dedu
   const session = await request('/session'); assert.equal(session.status, 200);
   assert.equal(JSON.stringify(session).includes('Token'), false);
   assert.equal((await request('/messages?conversationId=unshared&threadId=private')).status, 403);
+  assert.equal((await request('/sync?conversationId=unshared&threadId=private')).status, 403);
   assert.equal((await request('https://untrusted.invalid')).status, 503);
   const scope = session.value.scopes[0];
+  const syncPath = `/sync?${new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId })}`;
+  const baseline = await request(syncPath); assert.equal(baseline.status, 200); assert.equal(baseline.value.reset, true);
   const body = { conversationId: scope.conversationId, threadId: scope.threadId, text: '桌面接口验证', clientEventId: 'desktop-retry-001' };
   assert.equal((await request('/messages', body)).status, 201);
   assert.equal((await request('/messages', body)).value.duplicate, true);
+  const delta = await request(`${syncPath}&cursor=${encodeURIComponent(baseline.value.cursor)}`);
+  assert.equal(delta.status, 200); assert.equal(delta.value.reset, false);
+  assert.deepEqual(delta.value.messages.map((m: { text: string }) => m.text), [body.text]);
   await request('/messages', { ...body, text: '请调研一下桌面通知。', clientEventId: 'desktop-notice-001' });
   const deadline = setTimeout(() => observed({ error: 'notification_timeout' }), 12000);
   const notice = await incoming; clearTimeout(deadline);

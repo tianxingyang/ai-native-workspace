@@ -97,7 +97,7 @@ function flushReadPosition(room) {
   const attempt = {}; state.reads.set(id, attempt);
   void client.markRead(room.scope, messageId).then(result => {
     const latest = state.rooms.get(id);
-    if (client === state.client && latest && authorized('read', latest)) applyReadPosition(latest, result.readThroughMessageId);
+    if (client === state.client && state.reads.get(id) === attempt && latest && authorized('read', latest)) applyReadPosition(latest, result.readThroughMessageId);
   }).catch(() => {
     // A lost acknowledgement is safe to retry: the server advances monotonically.
     // The next authorized sync retries; access failures are handled by that sync.
@@ -274,15 +274,25 @@ async function sync() {
     // Every authorized room is refreshed so the list can show activity; only the
     // open room's failure decides the connection state.
     const ids = [...state.rooms.keys()], revision = cancellationRevision;
-    const results = await Promise.allSettled(ids.map(id => client.snapshot(state.rooms.get(id).scope)));
+    const requests = ids.map(id => { const room = state.rooms.get(id); return { room, generation: room.syncGeneration ?? 0, cursor: room.syncCursor }; });
+    const results = await Promise.allSettled(requests.map(({ room, cursor }) => client.snapshot(room.scope, cursor)));
     if (epoch !== state.epoch) return;
-    // None of this batch may replace a newer cancellation acknowledgement.
+    for (const [index, result] of results.entries()) {
+      if (result.status !== 'rejected' || !(result.reason instanceof ApiError)) continue;
+      if (result.reason.status === 401) throw result.reason;
+      // A background scope's read denial must evict its cache too.
+      if (result.reason.status === 403 && state.rooms.get(ids[index]) === requests[index].room) requests[index].room.scope.permissions.read = 0;
+    }
+    expireReadScopes(); if (epoch !== state.epoch) return;
+    // Permission failures still apply; only stale content must be discarded.
     if (revision !== cancellationRevision) return;
     const opened = results[ids.indexOf(state.selected)];
-    if (opened.status === 'rejected') throw opened.reason;
+    if (opened?.status === 'rejected') throw opened.reason;
     ids.forEach((id, index) => {
       const room = state.rooms.get(id), result = results[index];
-      if (room && result.status === 'fulfilled') applySnapshot(room, result.value, id === state.selected);
+      const request = requests[index];
+      if (room === request.room && authorized('read', room) && (room.syncGeneration ?? 0) === request.generation
+          && room.syncCursor === request.cursor && result.status === 'fulfilled') applySnapshot(room, result.value, id === state.selected);
     });
     renderRooms(); renderSeats(current()); renderMessages(); renderPane(); renderOutbox(); markSeen(current());
     for (const [id, room] of state.rooms) {
@@ -314,9 +324,30 @@ function setConnection(value) {
   setText(node, t(value === 'ok' ? 'connection.connected' : 'connection.disconnected'));
 }
 
+function invalidateSnapshot(room) {
+  room.syncGeneration = (room.syncGeneration ?? 0) + 1;
+  room.syncCursor = undefined;
+}
 function applySnapshot(room, data, selected) {
   const before = new Map(room.runs.map(run => [run.id, run.status])), firstLoad = !room.loaded;
-  room.messages = data.messages; room.runs = data.runs; room.loaded = true;
+  const merge = (previous, updates, removed) => {
+    const values = new Map(previous.map(value => [value.id, value]));
+    for (const id of removed) values.delete(id);
+    for (const value of updates) values.set(value.id, value);
+    return [...values.values()];
+  };
+  const restartedStream = room.syncStreamId && room.syncStreamId !== data.streamId;
+  room.messages = data.reset ? data.messages : merge(room.messages, data.messages, data.removedMessageIds);
+  room.runs = data.reset ? data.runs : merge(room.runs, data.runs, data.removedRunIds);
+  if (restartedStream || data.cursorAhead) {
+    room.seen.clear(); room.readThroughMessageId = undefined; room.pendingReadMessageId = undefined;
+    state.reads.delete(key(room.scope));
+  }
+  const retained = new Set(room.messages.map(message => message.id));
+  room.seen = new Set([...room.seen].filter(id => retained.has(id)));
+  if (!retained.has(room.readThroughMessageId)) room.readThroughMessageId = undefined;
+  if (!retained.has(room.pendingReadMessageId)) room.pendingReadMessageId = undefined;
+  room.syncCursor = data.cursor; room.syncStreamId = data.streamId; room.loaded = true;
   applyReadPosition(room, data.readThroughMessageId);
   if (messageChange?.roomId === key(room.scope) && room.messages.find(m => m.id === messageChange.messageId)?.retracted) {
     if (messageChange.submittedText === undefined) closeMessageChange();
@@ -617,12 +648,16 @@ async function cancelRun(id) {
     const result = await client.cancel(id); if (client !== state.client) return;
     cancellationRevision++;
     // Cancellation returns an acknowledgement, not a full Run. Keep identity and execution evidence.
-    for (const room of state.rooms.values()) room.runs = room.runs.map(run => run.id === id ? {
+    for (const room of state.rooms.values()) {
+      if (!room.runs.some(run => run.id === id)) continue;
+      invalidateSnapshot(room);
+      room.runs = room.runs.map(run => run.id === id ? {
       ...run,
       // A newer poll may already have observed the terminal state while cancel was in flight.
       status: ['completed', 'failed', 'stopped'].includes(run.status) ? run.status : result.status,
       receiptId: result.publishedReceiptId ?? run.receiptId,
-    } : run);
+      } : run);
+    }
     state.cancels.delete(id); announce(t('run.cancel.accepted'));
     renderMessages(); renderPane(); renderRooms(); renderSeats(current());
     await sync();
@@ -664,6 +699,7 @@ function acceptMessageChange(change, result) {
   const latest = state.rooms.get(change.roomId);
   if (!latest || !authorized('read', latest)) { expireReadScopes(); return; }
   cancellationRevision++;
+  invalidateSnapshot(latest);
   latest.messages = latest.messages.map(m => m.id === result.message.id && m.revision <= result.message.revision ? result.message : m);
   // Hide cached derived output immediately, before the next snapshot.
   latest.messages = latest.messages.map(m => m.origin === 'research' ? { ...m, text: '', result: undefined, invalidated: true } : m);
@@ -814,6 +850,7 @@ function renderOutbox() {
 function acceptPending(id, pending, result) {
   const latest = state.rooms.get(id);
   if (!latest || latest.pending !== pending || !authorized('read', latest)) return false;
+  invalidateSnapshot(latest);
   latest.pending = null; latest.draft = ''; latest.replyToMessageId = undefined; latest.seen.add(result.message.id);
   if (!result.duplicate && !latest.messages.some(m => m.id === result.message.id)) latest.messages.push(result.message);
   if (id === state.selected) {
