@@ -18,6 +18,8 @@ use tauri::{
     Manager,
 };
 mod notifications;
+mod presentation;
+use presentation::DEMO_ZH_CN;
 
 struct Host {
     stdin: Mutex<ChildStdin>,
@@ -199,6 +201,7 @@ fn main() {
             });
             app.manage(host.clone());
             tauri::WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?
+                .title(DEMO_ZH_CN.window_title)
                 .on_navigation(|url| {
                     url.as_str().starts_with("http://tauri.localhost/")
                         || url.as_str().starts_with("tauri://localhost/")
@@ -243,12 +246,12 @@ fn main() {
                 }
                 host.pending.lock().unwrap().clear();
             });
-            let open = MenuItem::with_id(app, "show", "显示 CoSeat", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "退出并结束本地演示", true, None::<&str>)?;
+            let open = MenuItem::with_id(app, "show", DEMO_ZH_CN.menu_show, true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", DEMO_ZH_CN.menu_quit, true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &quit])?;
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("CoSeat 同席 · 本地模拟版")
+                .tooltip(DEMO_ZH_CN.tray_tooltip)
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
