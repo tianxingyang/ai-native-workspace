@@ -34,6 +34,73 @@ async function send(page, text) {
   await expect(page.locator('.message-text').filter({ hasText: text })).toHaveCount(1);
 }
 
+test('nested replies stay in their discussion and quotes follow edits and retractions', async ({ page }) => {
+  await connect(page); await send(page, '引用源消息');
+  await page.locator('.message').first().getByRole('button', { name: '回复消息', exact: true }).click();
+  await expect(page.locator('#reply-preview')).toContainText('引用源消息');
+  await send(page, '第一条回复');
+  await expect(page.locator('.reply-quote')).toContainText('引用源消息');
+  await page.locator('.message').nth(1).getByRole('button', { name: '回复消息', exact: true }).click();
+  await send(page, '回复的回复');
+  await page.locator('.message').last().getByRole('button', { name: '查看这条消息的讨论', exact: true }).click();
+  await expect(page.locator('#details .thread-item')).toHaveCount(3);
+  const source = [...demo.engine.state.messages.values()][0];
+  await requestJson(demo.url, demo.ownerToken, `/messages/${source.id}/edit`, { expectedRevision: 1, clientEventId: 'edit-reply-parent', text: '引用源消息已更新' });
+  await expect(page.locator('#messages .reply-quote').first()).toContainText('引用源消息已更新');
+  await expect(page.locator('#details')).toContainText('原消息已编辑');
+  await requestJson(demo.url, demo.ownerToken, `/messages/${source.id}/retract`, { expectedRevision: 2, clientEventId: 'withdraw-reply-parent' });
+  await expect(page.locator('#messages .reply-quote').first()).toContainText('消息已撤回');
+  await expect(page.locator('#app')).not.toContainText('引用源消息已更新');
+  await page.getByRole('button', { name: '关闭详情', exact: true }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await capture(page, 'scoped-replies-mobile', { fullPage: true });
+});
+
+test('reply drafts are per room and are cleared when the room loses read access', async ({ page }) => {
+  await connect(page); await send(page, '只在原会话可见的引用');
+  await page.locator('.message').first().getByRole('button', { name: '回复消息', exact: true }).click();
+  await page.getByLabel('发送到当前会话的消息').fill('尚未发送的回复');
+  await page.getByRole('button', { name: '研发讨论 插件协议' }).click();
+  await expect(page.locator('#reply-preview')).toBeHidden();
+  await expect(page.locator('#message')).toHaveValue('');
+  await page.getByRole('button', { name: '产品讨论 日常交流' }).click();
+  await expect(page.locator('#reply-preview')).toContainText('只在原会话可见的引用');
+  await expect(page.locator('#message')).toHaveValue('尚未发送的回复');
+  // Revoke at session discovery, rather than race an in-flight snapshot (whose
+  // authorization failure deliberately disconnects and clears every cache).
+  await page.route(url => url.pathname === '/session', async route => {
+    demo.engine.state.config.grants.find(g => g.memberId === 'demo-owner' && g.conversationId === '产品讨论').revoked = true;
+    await route.continue();
+  });
+  await expect(page.locator('#room-title')).toHaveText('研发讨论');
+  await expect(page.locator('#reply-preview')).toBeHidden();
+  await expect(page.locator('#reply-preview')).toBeEmpty();
+  await expect(page.locator('#message')).toHaveValue('');
+});
+
+test('a lost reply acknowledgement is reconciled after its parent is withdrawn without duplication', async ({ page }) => {
+  await connect(page); await send(page, '随后撤回的原文');
+  const parent = [...demo.engine.state.messages.values()][0];
+  await page.locator('.message').first().getByRole('button', { name: '回复消息', exact: true }).click();
+  let once = true;
+  await page.route(url => url.pathname === '/messages', async route => {
+    if (route.request().method() !== 'POST' || !once) return route.continue();
+    once = false; await forward(route);
+    await requestJson(demo.url, demo.ownerToken, `/messages/${parent.id}/retract`, { expectedRevision: 1, clientEventId: 'withdraw-after-reply' });
+    await route.abort('failed');
+  });
+  await page.getByLabel('发送到当前会话的消息').fill('已发送但响应丢失的回复');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByRole('button', { name: '重试同一条消息', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '重试同一条消息', exact: true }).click();
+  await expect(page.locator('#outbox')).toBeEmpty();
+  await expect(page.locator('.message')).toHaveCount(2);
+  await expect(page.locator('.reply-quote')).toContainText('消息已撤回');
+  expect([...demo.engine.state.messages.values()].filter(m => m.replyToMessageId === parent.id)).toHaveLength(1);
+  await expect(page.locator('#app')).not.toContainText('随后撤回的原文');
+});
+
 test('editing running research rebuilds its session; retract removes content and obsolete results', async ({ page }) => {
   await connect(page); await send(page, '请调研编辑前的要求');
   await expect(page.locator('.status-label')).toHaveText('正在研究');

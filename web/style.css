@@ -7,6 +7,12 @@
 #change-text[hidden] { display: none; }
 #change-error { color: #9c342b; }
 .change-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
+.reply-quote { display: flex; flex-direction: column; text-align: left; width: 100%; cursor: pointer; }
+.reply-preview { display: flex; align-items: flex-start; gap: 16px; padding: 12px; border-left: 3px solid #52776a; background: #f0f5f2; margin-bottom: 8px; }
+.reply-preview[hidden] { display: none; }
+.reply-preview > div { min-width: 0; flex: 1; }
+.reply-preview p { margin: 4px 0 0; overflow-wrap: anywhere; max-height: 5em; overflow: auto; }
+.reply-preview > button { flex-shrink: 0; }
 :root {
   color-scheme: light;
   --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;

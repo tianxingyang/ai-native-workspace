@@ -6,6 +6,15 @@ import { requestJson } from '../src/http.js';
 import { fakeExecution, fixtureResult } from '../src/worker/fake.js';
 import type { Run } from '../src/contracts.js';
 import { environment, expectStatus, gate, query, runResult, scope, waitFor } from './helpers.js';
+test('a research reply keeps its parent and publishes to the reply source in development transport', async t => {
+  const env = await environment(); t.after(() => env.dispose());
+  const parent = await env.post('今天讨论插件协议');
+  const reply = await requestJson<any>(env.url, DEV.humanToken, '/messages', { ...scope, text: '请调研这个协议', clientEventId: 'research-reply', replyToMessageId: parent.message.id });
+  const run = await env.completed();
+  assert.equal(run.sourceMessageId, reply.message.id);
+  assert.equal(env.state.messages.get(reply.message.id)!.replyToMessageId, parent.message.id);
+  assert.equal(runResult(env.state, run)[0]!.sourceMessageId, reply.message.id);
+});
 
 test('development transport cancels stale sessions and creates a new session for edited input', async t => {
   const hold = gate(); let starts = 0;

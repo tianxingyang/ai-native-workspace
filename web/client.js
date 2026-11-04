@@ -33,7 +33,7 @@ export class Client {
     const [messages, runs] = await Promise.all([this.request(`/messages?${query}`), this.request(`/runs?${query}`)]);
     return { messages: messages.messages, runs: runs.runs };
   }
-  send(scope, text, clientEventId) { return this.request('/messages', { conversationId: scope.conversationId, threadId: scope.threadId, text, clientEventId }); }
+  send(scope, text, clientEventId, replyToMessageId) { return this.request('/messages', { conversationId: scope.conversationId, threadId: scope.threadId, text, clientEventId, ...(replyToMessageId ? { replyToMessageId } : {}) }); }
   cancel(runId) { return this.request(`/runs/${encodeURIComponent(runId)}/cancel`, {}); }
   change(messageId, kind, expectedRevision, clientEventId, text) {
     return this.request(`/messages/${encodeURIComponent(messageId)}/${kind}`, { expectedRevision, clientEventId, ...(kind === 'edit' ? { text } : {}) });

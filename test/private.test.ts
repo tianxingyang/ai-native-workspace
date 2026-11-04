@@ -83,6 +83,23 @@ test('configuration accepts composed roles and denies, rejects malformed authori
 // Synthetic, process-local test values, never deployment credentials.
 const secrets = { COSEAT_OWNER_TOKEN: randomBytes(32).toString('hex'), COSEAT_AGENT_TOKEN: randomBytes(32).toString('hex'), COSEAT_OTHER_TOKEN: randomBytes(32).toString('hex') };
 const scope = { conversationId: 'trial-room', threadId: 'research-thread' };
+test('reply delivery is durable, parent-bound and still idempotent after parent retraction', async t => {
+  const env = await setup(t), { message } = await env.post();
+  const payload = { ...scope, text: '针对这条消息补充讨论', clientEventId: 'reply-once', replyToMessageId: message.id };
+  const values = await Promise.all(Array.from({ length: 3 }, () => requestJson<any>(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', payload)));
+  assert.equal(values.filter(v => !v.duplicate).length, 1);
+  const replyId = values[0].message.id;
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...payload, replyToMessageId: replyId }), 409, 'idempotency_key_conflict');
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...payload, clientEventId: 'invalid', replyToMessageId: { text: 'spoof' } }), 400);
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages/${message.id}/retract`, { expectedRevision: 1, clientEventId: 'remove-parent' });
+  await env.restart();
+  const retry = await requestJson<any>(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', payload);
+  assert.equal(retry.duplicate, true); assert.equal(retry.message.id, replyId); assert.equal(retry.message.replyToMessageId, message.id);
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...payload, clientEventId: 'new-after-withdraw' }), 409, 'reply_source_unavailable');
+  const read = env.engine.state.readMessages('owner1', scope);
+  assert.equal(read.find(m => m.id === message.id)!.text, '');
+  assert.equal(read.find(m => m.id === replyId)!.text, payload.text);
+});
 test('message changes enforce author/read/send, optimistic versions and durable idempotent retries', async t => {
   const env = await setup(t), { message } = await env.post();
   const path = `/messages/${message.id}/edit`;

@@ -26,7 +26,8 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
     }
     if (url.pathname === '/messages' && body) {
       const value = commit(() => {
-        const result = state.createMessage(actor, scopeValue(body), stringValue(body.text, 'text'), stringValue(body.clientEventId, 'client_event_id', 128));
+        const result = state.createMessage(actor, scopeValue(body), stringValue(body.text, 'text'), stringValue(body.clientEventId, 'client_event_id', 128),
+          body.replyToMessageId === undefined ? undefined : stringValue(body.replyToMessageId, 'replyToMessageId', 128));
         if (!result.duplicate && state.evaluate(result.message)) {
           // Missing execution permissions do not reject otherwise valid chat.
           try { state.claim(state.config.researchMemberId, result.message.id); } catch { /* audit retains the denial */ }
