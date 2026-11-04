@@ -37,10 +37,8 @@ export function clientSession(state: ControlState, actor: string) {
       // Discovery uses the same read authorization as message access. The action
       // deadlines below are presentation hints, never an alternative authorizer.
       if (!state.visible(actor, scope)) return [];
-      const grants = state.config.grants.filter(g => g.memberId === actor && same(g, scope) && !g.revoked && g.expiresAt > now);
-      if (!grants.some(g => g.actions.includes('read'))) return [];
       const permissions = Object.fromEntries((['read', 'send', 'cancel'] as Action[]).map(action =>
-        [action, Math.max(0, ...grants.filter(g => g.actions.includes(action)).map(g => g.expiresAt))]));
+        [action, state.authorization(actor, action, scope).grant?.expiresAt ?? 0]));
       const members = state.config.members.filter(m => state.config.memberships[m.id]?.some(s => same(s, scope)));
       return [{ ...scope, permissions, members }];
     });

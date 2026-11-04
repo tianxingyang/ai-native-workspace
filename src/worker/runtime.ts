@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { ApiError, PROTOCOL_VERSION, requireCondition, terminal, validateWork, type CheckpointRef, type RuntimeCapabilities, type RuntimeEvent, type RuntimeInput, type RuntimeProvider, type RunStatus, type WorkPackage } from '../contracts.js';
 import { CoSeatTools } from './coseat-tools.js';
 
-export type Execute = (work: WorkPackage, input: RuntimeInput, tools: CoSeatTools, signal: AbortSignal, output: (data: Record<string, unknown>) => void) => Promise<void>;
+/** Providers acknowledge only when the input has actually entered their execution context. */
+export type Execute = (work: WorkPackage, input: RuntimeInput, tools: CoSeatTools, signal: AbortSignal, output: (data: Record<string, unknown>) => void, onInputApplied: () => void) => Promise<void>;
 interface Session {
   id: string; work: WorkPackage; status: RunStatus; events: RuntimeEvent[];
   abort: AbortController; input?: RuntimeInput; completion?: Promise<void>; cancelRequested: boolean;
@@ -43,15 +44,24 @@ export class LocalRuntime implements RuntimeProvider {
     requireCondition(input.contextRevision === s.work.contextRevision, 409, 'context_revision_changed');
     s.input = structuredClone(input);
     this.emit(s, 'input_received', { inputId: input.id });
-    // The RPC acknowledges receipt; input_applied is emitted by the scheduled job.
+    // The RPC acknowledges receipt; only the provider can acknowledge application.
     s.completion = new Promise<void>(resolve => setImmediate(resolve)).then(async () => {
       if (s.cancelRequested) return;
-      s.status = 'running'; this.emit(s, 'input_applied', { inputId: input.id });
+      s.status = 'running'; this.emit(s, 'status');
+      let inputApplied = false;
+      let executionSettled = false;
+      const onInputApplied = () => {
+        // Cancellation is cooperative: application that races the request is
+        // still evidence and must not be hidden by the aborted signal.
+        if (inputApplied || executionSettled) return;
+        inputApplied = true;
+        this.emit(s, 'input_applied', { inputId: input.id });
+      };
       let budgetExpired = false;
       const timer = setTimeout(() => { budgetExpired = true; s.abort.abort(new Error('runtime_budget_exceeded')); }, s.work.budget.maxDurationMs);
       const tools = new CoSeatTools(this.config.controlUrl, this.config.memberToken, s.work, s.abort.signal, value => this.emit(s, 'approval_requested', value), this.config.toolHeaders);
       try {
-        await this.config.execute(s.work, input, tools, s.abort.signal, value => this.emit(s, 'output', value));
+        await this.config.execute(s.work, input, tools, s.abort.signal, value => this.emit(s, 'output', value), onInputApplied);
         requireCondition(Boolean(tools.receiptId), 409, 'no_publication_receipt');
         if (!s.cancelRequested && !budgetExpired) {
           s.status = 'completed'; this.emit(s, 'status', { receiptId: tools.receiptId, tools: tools.calls });
@@ -61,6 +71,7 @@ export class LocalRuntime implements RuntimeProvider {
           s.status = 'failed'; this.emit(s, 'failed', { code: error instanceof ApiError ? error.code : 'execution_failed' });
         }
       } finally {
+        executionSettled = true;
         clearTimeout(timer);
         if (s.cancelRequested) {
           s.status = 'stopped';

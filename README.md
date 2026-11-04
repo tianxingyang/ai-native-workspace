@@ -31,6 +31,7 @@ CoSeat 是一个以即时通讯（IM）为核心的人与 Agent 协作产品设�
 - [临时运行时选择 ADR](docs/adr/0001-runtime-development-slice.md)：固定版本、隐式行为和未验证项。
 - [两端私有试用](docs/private-trial.md)：显式身份配置、出站领取、启动停止、备份恢复及部署前事项。
 - [私有协议与持久化 ADR](docs/adr/0002-private-outbound-sqlite.md)：单实例 SQLite 和未知执行的保守对账。
+- [权限策略与配置](docs/authorization.md)：角色模板、显式拒绝、任务授权绑定及当前实现边界。
 - [可复用 IM 界面与本地演示](docs/client-im.md)：运行、凭据边界、浏览器验收与桌面客户端未决项。
 - [Windows 本地模拟客户端](docs/client-windows.md)：安装、退出、构建、权限和当前验收限制。
 

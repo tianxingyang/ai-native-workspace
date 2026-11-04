@@ -3,6 +3,7 @@ import { isAbsolute } from 'node:path';
 import { objectValue, requireCondition, scopeValue, stringValue, type Grant, type Member } from '../contracts.js';
 import type { ControlConfig } from '../control/state.js';
 import { fixtureSources } from '../dev-fixture.js';
+import { actionList, parsePolicy } from '../control/authorization.js';
 
 export type MockProvider = 'fake' | 'pi-mock';
 export interface PrivateControlConfig { port: number; databasePath: string; control: ControlConfig }
@@ -54,15 +55,22 @@ export function parseControlConfig(raw: unknown, env: NodeJS.ProcessEnv): Privat
   const researchMemberId = id(c.researchMemberId);
   requireCondition(members.find(m => m.id === researchMemberId)?.kind === 'agent', 400, 'research_member_required');
   requireCondition(Array.isArray(c.grants) && c.grants.length > 0, 400, 'explicit_grants_required');
+  const policy = c.policy === undefined ? undefined : parsePolicy(c.policy);
   const grants: Grant[] = c.grants.map(rawGrant => {
     const g = objectValue(rawGrant), memberId = id(g.memberId);
     requireCondition(members.some(m => m.id === memberId), 400, 'unknown_grant_member');
-    requireCondition(Array.isArray(g.actions) && g.actions.length > 0 && g.actions.every(a => ['read', 'send', 'claim', 'request_approval', 'cancel'].includes(String(a))), 400, 'invalid_actions');
+    const actions = actionList(g.actions);
+    requireCondition(g.effect === undefined || g.effect === 'allow' || g.effect === 'deny', 400, 'invalid_grant_effect');
+    requireCondition(g.revoked === undefined || typeof g.revoked === 'boolean', 400, 'invalid_grant_revoked');
+    const roleIds = g.roleIds === undefined ? [] : g.roleIds;
+    requireCondition(Array.isArray(roleIds) && roleIds.every(roleId => typeof roleId === 'string' && policy?.roles.some(r => r.id === roleId)) && new Set(roleIds).size === roleIds.length, 400, 'invalid_grant_roles');
+    requireCondition(actions.length > 0 || roleIds.length > 0, 400, 'invalid_actions');
     requireCondition(Number.isInteger(g.revision) && Number(g.revision) > 0 && Number.isSafeInteger(g.expiresAt) && Number(g.expiresAt) > 0, 400, 'valid_grant_required');
-    return { ...scopeValue(g), id: id(g.id), memberId, revision: Number(g.revision), actions: g.actions as Grant['actions'], expiresAt: Number(g.expiresAt), revoked: g.revoked === true };
+    return { ...scopeValue(g), id: id(g.id), memberId, revision: Number(g.revision), actions, expiresAt: Number(g.expiresAt), revoked: g.revoked === true,
+      ...(g.effect === undefined ? {} : { effect: g.effect as 'allow' | 'deny' }), ...(roleIds.length ? { roleIds: roleIds as string[] } : {}) };
   });
   requireCondition(new Set(grants.map(g => g.id)).size === grants.length, 400, 'duplicate_grant_id');
-  return { port: Number(port), databasePath, control: { members, tokens, credentialExpiresAt, memberships, grants, researchMemberId, sources: fixtureSources } };
+  return { port: Number(port), databasePath, control: { members, tokens, credentialExpiresAt, memberships, grants, researchMemberId, sources: fixtureSources, ...(policy ? { policy } : {}) } };
 }
 export function parseWorkerConfig(raw: unknown, env: NodeJS.ProcessEnv): PrivateWorkerConfig {
   const c = objectValue(raw);

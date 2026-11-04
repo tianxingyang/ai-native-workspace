@@ -19,6 +19,66 @@ import { ControlState } from '../src/control/state.js';
 import { close, listen, requestJson } from '../src/http.js';
 import { type Message, type Run, terminal } from '../src/contracts.js';
 import { expectStatus, gate, waitFor } from './helpers.js';
+import { defaultPolicy } from '../src/control/authorization.js';
+
+test('configured templates and independent action grants execute through outbound HTTP tools', async t => {
+  const env = await setup(t);
+  env.config.control.policy = defaultPolicy();
+  const original = env.config.control.grants.find(g => g.memberId === 'agent1')!;
+  env.config.control.grants = env.config.control.grants.filter(g => g.id !== original.id);
+  for (const action of original.actions) env.config.control.grants.push({ ...original, id: `split-${action}`, actions: [action] });
+  const owner = env.config.control.grants.find(g => g.memberId === 'owner1')!;
+  owner.actions = []; owner.roleIds = ['collaborator'];
+  await env.post();
+  const run = await env.run(env.worker());
+  assert.equal(run.status, 'completed');
+  assert.equal(new Set(run.work.authorization!.grants.map(g => g.id)).size, 4);
+  assert.ok(env.engine.state.audit.some(a => a.policyVersion === 1 && a.reason === 'allowed'));
+});
+
+test('deny policy controls session hints and HTTP sending; cancellation remains independent', async t => {
+  const env = await setup(t); await env.post();
+  const owner = env.config.control.grants.find(g => g.memberId === 'owner1')!;
+  env.config.control.grants.push({ ...owner, id: 'deny-owner-send', actions: ['send'], effect: 'deny' });
+  const session = await requestJson<{ scopes: { permissions: { send: number; cancel: number } }[] }>(env.url, secrets.COSEAT_OWNER_TOKEN, '/session');
+  assert.equal(session.scopes[0]!.permissions.send, 0); assert.ok(session.scopes[0]!.permissions.cancel > Date.now());
+  await expectStatus(env.post('denied'), 403, 'scope_denied');
+  const run = [...env.engine.state.runs.values()][0]!;
+  const receipt = await requestJson<{ status: string }>(env.url, secrets.COSEAT_OWNER_TOKEN, `/runs/${run.id}/cancel`, {});
+  assert.equal(receipt.status, 'stopped');
+  assert.ok(env.engine.store.loadAudit<ControlState['audit']>()!.some(a => a.reason === 'explicit_deny'));
+});
+
+test('policy changes reject late HTTP results and startup configuration changes have a credential-free audit', async t => {
+  const env = await setup(t);
+  const initial = env.engine.store.loadAuthorizationConfiguration()!;
+  await env.post();
+  const delivery = env.engine.commit(() => env.engine.poll('agent1', 'policy-instance'));
+  const run = env.engine.state.runs.get(delivery.runId!)!;
+  env.config.control.policy = defaultPolicy();
+  await expectStatus(requestJson(env.url, secrets.COSEAT_AGENT_TOKEN, '/tools/send', { runId: run.id, result: fixtureResult() }, undefined, { 'x-coseat-instance': 'policy-instance', 'x-coseat-lease': delivery.leaseId! }), 409, 'policy_revision_changed');
+  assert.equal(env.engine.state.messages.size, 1);
+  assert.ok(env.engine.store.loadAudit<ControlState['audit']>()!.some(a => a.reason === 'policy_revision_changed' && a.grantRevisions!.length === 4));
+  await env.restart();
+  const changed = env.engine.store.loadAuthorizationConfiguration()!;
+  assert.equal(changed.changes.length, 2); assert.equal(changed.changes[1]!.previousDigest, initial.digest);
+  assert.deepEqual(changed.changes[0]!.configuration, initial.configuration);
+  for (const secret of Object.values(secrets)) assert.equal(JSON.stringify(changed).includes(secret), false);
+  assert.equal(JSON.stringify(changed).includes('tokens'), false);
+  await env.restart(); assert.equal(env.engine.store.loadAuthorizationConfiguration()!.changes.length, 2);
+});
+
+test('configuration accepts composed roles and denies, rejects malformed authorization data', async t => {
+  const env = await setup(t), config = rawConfig(env.path);
+  const grant = config.grants[0]!;
+  const raw = { ...config, policy: defaultPolicy(), grants: [{ ...grant, actions: [], roleIds: ['read-only', 'resource-admin'], effect: 'allow' }, ...config.grants.slice(1)] };
+  const state = new ControlState(parseControlConfig(raw, secrets).control);
+  assert.equal(state.authorization('owner1', 'read', scope).allowed, true);
+  assert.equal(state.authorization('owner1', 'send', scope).allowed, false);
+  for (const change of [{ roleIds: ['missing'] }, { effect: 'denny' }, { revoked: 'true' }, { actions: ['typo'] }]) {
+    assert.throws(() => parseControlConfig({ ...raw, grants: [{ ...raw.grants[0], ...change }, ...raw.grants.slice(1)] }, secrets));
+  }
+});
 
 // Synthetic, process-local test values, never deployment credentials.
 const secrets = { COSEAT_OWNER_TOKEN: randomBytes(32).toString('hex'), COSEAT_AGENT_TOKEN: randomBytes(32).toString('hex'), COSEAT_OTHER_TOKEN: randomBytes(32).toString('hex') };
@@ -243,7 +303,11 @@ test('cross-member lease access and body identity spoofing are rejected', async 
   const delivery = await requestJson<Delivery>(env.url, secrets.COSEAT_AGENT_TOKEN, '/worker/poll', { instanceId: 'boot-1' });
   await expectStatus(requestJson(env.url, secrets.COSEAT_OTHER_TOKEN, '/worker/events', { instanceId: 'boot-1', leaseId: delivery.leaseId, events: [] }), 403, 'lease_denied');
   await expectStatus(requestJson(env.url, secrets.COSEAT_OTHER_TOKEN, '/worker/poll', { instanceId: 'boot-2', memberId: 'agent1' }), 400);
-  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/worker/poll', { instanceId: 'boot-3' }), 403);
+  // A human with the same execution grants may use a worker, but cannot consume another member's lease.
+  assert.equal((await requestJson<Delivery>(env.url, secrets.COSEAT_OWNER_TOKEN, '/worker/poll', { instanceId: 'boot-3' })).command, 'idle');
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/worker/events', { instanceId: 'boot-1', leaseId: delivery.leaseId, events: [] }), 403, 'lease_denied');
+  env.config.control.grants.find(g => g.memberId === 'owner1')!.actions = ['read'];
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/worker/poll', { instanceId: 'boot-3' }), 403, 'worker_poll_denied');
   await expectStatus(requestJson(env.url, secrets.COSEAT_OTHER_TOKEN, '/tools/send', { runId: delivery.runId, result: fixtureResult() }, undefined, { 'x-coseat-lease': delivery.leaseId!, 'x-coseat-instance': 'boot-1' }), 403);
   assert.equal((await requestJson<Delivery>(env.url, secrets.COSEAT_OTHER_TOKEN, '/worker/poll', { instanceId: 'boot-2' })).command, 'idle');
 });

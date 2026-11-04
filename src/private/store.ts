@@ -1,7 +1,9 @@
 import { DatabaseSync } from 'node:sqlite';
 import { dirname } from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { requireCondition } from '../contracts.js';
+import type { ControlConfig } from '../control/state.js';
 
 /** Small single-instance trial: one bounded aggregate commits all related facts atomically. */
 export class SnapshotStore {
@@ -12,6 +14,7 @@ export class SnapshotStore {
     try {
       this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA locking_mode=EXCLUSIVE; CREATE TABLE IF NOT EXISTS snapshot (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, body TEXT NOT NULL) STRICT;');
       this.db.exec('CREATE TABLE IF NOT EXISTS authorization_audit (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL) STRICT;');
+      this.db.exec('CREATE TABLE IF NOT EXISTS authorization_configuration (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL) STRICT;');
       // Retain SQLite's exclusive lock for this connection; a second service must fail startup.
       this.db.exec('BEGIN EXCLUSIVE; COMMIT;');
     } catch (error) { this.db.close(); throw error; }
@@ -38,6 +41,19 @@ export class SnapshotStore {
   saveAudit(entries: readonly unknown[]): void {
     // Its own atomic SQLite transaction, independent of business rollback and snapshot size limits.
     this.db.prepare('INSERT INTO authorization_audit(id, body) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body').run(JSON.stringify(entries.slice(-1000)));
+  }
+  recordAuthorizationConfiguration(config: ControlConfig): void {
+    // Operator-supplied configuration is the current authority on restart. Never persist credentials.
+    const configuration = { policy: config.policy ?? null, grants: config.grants, memberships: config.memberships, memberIds: config.members.map(m => m.id) };
+    const digest = createHash('sha256').update(JSON.stringify(configuration)).digest('hex');
+    const previous = this.loadAuthorizationConfiguration();
+    if (previous?.digest === digest) return;
+    const changes = [...(previous?.changes ?? []), { at: Date.now(), source: 'startup_configuration', previousDigest: previous?.digest ?? null, digest, policyVersion: config.policy?.version ?? 0, configuration }].slice(-1000);
+    this.db.prepare('INSERT INTO authorization_configuration(id, body) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body').run(JSON.stringify({ digest, configuration, changes }));
+  }
+  loadAuthorizationConfiguration(): { digest: string; configuration: unknown; changes: { at: number; source: string; previousDigest: string | null; digest: string; policyVersion: number; configuration?: unknown }[] } | undefined {
+    const row = this.db.prepare('SELECT body FROM authorization_configuration WHERE id=1').get();
+    return row ? JSON.parse(String(row.body)) : undefined;
   }
   close(): void { this.db.close(); }
 }
