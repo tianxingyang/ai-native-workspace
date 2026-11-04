@@ -4,6 +4,7 @@ import { objectValue, requireCondition, scopeValue, stringValue, type Grant, typ
 import type { ControlConfig } from '../control/state.js';
 import { fixtureSources } from '../dev-fixture.js';
 import { actionList, parsePolicy } from '../control/authorization.js';
+import { creationRuleValue } from '../control/conversations.js';
 
 export type MockProvider = 'fake' | 'pi-mock';
 export interface PrivateControlConfig { port: number; databasePath: string; control: ControlConfig }
@@ -70,7 +71,8 @@ export function parseControlConfig(raw: unknown, env: NodeJS.ProcessEnv): Privat
       ...(g.effect === undefined ? {} : { effect: g.effect as 'allow' | 'deny' }), ...(roleIds.length ? { roleIds: roleIds as string[] } : {}) };
   });
   requireCondition(new Set(grants.map(g => g.id)).size === grants.length, 400, 'duplicate_grant_id');
-  return { port: Number(port), databasePath, control: { members, tokens, credentialExpiresAt, memberships, grants, researchMemberId, sources: fixtureSources, ...(policy ? { policy } : {}) } };
+  const conversationCreation = c.conversationCreation === undefined ? undefined : creationRuleValue(c.conversationCreation);
+  return { port: Number(port), databasePath, control: { members, tokens, credentialExpiresAt, memberships, grants, researchMemberId, sources: fixtureSources, ...(policy ? { policy } : {}), ...(conversationCreation ? { conversationCreation } : {}) } };
 }
 export function parseWorkerConfig(raw: unknown, env: NodeJS.ProcessEnv): PrivateWorkerConfig {
   const c = objectValue(raw);

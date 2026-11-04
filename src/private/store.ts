@@ -44,7 +44,8 @@ export class SnapshotStore {
   }
   recordAuthorizationConfiguration(config: ControlConfig): void {
     // Operator-supplied configuration is the current authority on restart. Never persist credentials.
-    const configuration = { policy: config.policy ?? null, grants: config.grants, memberships: config.memberships, memberIds: config.members.map(m => m.id) };
+    const configuration = { policy: config.policy ?? null, grants: config.grants, memberships: config.memberships, memberIds: config.members.map(m => m.id),
+      ...(config.conversationCreation ? { conversationCreation: config.conversationCreation } : {}) };
     const digest = createHash('sha256').update(JSON.stringify(configuration)).digest('hex');
     const previous = this.loadAuthorizationConfiguration();
     if (previous?.digest === digest) return;

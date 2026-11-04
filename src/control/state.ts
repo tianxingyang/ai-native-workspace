@@ -5,6 +5,7 @@ import { decideAuthorization, policyDigest, type AuthorizationDecision } from '.
 import type { MessageChange } from '../contracts.js';
 import { DeliveryJournal } from './delivery.js';
 import { MembershipRegistry } from './memberships.js';
+import { ConversationRegistry, creationRuleValue, conversationInput, digest, type ConversationCreationRule, type GrantSource } from './conversations.js';
 
 export interface ControlConfig {
   members: Member[]; grants: Grant[]; tokens: Record<string, string>;
@@ -12,10 +13,12 @@ export interface ControlConfig {
   credentialExpiresAt?: Record<string, number>;
   memberships: Record<string, Scope[]>; researchMemberId: string; sources: Source[];
   policy?: AuthorizationPolicy;
+  conversationCreation?: ConversationCreationRule;
 }
 export class ControlState {
   private readonly delivery = new DeliveryJournal();
   private readonly memberships = new MembershipRegistry();
+  private readonly conversations = new ConversationRegistry();
   readonly messages = new Map<string, Message>();
   readonly changes = new Map<string, MessageChange>();
   private readonly changeKeys = new Map<string, { fingerprint: string; changeId: string }>();
@@ -35,7 +38,7 @@ export class ControlState {
     return structuredClone({ messages: [...this.messages], runs: [...this.runs], approvals: [...this.approvals],
       decisions: this.decisions, audit: this.audit.slice(-1000), messageKeys: [...this.messageKeys],
       claims: [...this.claims], resultKeys: [...this.resultKeys], toolCalls: [...this.toolCalls],
-      changes: [...this.changes], changeKeys: [...this.changeKeys], contextRevisions: [...this.contextRevisions], readPositions: [...this.readPositions], delivery: this.delivery.snapshot(), memberships: this.memberships.snapshot() });
+      changes: [...this.changes], changeKeys: [...this.changeKeys], contextRevisions: [...this.contextRevisions], readPositions: [...this.readPositions], delivery: this.delivery.snapshot(), memberships: this.memberships.snapshot(), conversations: this.conversations.snapshot() });
   }
   restore(data: ReturnType<ControlState['snapshot']>): void {
     const restoreMap = <K, V>(map: Map<K, V>, entries: [K, V][]) => { map.clear(); for (const [key, value] of entries) map.set(key, value); };
@@ -47,6 +50,7 @@ export class ControlState {
     restoreMap(this.readPositions, data.readPositions ?? []);
     this.delivery.restore(data.delivery);
     this.memberships.restore(data.memberships);
+    this.conversations.restore(data.conversations);
     this.decisions.splice(0, this.decisions.length, ...data.decisions);
     this.restoreAudit(data.audit);
   }
@@ -70,17 +74,65 @@ export class ControlState {
   }
   authorize(actorId: string, action: Action, scope: Scope, bound?: { id: string; revision: number }): Grant {
     const { allowed, reason, policyVersion, policyDigest, grantIds, grant } = this.authorization(actorId, action, scope, bound);
-    const grantRevisions = grantIds.map(id => ({ id, revision: this.config.grants.find(g => g.id === id)!.revision }));
+    // Resolve audit metadata independently of expiry passing between two clock reads.
+    const grants = [...this.config.grants, ...this.conversations.effectiveGrants(() => true)];
+    const grantRevisions = grantIds.map(id => ({ id, revision: grants.find(g => g.id === id)!.revision }));
     this.audit.push({ actorId, action, allowed, reason, policyVersion, policyDigest, grantIds, grantRevisions, resource: { conversationId: scope.conversationId, threadId: scope.threadId }, at: this.now() });
     requireCondition(allowed && grant, 403, 'scope_denied');
     return grant;
   }
   authorization(actorId: string, action: Action, scope: Scope, bound?: { id: string; revision: number }): AuthorizationDecision {
+    const now = this.now();
     const memberships = Object.fromEntries(this.config.members.map(member => [member.id, this.memberScopes(member.id)]));
-    return decideAuthorization({ ...this.config, memberships }, actorId, action, scope, this.now(), bound);
+    return decideAuthorization({ ...this.config, memberships, grants: this.effectiveGrants(now) }, actorId, action, scope, now, bound);
+  }
+  private configuredScopes(memberId: string): Scope[] {
+    return [...(this.config.memberships[memberId] ?? []), ...this.conversations.scopes(memberId)];
   }
   memberScopes(memberId: string): Scope[] {
-    return this.memberships.scopes(memberId, this.config.memberships[memberId] ?? []);
+    return this.memberships.scopes(memberId, this.configuredScopes(memberId));
+  }
+  private validGrantSource(source: GrantSource, now: number): boolean {
+    if (digest(this.config.conversationCreation) !== source.ruleDigest || policyDigest(this.config.policy) !== source.policyDigest) return false;
+    // Only static source Grants are eligible. Never recurse through a dynamic grant.
+    const memberships = Object.fromEntries(this.config.members.map(member => [member.id, this.memberships.scopes(member.id, this.config.memberships[member.id] ?? [])]));
+    return source.bindings.every(binding => {
+      const decision = decideAuthorization({ ...this.config, memberships }, source.actorId, binding.action, source.scope, now, binding);
+      return decision.allowed && digest(decision.grant) === binding.digest;
+    });
+  }
+  private effectiveGrants(now = this.now()): Grant[] {
+    return [...this.config.grants, ...this.conversations.effectiveGrants(source => this.validGrantSource(source, now))];
+  }
+  conversationMetadata(scope: Scope) {
+    const conversation = this.conversations.metadata(scope);
+    return conversation ? { title: conversation.title, kind: conversation.kind } : undefined;
+  }
+  createConversation(actorId: string, raw: unknown) {
+    requireCondition(this.config.conversationCreation, 403, 'conversation_creation_disabled');
+    const rule = creationRuleValue(this.config.conversationCreation), scope = rule.authorityScope;
+    const creator = this.authorize(actorId, 'manage_workspace', scope);
+    const input = conversationInput(raw);
+    const bindings: GrantSource['bindings'] = [{ action: 'manage_workspace', id: creator.id, revision: creator.revision, digest: digest(creator) }];
+    let deadline = creator.expiresAt;
+    if (input.initialGrants.length) {
+      const issuer = this.authorize(actorId, 'grant_permissions', scope);
+      bindings.push({ action: 'grant_permissions', id: issuer.id, revision: issuer.revision, digest: digest(issuer) });
+      deadline = Math.min(deadline, issuer.expiresAt);
+    }
+    requireCondition(bindings.every(binding => this.config.grants.some(grant => grant.id === binding.id)), 403, 'static_creation_authority_required');
+    // Current authority is required even for an exact retry; expiry validation is
+    // for new issuance, so a lost successful response remains recoverable later.
+    const previous = this.conversations.prior(actorId, input);
+    if (previous) return previous;
+    const now = this.now();
+    requireCondition(input.memberIds.every(id => this.config.members.some(member => member.id === id)
+      && this.memberships.scopes(id, this.config.memberships[id] ?? []).some(s => s.conversationId === scope.conversationId && s.threadId === scope.threadId)), 403, 'conversation_member_unavailable');
+    for (const grant of input.initialGrants) {
+      requireCondition(grant.actions.every(action => rule.allowedActions.includes(action)), 403, 'conversation_action_not_grantable');
+      requireCondition(grant.expiresAt > now && grant.expiresAt <= deadline && grant.expiresAt - now <= rule.maxGrantDurationMs, 400, 'conversation_grant_expiry_out_of_bounds');
+    }
+    return this.conversations.create(actorId, input, { actorId, scope, bindings, ruleDigest: digest(this.config.conversationCreation), policyDigest: policyDigest(this.config.policy) }, now);
   }
   membershipRoster(actorId: string, scope: Scope) {
     this.authorize(actorId, 'manage_resource', scope);
@@ -90,7 +142,7 @@ export class ControlState {
   removeScopeMember(actorId: string, targetMemberId: string, scope: Scope, expectedRevision: number, clientEventId: string) {
     // Management of membership is independent of permission to read private content.
     this.authorize(actorId, 'manage_resource', scope);
-    const result = this.memberships.remove(actorId, targetMemberId, scope, expectedRevision, clientEventId, this.config.memberships[targetMemberId] ?? [], this.now());
+    const result = this.memberships.remove(actorId, targetMemberId, scope, expectedRevision, clientEventId, this.configuredScopes(targetMemberId), this.now());
     const affectedRunIds: string[] = [];
     if (!result.duplicate) {
       this.contextRevisions.set(JSON.stringify([scope.conversationId, scope.threadId]), this.contextRevision(scope) + 1);
@@ -343,7 +395,7 @@ export class ControlState {
       for (const action of ['read', 'claim', 'send', 'request_approval'] as const) {
         const binding = authorization.grants.find(g => g.action === action);
         requireCondition(binding, 403, 'unbound_run_action');
-        check(this.config.grants.find(g => g.id === binding.id)?.revision === binding.revision, 'grant_revision_changed');
+        check(this.effectiveGrants().find(g => g.id === binding.id)?.revision === binding.revision, 'grant_revision_changed');
         this.authorize(actorId, action, run.work.route, binding);
         check(binding.expiresAt > this.now(), 'grant_expired', 403);
       }
@@ -353,7 +405,7 @@ export class ControlState {
     }
     // Persisted legacy work cannot acquire template-based permissions after migration.
     check(!this.config.policy, 'policy_revision_changed');
-    const bound = this.config.grants.find(g => g.id === run.work.grant.id);
+    const bound = this.effectiveGrants().find(g => g.id === run.work.grant.id);
     check(bound?.revision === run.work.grant.revision, 'grant_revision_changed');
     for (const action of actions) this.authorize(actorId, action, run.work.route, run.work.grant);
     this.authorize(actorId, 'read', run.work.source, run.work.grant);

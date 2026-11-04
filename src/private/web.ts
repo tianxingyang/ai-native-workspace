@@ -41,7 +41,7 @@ export function clientSession(state: ControlState, actor: string) {
       const permissions = Object.fromEntries((['read', 'send', 'cancel'] as Action[]).map(action =>
         [action, state.authorization(actor, action, scope).grant?.expiresAt ?? 0]));
       const members = state.config.members.filter(m => state.memberScopes(m.id).some(s => same(s, scope)));
-      return [{ ...scope, permissions, members }];
+      return [{ ...scope, ...state.conversationMetadata(scope), permissions, members }];
     });
   requireCondition(scopes.length > 0, 403, 'no_readable_scope');
   return { member: state.config.members.find(m => m.id === actor)!, scopes, mode: 'private-mock', serverTime: now };

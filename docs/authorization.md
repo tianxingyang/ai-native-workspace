@@ -31,7 +31,7 @@
 }
 ```
 
-示例 `expiresAt: 1` 故意已过期，不能直接作为有效授权；使用者须按实际授权填写 Unix 毫秒截止时间。角色名称只是可编辑 ID，不参与特殊判断。管理模板仅表达管理动作，不自动包含读取、发送或扩权。`manage_resource` 已接通目标范围的成员列表与移除接口，见[成员生命周期](membership-lifecycle.md)；其他资源管理、在线授予权限、外发、永久删除和持续运行的业务端点尚未实现。
+示例 `expiresAt: 1` 故意已过期，不能直接作为有效授权；使用者须按实际授权填写 Unix 毫秒截止时间。角色名称只是可编辑 ID，不参与特殊判断。管理模板仅表达管理动作，不自动包含读取、发送或扩权。`manage_resource` 已接通目标范围的成员列表与移除接口，见[成员生命周期](membership-lifecycle.md)。[会话创建](conversation-creation.md) 可在显式配置的边界内同时发放初始 Grant，要求 `grant_permissions` 且绑定静态来源；尚无通用在线授权更新、外发、永久删除或持续运行端点。
 
 变更角色时递增 role.revision 和 policy.version；变更 Grant 时递增 grant.revision。整个 policy 还计算摘要：即使误忘递增版本，旧任务也不能继续使用改变后的策略。相同 Grant 可以组合多个模板和直接动作；不同 Grant 也可以分别授予 read、claim、send、request_approval。
 

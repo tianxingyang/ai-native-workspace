@@ -8,6 +8,7 @@ const $ = id => document.getElementById(id);
 const desktop = window.__TAURI__;
 const SVG = 'http://www.w3.org/2000/svg';
 const key = scope => JSON.stringify([scope.conversationId, scope.threadId]);
+const roomName = scope => scope.title ?? scope.conversationId;
 const state = {
   client: null, session: null, selected: '', rooms: new Map(), epoch: 0, timer: null, expiryTimer: null, syncing: false, offset: 0,
   cancels: new Map(), reads: new Map(), pane: null, paneReturn: null, lastSync: 0,
@@ -205,10 +206,10 @@ function renderRooms() {
       const item = button('', () => selectRoom(id), 'room');
       item.dataset.room = id; item.setAttribute('aria-current', String(id === state.selected));
       const top = el('span', 'room-top'), bottom = el('span', 'room-bottom'), copy = el('span', 'room-copy');
-      top.append(el('strong', 'room-name', room.scope.conversationId), el('span', 'room-thread', room.scope.threadId), el('span', 'room-time'));
+      top.append(el('strong', 'room-name', roomName(room.scope)), el('span', 'room-thread', room.scope.threadId), el('span', 'room-time'));
       bottom.append(el('span', 'room-preview'), el('span', 'room-badge'));
       copy.append(top, bottom);
-      const roomTile = el('span', 'tile', initial(room.scope.conversationId)); roomTile.setAttribute('aria-hidden', 'true');
+      const roomTile = el('span', 'tile', initial(roomName(room.scope))); roomTile.setAttribute('aria-hidden', 'true');
       item.append(roomTile, copy); children.push(item);
     }
     $('rooms').replaceChildren(...children);
@@ -228,19 +229,19 @@ function updateRoomItem(item, room) {
   setText(item.querySelector('.room-time'), last ? roomTime(last.createdAt) : '');
   const badge = item.querySelector('.room-badge'); setText(badge, fresh ? String(fresh) : ''); badge.hidden = !fresh;
   item.classList.toggle('is-live', Boolean(live)); item.classList.toggle('has-new', fresh > 0);
-  const label = [`${room.scope.conversationId} ${room.scope.threadId}`, live && t('room.researchActive'), fresh && t('room.unread', { count: fresh })].filter(Boolean).join(t('list.separator'));
+  const label = [`${roomName(room.scope)} ${room.scope.threadId}`, live && t('room.researchActive'), fresh && t('room.unread', { count: fresh })].filter(Boolean).join(t('list.separator'));
   if (item.getAttribute('aria-label') !== label) item.setAttribute('aria-label', label);
 }
 
 function renderHeader() {
   const room = current(); if (!room) return;
-  const { conversationId, threadId, members } = room.scope;
-  setText($('room-title'), conversationId);
+  const { threadId, members } = room.scope;
+  setText($('room-title'), roomName(room.scope));
   setText($('thread-title'), t('room.threadMembers', { thread: threadId, count: members.length }));
-  setText($('room-tile'), initial(conversationId));
+  setText($('room-tile'), initial(roomName(room.scope)));
   setText($('members-count'), t('room.members', { count: members.length }));
   setText($('members-short'), String(members.length));
-  setText($('scope-note'), t('room.scopeNote', { conversation: conversationId, thread: threadId }));
+  setText($('scope-note'), t('room.scopeNote', { conversation: roomName(room.scope), thread: threadId }));
   renderSeats(room); updateComposer();
 }
 

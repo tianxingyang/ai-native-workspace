@@ -17,6 +17,10 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
     // Body reads and idle long polls await I/O: recheck credentials immediately before each operation.
     const commit = <T>(fn: () => T) => engine.commit(() => { state.authenticate(token); return fn(); });
     const guard = (runId: string) => engine.guardTool(actor, stringValue(request.headers['x-coseat-instance'], 'instance', 128), stringValue(request.headers['x-coseat-lease'], 'lease', 128), runId);
+    if (url.pathname === '/conversations' && body) {
+      const value = commit(() => state.createConversation(actor, body));
+      respond(response, value.duplicate ? 200 : 201, value); return;
+    }
     if (url.pathname === '/memberships' && request.method === 'GET') {
       const scope = scopeValue(Object.fromEntries(url.searchParams));
       respond(response, 200, commit(() => state.membershipRoster(actor, scope))); return;
