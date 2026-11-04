@@ -34,6 +34,74 @@ async function send(page, text) {
   await expect(page.locator('.message-text').filter({ hasText: text })).toHaveCount(1);
 }
 
+test('opening a long discussion resumes at the first unread message without reading the tail', async ({ page }) => {
+  const scope = { conversationId: '产品讨论', threadId: '日常交流' }, messages = [];
+  for (let i = 0; i < 60; i++) messages.push(demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, `历史正文 ${i}`, `unread-entry-${i}`).message));
+  demo.engine.commit(() => demo.engine.state.advanceReadPosition('demo-owner', scope, messages[19].id));
+  await connect(page);
+  await expect(page.locator('.unread-divider')).toHaveText('新消息');
+  const target = page.locator(`[data-message="${messages[20].id}"]`);
+  const timeline = page.locator('#timeline');
+  await expect.poll(async () => Math.round((await target.boundingBox()).y - (await timeline.boundingBox()).y)).toBe(24);
+  expect(demo.engine.state.readPosition('demo-owner', scope)).toBe(messages[19].id);
+  await timeline.evaluate(node => { node.scrollTop = node.scrollHeight; });
+  await expect.poll(() => demo.engine.state.readPosition('demo-owner', scope)).toBe(messages[59].id);
+  await connect(page);
+  await expect(page.locator('.unread-divider')).toHaveCount(0);
+  expect(await timeline.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(90);
+  await page.getByRole('button', { name: '研发讨论 插件协议' }).click();
+  const added = [];
+  for (let i = 0; i < 20; i++) added.push(demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, `离开后新增 ${i}`, `entry-later-${i}`).message));
+  await expect(page.locator('.room').filter({ hasText: '产品讨论' }).locator('.room-badge')).toHaveText('20');
+  await page.locator('.room').filter({ hasText: '产品讨论' }).click();
+  await expect.poll(async () => Math.round((await page.locator(`[data-message="${added[0].id}"]`).boundingBox()).y - (await timeline.boundingBox()).y)).toBe(24);
+  expect(demo.engine.state.readPosition('demo-owner', scope)).toBe(messages[59].id);
+});
+
+test('conversation switching restores a history anchor despite edits above it', async ({ page }) => {
+  const scope = { conversationId: '产品讨论', threadId: '日常交流' }, messages = [];
+  for (let i = 0; i < 35; i++) messages.push(demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, `锚点正文 ${i}`, `scroll-anchor-${i}`).message));
+  demo.engine.commit(() => demo.engine.state.advanceReadPosition('demo-owner', scope, messages.at(-1).id));
+  await connect(page);
+  await page.locator('#timeline').evaluate(node => { node.scrollTop = 900; });
+  const anchor = await page.locator('#timeline').evaluate(timeline => {
+    const top = timeline.getBoundingClientRect().top;
+    const item = [...timeline.querySelectorAll('.message')].find(node => node.getBoundingClientRect().bottom > top);
+    return { id: item.dataset.message, offset: item.getBoundingClientRect().top - top };
+  });
+  await page.getByRole('button', { name: '研发讨论 插件协议' }).click();
+  demo.engine.commit(() => demo.engine.changeMessage('demo-researcher', messages[0].id, 'edit', 1, 'edit-above-anchor', '变长的原文\n'.repeat(25)));
+  await expect.poll(() => page.locator('.room').filter({ hasText: '产品讨论' }).getAttribute('aria-current')).toBe('false');
+  // Wait for the background snapshot containing the edit, not a fixed timeout.
+  await page.waitForResponse(async response => response.url().includes('/messages?') && response.request().method() === 'GET'
+    && (await response.json()).messages?.some(message => message.id === messages[0].id && message.revision === 2));
+  await page.getByRole('button', { name: '产品讨论 日常交流' }).click();
+  await expect.poll(async () => Math.round((await page.locator(`[data-message="${anchor.id}"]`).boundingBox()).y - (await page.locator('#timeline').boundingBox()).y)).toBe(Math.round(anchor.offset));
+  await expect(page.locator('.unread-divider')).toHaveCount(0);
+  const added = [];
+  for (let i = 0; i < 20; i++) added.push(demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, `历史阅读期间新增 ${i}`, `history-new-${i}`).message));
+  await expect(page.locator('.message')).toHaveCount(55);
+  await page.getByRole('button', { name: '查看新消息', exact: true }).click();
+  await expect.poll(async () => Math.round((await page.locator(`[data-message="${added[0].id}"]`).boundingBox()).y - (await page.locator('#timeline').boundingBox()).y)).toBe(24);
+  await expect(page.locator(`[data-message="${added[0].id}"]`)).toBeFocused();
+  expect(demo.engine.state.readPosition('demo-owner', scope)).toBe(messages.at(-1).id);
+});
+
+test('narrow conversation-list navigation preserves the visible history anchor', async ({ page }) => {
+  const scope = { conversationId: '产品讨论', threadId: '日常交流' }, messages = [];
+  for (let i = 0; i < 45; i++) messages.push(demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, `窄屏历史 ${i}`, `narrow-history-${i}`).message));
+  demo.engine.commit(() => demo.engine.state.advanceReadPosition('demo-owner', scope, messages.at(-1).id));
+  await page.setViewportSize({ width: 390, height: 844 }); await connect(page);
+  await page.locator('#timeline').evaluate(node => { node.scrollTop = 900; });
+  const before = await page.locator('#timeline').evaluate(node => node.scrollTop);
+  await page.getByRole('button', { name: '会话列表', exact: true }).click();
+  await page.getByRole('button', { name: '研发讨论 插件协议' }).click();
+  await page.getByRole('button', { name: '会话列表', exact: true }).click();
+  await page.getByRole('button', { name: '产品讨论 日常交流' }).click();
+  await expect.poll(() => page.locator('#timeline').evaluate(node => node.scrollTop)).toBe(before);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 test('unread positions survive reconnect and another client advances the same member', async ({ page, context }) => {
   const scope = { conversationId: '研发讨论', threadId: '插件协议' };
   const seed = id => demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, id, id).message);
@@ -79,13 +147,14 @@ test('read acknowledgement loss is reconciled and hidden or scrolled-back views 
   const scope = { conversationId: '产品讨论', threadId: '日常交流' };
   const seed = id => demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, id, id).message);
   for (let i = 0; i < 30; i++) seed(`read-history-${i}`);
+  const original = [...demo.engine.state.messages.values()].at(-1);
+  demo.engine.commit(() => demo.engine.state.advanceReadPosition('demo-owner', scope, original.id));
   let lost = false;
   await page.route(url => url.pathname === '/read-position', async route => {
     if (lost) return route.continue();
     lost = true; await forward(route); await route.abort('failed');
   });
   await connect(page);
-  const original = [...demo.engine.state.messages.values()].at(-1);
   await expect.poll(() => demo.engine.state.readPosition('demo-owner', scope)).toBe(original.id);
   await page.locator('#timeline').evaluate(node => { node.scrollTop = 0; });
   const unseen = seed('arrived-while-reading-history');

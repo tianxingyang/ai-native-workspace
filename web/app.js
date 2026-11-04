@@ -65,7 +65,8 @@ function dayLabel(ts) {
   return new Date(ts).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' });
 }
 function roomTime(ts) { return startOfDay(ts) === startOfDay(Date.now()) ? clock(ts) : new Date(ts).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }); }
-function unseen(room) { return room.messages.filter(message => !room.seen.has(message.id) && !isMe(message.authorId) && !message.retracted && !message.invalidated).length; }
+function unreadMessages(room) { return room.messages.filter(message => !room.seen.has(message.id) && !isMe(message.authorId) && !message.retracted && !message.invalidated); }
+function unseen(room) { return unreadMessages(room).length; }
 function applyReadPosition(room, messageId) {
   const index = room.messages.findIndex(message => message.id === messageId);
   if (index < 0) return;
@@ -157,10 +158,10 @@ function sessionReceived(session) {
   for (const scope of session.scopes) {
     const id = key(scope), old = state.rooms.get(id), known = { ...old?.known };
     for (const [name, until] of Object.entries(scope.permissions)) if (until > 0) known[name] = until;
-    next.set(id, old ? { ...old, scope, known } : { scope, known, messages: [], runs: [], loaded: false, draft: '', pending: null, signature: '', seen: new Set(), rendered: 0 });
+    next.set(id, old ? { ...old, scope, known } : { scope, known, messages: [], runs: [], loaded: false, draft: '', pending: null, signature: '', seen: new Set(), rendered: 0, entering: true });
   }
   state.rooms = next;
-  if (!next.has(state.selected)) { state.selected = next.keys().next().value; state.pane = null; renderPane(); }
+  if (!next.has(state.selected)) { state.selected = next.keys().next().value; current().entering = true; state.pane = null; renderPane(); }
   renderIdentity();
   setText($('room-count'), `${session.scopes.length} 个讨论`);
   renderRooms(); renderHeader();
@@ -243,10 +244,11 @@ function selectRoom(id) {
   if (!state.rooms.has(id)) return;
   if (!authorized('read', state.rooms.get(id))) { expireReadScopes(); return; }
   const old = current(); if (old && !old.pending) old.draft = $('message').value;
+  if (old?.loaded) { const position = rememberScroll(); if (position) old.scrollPosition = position; }
   state.selected = id; state.epoch++; state.syncing = false;
   clearTimeout(state.timer); $('app').classList.remove('show-rooms');
   if (state.pane) { state.pane = null; state.paneReturn = null; renderPane(); }
-  const room = current(); $('message').value = room.draft; markSeen(room);
+  const room = current(); room.entering = true; $('message').value = room.draft;
   $('sync-error').hidden = true; $('new-messages').hidden = true;
   renderRooms(); renderHeader(); renderMessages(true); renderOutbox(); const syncing = sync();
   if (matchMedia('(max-width: 720px)').matches) $('room-title').focus();
@@ -275,7 +277,7 @@ async function sync() {
       const room = state.rooms.get(id), result = results[index];
       if (room && result.status === 'fulfilled') applySnapshot(room, result.value, id === state.selected);
     });
-    renderRooms(); renderSeats(current()); renderMessages(); renderPane(); renderOutbox();
+    renderRooms(); renderSeats(current()); renderMessages(); renderPane(); renderOutbox(); markSeen(current());
     state.lastSync = Date.now(); setConnection('ok'); $('sync-error').hidden = true;
     return true;
   } catch (error) {
@@ -303,7 +305,6 @@ function applySnapshot(room, data, selected) {
   applyReadPosition(room, data.readThroughMessageId);
   if (messageChange?.roomId === key(room.scope) && room.messages.find(m => m.id === messageChange.messageId)?.retracted) closeMessageChange();
   for (const run of room.runs) if (SETTLED.has(run.status)) state.cancels.delete(run.id);
-  if (selected) markSeen(room);
   // Retry only a previously visible target, even after switching rooms. Never
   // advance to newer background messages merely because a sync received them.
   flushReadPosition(room);
@@ -368,12 +369,29 @@ function continues(previous, message, ctx) {
     && !ctx.runsBySource.has(previous.id);
 }
 
+function rememberScroll() {
+  const timeline = $('timeline'); if (!timeline.getClientRects().length) return undefined;
+  const top = timeline.getBoundingClientRect().top;
+  const anchor = [...$('messages').children].find(node => node.dataset.message && node.getBoundingClientRect().bottom > top);
+  return { messageId: anchor?.dataset.message, offset: anchor ? anchor.getBoundingClientRect().top - top : 0,
+    atBottom: timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 90 };
+}
+function scrollToMessage(id, offset = 0) {
+  if (!id) return false;
+  const node = [...$('messages').children].find(item => item.dataset.message === id);
+  if (!node) return false;
+  const timeline = $('timeline');
+  timeline.scrollTop += node.getBoundingClientRect().top - timeline.getBoundingClientRect().top - offset;
+  return true;
+}
 function renderMessages(force = false) {
   const room = current(); if (!room) return;
-  const signature = JSON.stringify([room.messages, room.runs, authorized('cancel'), authorized('send'), [...state.cancels], room.loaded]);
-  if (!force && signature === room.signature) return;
+  const entering = room.entering && room.loaded && $('timeline').getClientRects().length > 0;
+  if (entering) room.unreadBoundaryId = unreadMessages(room)[0]?.id;
+  const signature = JSON.stringify([room.messages, room.runs, authorized('cancel'), authorized('send'), [...state.cancels], room.loaded, room.unreadBoundaryId]);
+  if (!force && !entering && signature === room.signature) return;
   room.signature = signature;
-  const timeline = $('timeline'), previousScroll = timeline.scrollTop;
+  const timeline = $('timeline'), previousScroll = timeline.scrollTop, previousPosition = rememberScroll();
   const atBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 90;
   const expanded = new Set([...$('messages').querySelectorAll('details[open]')].map(x => x.dataset.message));
   const focused = $('messages').contains(document.activeElement) ? document.activeElement.dataset.action : undefined;
@@ -382,6 +400,10 @@ function renderMessages(force = false) {
   for (const message of room.messages) {
     const label = dayLabel(message.createdAt);
     if (label !== day) { day = label; previous = null; const divider = el('div', 'day-divider', label); divider.setAttribute('role', 'separator'); nodes.push(divider); }
+    if (message.id === room.unreadBoundaryId) {
+      const divider = el('div', 'day-divider unread-divider', '新消息'); divider.setAttribute('role', 'separator');
+      nodes.push(divider); previous = null;
+    }
     nodes.push(renderMessage(room, message, previous, ctx, expanded));
     previous = message;
   }
@@ -389,8 +411,15 @@ function renderMessages(force = false) {
   $('messages').replaceChildren(...nodes);
   if (focused) ([...$('messages').querySelectorAll('[data-action]')].find(x => x.dataset.action === focused) ?? timeline).focus({ preventScroll: true });
   const grew = room.messages.length > room.rendered; room.rendered = room.messages.length;
-  if (force || atBottom) { timeline.scrollTop = timeline.scrollHeight; $('new-messages').hidden = true; }
-  else { timeline.scrollTop = previousScroll; if (grew) $('new-messages').hidden = false; }
+  if (entering) {
+    room.entering = false;
+    const saved = room.scrollPosition;
+    if (saved && !saved.atBottom && scrollToMessage(saved.messageId, saved.offset)) { /* Preserve history position. */ }
+    else if (!scrollToMessage(room.unreadBoundaryId, 24)) timeline.scrollTop = timeline.scrollHeight;
+    $('new-messages').hidden = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 90;
+  }
+  else if (force || atBottom) { timeline.scrollTop = timeline.scrollHeight; $('new-messages').hidden = true; }
+  else { if (!scrollToMessage(previousPosition?.messageId, previousPosition?.offset)) timeline.scrollTop = previousScroll; if (grew) $('new-messages').hidden = false; }
 }
 
 function renderMessage(room, message, previous, ctx, expanded) {
@@ -919,8 +948,18 @@ $('search-query').addEventListener('input', () => {
 });
 $('details-close').addEventListener('click', () => closePane(true));
 $('reconnect').addEventListener('click', () => void sync());
-$('back').addEventListener('click', () => { closePane(false); $('app').classList.add('show-rooms'); $('rooms').querySelector('[aria-current=true]')?.focus(); });
-$('new-messages').addEventListener('click', () => { $('timeline').scrollTop = $('timeline').scrollHeight; $('new-messages').hidden = true; });
+$('back').addEventListener('click', () => {
+  closePane(false); const room = current(), position = rememberScroll();
+  if (room?.loaded && position) room.scrollPosition = position;
+  $('app').classList.add('show-rooms'); $('rooms').querySelector('[aria-current=true]')?.focus();
+});
+$('new-messages').addEventListener('click', () => {
+  const message = unreadMessages(current())[0];
+  if (!message || !scrollToMessage(message.id, 24)) $('timeline').scrollTop = $('timeline').scrollHeight;
+  markSeen(current()); $('new-messages').hidden = true;
+  const target = message && [...$('messages').children].find(node => node.dataset.message === message.id);
+  (target || $('timeline')).focus({ preventScroll: true });
+});
 $('timeline').addEventListener('scroll', () => {
   const timeline = $('timeline');
   if (!$('new-messages').hidden && timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 90) $('new-messages').hidden = true;
