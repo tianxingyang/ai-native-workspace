@@ -34,6 +34,102 @@ async function send(page, text) {
   await expect(page.locator('.message-text').filter({ hasText: text })).toHaveCount(1);
 }
 
+test('automatic receipt reconciliation preserves history position and leaves newer messages unread', async ({ page }) => {
+  const scope = { conversationId: '产品讨论', threadId: '日常交流' }, messages = [];
+  for (let i = 0; i < 50; i++) messages.push(demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, `回执前历史 ${i}`, `receipt-history-${i}`).message));
+  demo.engine.commit(() => demo.engine.state.advanceReadPosition('demo-owner', scope, messages.at(-1).id));
+  await connect(page);
+  await page.route(url => url.pathname === '/messages', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    await forward(route); await route.abort('failed');
+  });
+  await page.getByLabel('发送到当前会话的消息').fill('已接受但丢失回执');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByRole('button', { name: '核对发送结果', exact: true })).toBeVisible();
+  await expect(page.locator('.message')).toHaveCount(51);
+  const own = [...demo.engine.state.messages.values()].at(-1);
+  await page.locator('#timeline').evaluate(node => { node.scrollTop = node.scrollHeight; });
+  await expect.poll(() => demo.engine.state.readPosition('demo-owner', scope)).toBe(own.id);
+  await page.locator('#timeline').evaluate(node => { node.scrollTop = 500; node.focus(); });
+  const marker = demo.engine.state.readPosition('demo-owner', scope);
+  for (let i = 0; i < 20; i++) demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, `尚未阅读 ${i}`, `receipt-unread-${i}`));
+  demo.engine.state.config.grants.find(g => g.memberId === 'demo-owner' && g.conversationId === '产品讨论').actions = ['read'];
+  await expect(page.locator('#outbox')).toBeEmpty(); await expect(page.locator('.message')).toHaveCount(71);
+  expect(await page.locator('#timeline').evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeGreaterThan(500);
+  expect(demo.engine.state.readPosition('demo-owner', scope)).toBe(marker);
+  await expect(page.locator('#timeline')).toBeFocused();
+});
+
+test('manual receipt checks retain keyboard focus while waiting and after an empty receipt', async ({ page }) => {
+  await connect(page);
+  await page.route(url => url.pathname === '/messages', async route => route.request().method() === 'POST' ? route.abort('failed') : route.continue());
+  let release; const hold = new Promise(resolve => { release = resolve; });
+  await page.route(url => url.pathname === '/messages/receipt', async route => { await hold; await route.continue(); });
+  try {
+    await page.getByLabel('发送到当前会话的消息').fill('待核对焦点');
+    await page.getByRole('button', { name: '发送', exact: true }).click();
+    await page.getByRole('button', { name: '核对发送结果', exact: true }).click();
+    await expect(page.locator('#outbox [data-action="pending-status"]')).toBeFocused();
+    release();
+    await expect(page.getByRole('button', { name: '核对发送结果', exact: true })).toBeFocused();
+    await expect(page.locator('#outbox')).toContainText('暂未查到已送达记录');
+  } finally { release(); }
+});
+
+test('read-only send reconciliation clears an accepted lost send using its current retracted message', async ({ page }) => {
+  await connect(page); let posts = 0, receipts = 0;
+  await page.route(url => url.pathname === '/messages/receipt', async route => { receipts++; await route.continue(); });
+  await page.route(url => url.pathname === '/messages', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    posts++; const response = await forward(route), result = await response.json();
+    demo.engine.commit(() => demo.engine.changeMessage('demo-owner', result.message.id, 'retract', 1, 'withdraw-before-receipt'));
+    demo.engine.state.config.grants.find(g => g.memberId === 'demo-owner' && g.conversationId === '产品讨论').actions = ['read'];
+    await route.abort('failed');
+  });
+  await page.getByLabel('发送到当前会话的消息').fill('回执核对后不应残留的原文');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect.poll(() => receipts).toBeGreaterThan(0);
+  await expect(page.locator('#outbox')).toBeEmpty();
+  await expect(page.locator('#message')).toHaveValue(''); await expect(page.locator('#message')).toBeDisabled();
+  await expect(page.locator('.message-text')).toHaveText('消息已撤回');
+  await expect(page.locator('#app')).not.toContainText('回执核对后不应残留的原文');
+  await expect(page.locator('#connect')).toBeHidden(); expect(posts).toBe(1);
+});
+
+test('an absent receipt remains unknown and cannot resend until speaking is authorized', async ({ page }) => {
+  await connect(page);
+  const grant = demo.engine.state.config.grants.find(g => g.memberId === 'demo-owner' && g.conversationId === '产品讨论');
+  const actions = [...grant.actions], ids = []; let blocked = true;
+  await page.route(url => url.pathname === '/messages', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    ids.push(route.request().postDataJSON().clientEventId);
+    if (blocked) { blocked = false; grant.actions = ['read']; return route.abort('failed'); }
+    await route.continue();
+  });
+  await page.getByLabel('发送到当前会话的消息').fill('仍待核对的发送');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.locator('#outbox')).toContainText('暂未查到已送达记录');
+  await expect(page.getByRole('button', { name: '重试同一条消息', exact: true })).toHaveCount(0);
+  expect(ids).toHaveLength(1); expect(demo.engine.state.messages.size).toBe(0);
+  grant.actions = actions;
+  await page.getByRole('button', { name: '重试同一条消息', exact: true }).click();
+  await expect(page.locator('#outbox')).toBeEmpty(); await expect(page.locator('.message-text')).toHaveText('仍待核对的发送');
+  expect(ids).toHaveLength(2); expect(ids[1]).toBe(ids[0]); expect(demo.engine.state.messages.size).toBe(1);
+});
+
+test('a send denial preserves readable conversation and its pending reconciliation', async ({ page }) => {
+  await connect(page);
+  await page.route(url => url.pathname === '/messages', async route => {
+    if (route.request().method() === 'POST') demo.engine.state.config.grants.find(g => g.memberId === 'demo-owner' && g.conversationId === '产品讨论').actions = ['read'];
+    await route.continue();
+  });
+  await page.getByLabel('发送到当前会话的消息').fill('发言撤权竞态');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.locator('#outbox')).toContainText('暂未查到已送达记录');
+  await expect(page.locator('#connect')).toBeHidden(); await expect(page.locator('#seat')).toContainText('列席');
+  expect(demo.engine.state.messages.size).toBe(0);
+});
+
 test('opening a long discussion resumes at the first unread message without reading the tail', async ({ page }) => {
   const scope = { conversationId: '产品讨论', threadId: '日常交流' }, messages = [];
   for (let i = 0; i < 60; i++) messages.push(demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, `历史正文 ${i}`, `unread-entry-${i}`).message));

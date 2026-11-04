@@ -15,6 +15,27 @@ function setup() {
 }
 function source(state: ControlState) { return state.createMessage('alex', scope, 'research', 'source').message; }
 
+test('send receipts require read and expose only the sender current message in the requested scope', () => {
+  const { state } = setup(), message = state.createMessage('alex', scope, 'private-original-receipt-body', 'source').message;
+  const grant = state.config.grants.find(g => g.memberId === 'alex')!;
+  const other = { ...scope, threadId: 'other' };
+  state.config.grants.push({ ...grant, ...other, id: 'other-scope' });
+  state.config.memberships.alex!.push(other);
+  assert.equal(state.messageReceipt('sam', scope, 'source'), null);
+  assert.equal(state.messageReceipt('alex', other, 'source'), null);
+  assert.equal(state.messageReceipt('alex', scope, 'missing'), null);
+  state.changeMessage('alex', message.id, 'edit', 1, 'receipt-edit', 'current text');
+  assert.equal(state.messageReceipt('alex', scope, 'source')!.text, 'current text');
+  state.changeMessage('alex', message.id, 'retract', 2, 'receipt-retract');
+  grant.actions = ['read'];
+  const receipt = state.messageReceipt('alex', scope, 'source')!;
+  assert.equal(receipt.text, ''); assert.ok(receipt.retracted);
+  assert.equal(JSON.stringify(receipt).includes('private-original-receipt-body'), false);
+  assert.equal('fingerprint' in receipt, false);
+  grant.actions = ['send'];
+  assert.throws(() => state.messageReceipt('alex', scope, 'source'), /scope_denied/);
+});
+
 test('read positions are private to the authenticated member and require read, not send', () => {
   const { state } = setup(), first = source(state);
   const second = state.createMessage('alex', scope, 'second', 'second').message;

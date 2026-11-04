@@ -91,6 +91,10 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
   const service = server(async (request, response, url) => {
     if (url.pathname === '/health' && request.method === 'GET') { respond(response, 200, { service: 'control', pid: process.pid, mode: 'development-fixture' }); return; }
     const actor = state.authenticate(bearer(request));
+    if (url.pathname === '/messages/receipt' && request.method === 'GET') {
+      const scope = scopeValue(Object.fromEntries(url.searchParams));
+      respond(response, 200, { message: state.messageReceipt(actor, scope, stringValue(url.searchParams.get('clientEventId'), 'clientEventId', 128)) }); return;
+    }
     if (url.pathname === '/read-position' && request.method === 'POST') {
       const body = await jsonBody(request);
       state.authenticate(bearer(request));

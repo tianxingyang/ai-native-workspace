@@ -96,7 +96,10 @@ fn permitted(path: &str, body: &Option<Value>) -> bool {
                             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
                 });
     }
-    path == "/session" || path.starts_with("/messages?") || path.starts_with("/runs?")
+    path == "/session"
+        || path.starts_with("/messages?")
+        || path.starts_with("/messages/receipt?")
+        || path.starts_with("/runs?")
 }
 
 #[tauri::command]
@@ -306,6 +309,8 @@ mod tests {
             &Some(json!({"messageId":"msg_123"}))
         ));
         assert!(!permitted("/read-position", &None));
+        assert!(permitted("/messages/receipt?clientEventId=test", &None));
+        assert!(!permitted("/messages/receipt", &Some(json!({}))));
         assert!(permitted("/runs/run_123/cancel", &Some(json!({}))));
         assert!(permitted("/messages/msg_123/edit", &Some(json!({}))));
         assert!(permitted("/messages/msg_123/retract", &Some(json!({}))));

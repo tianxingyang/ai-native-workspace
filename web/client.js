@@ -34,6 +34,10 @@ export class Client {
     return { messages: messages.messages, runs: runs.runs, readThroughMessageId: messages.readThroughMessageId };
   }
   markRead(scope, messageId) { return this.request('/read-position', { conversationId: scope.conversationId, threadId: scope.threadId, messageId }); }
+  receipt(scope, clientEventId) {
+    const query = new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId, clientEventId });
+    return this.request(`/messages/receipt?${query}`);
+  }
   send(scope, text, clientEventId, replyToMessageId) { return this.request('/messages', { conversationId: scope.conversationId, threadId: scope.threadId, text, clientEventId, ...(replyToMessageId ? { replyToMessageId } : {}) }); }
   cancel(runId) { return this.request(`/runs/${encodeURIComponent(runId)}/cancel`, {}); }
   change(messageId, kind, expectedRevision, clientEventId, text) {
