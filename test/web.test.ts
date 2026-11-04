@@ -15,6 +15,13 @@ test('local web demo serves locked-down assets, separate Worker, and authenticat
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.match(await response.text(), /CoSeat/);
   assert.equal((await fetch(`${demo.url}/client.js`)).status, 200);
+  for (const path of ['/presentation.js', '/locales/zh-CN.js']) {
+    const asset = await fetch(`${demo.url}${path}`);
+    assert.equal(asset.status, 200); assert.match(asset.headers.get('content-type')!, /text\/javascript/);
+    assert.equal(asset.headers.get('cache-control'), 'no-store');
+    assert.equal((await fetch(`${demo.url}${path}`, { headers: { origin: 'https://untrusted.invalid' } })).status, 403);
+  }
+  assert.equal((await fetch(`${demo.url}/locales/unknown.js`)).status, 401);
   assert.equal((await fetch(`${demo.url}/package.json`)).status, 401);
   assert.equal((await fetch(`${demo.url}/`, { headers: { origin: 'https://untrusted.invalid' } })).status, 403);
   const rebindingStatus = await new Promise<number | undefined>((resolve, reject) => {

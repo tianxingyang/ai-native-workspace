@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test --test-concurrency=1 dist/test/*.test.js",
+    "test": "npm run build && node --test --test-concurrency=1 dist/test/*.test.js web-test/*.test.mjs",
     "demo": "npm run build && node dist/scripts/demo.js",
     "dev:control": "node dist/src/control/main.js --dev-fixture",
     "dev:worker": "node dist/src/worker/main.js --dev-fixture",
@@ -17,7 +17,8 @@
     "private:backup": "node dist/scripts/backup.js",
     "demo:private": "npm run build && node dist/scripts/private-demo.js",
     "demo:im": "npm run build && node dist/scripts/web-demo.js",
-    "check:web": "node --check web/app.js && node --check web/client.js",
+    "check:web": "node --check web/app.js && node --check web/client.js && node --check web/presentation.js && node --check web/locales/zh-CN.js",
+    "test:presentation": "node --test web-test/presentation.test.mjs",
     "test:browser": "npm run build && playwright test",
     "desktop:prepare": "npm run build && node scripts/prepare-desktop.mjs",
     "desktop:build": "tauri build",
