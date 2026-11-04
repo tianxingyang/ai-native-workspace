@@ -17,6 +17,16 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
     // Body reads and idle long polls await I/O: recheck credentials immediately before each operation.
     const commit = <T>(fn: () => T) => engine.commit(() => { state.authenticate(token); return fn(); });
     const guard = (runId: string) => engine.guardTool(actor, stringValue(request.headers['x-coseat-instance'], 'instance', 128), stringValue(request.headers['x-coseat-lease'], 'lease', 128), runId);
+    if (url.pathname === '/memberships' && request.method === 'GET') {
+      const scope = scopeValue(Object.fromEntries(url.searchParams));
+      respond(response, 200, commit(() => state.membershipRoster(actor, scope))); return;
+    }
+    if (url.pathname === '/memberships/remove' && body) {
+      const value = commit(() => engine.removeScopeMember(actor, stringValue(body.targetMemberId, 'target_member_id', 128), scopeValue(body),
+        body.expectedRevision as number, stringValue(body.clientEventId, 'client_event_id', 128)));
+      // Management responses contain membership metadata, never message/run contents.
+      respond(response, 200, { change: value.change, duplicate: value.duplicate }); return;
+    }
     if (url.pathname === '/sync' && request.method === 'GET') {
       const scope = scopeValue(Object.fromEntries(url.searchParams));
       const value = commit(() => { state.authorize(actor, 'read', scope); engine.sweep(); return state.syncScope(actor, scope, url.searchParams.get('cursor') ?? undefined); });

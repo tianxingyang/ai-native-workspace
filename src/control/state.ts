@@ -4,6 +4,7 @@ import { decideParticipation } from '../participation.js';
 import { decideAuthorization, policyDigest, type AuthorizationDecision } from './authorization.js';
 import type { MessageChange } from '../contracts.js';
 import { DeliveryJournal } from './delivery.js';
+import { MembershipRegistry } from './memberships.js';
 
 export interface ControlConfig {
   members: Member[]; grants: Grant[]; tokens: Record<string, string>;
@@ -14,6 +15,7 @@ export interface ControlConfig {
 }
 export class ControlState {
   private readonly delivery = new DeliveryJournal();
+  private readonly memberships = new MembershipRegistry();
   readonly messages = new Map<string, Message>();
   readonly changes = new Map<string, MessageChange>();
   private readonly changeKeys = new Map<string, { fingerprint: string; changeId: string }>();
@@ -33,7 +35,7 @@ export class ControlState {
     return structuredClone({ messages: [...this.messages], runs: [...this.runs], approvals: [...this.approvals],
       decisions: this.decisions, audit: this.audit.slice(-1000), messageKeys: [...this.messageKeys],
       claims: [...this.claims], resultKeys: [...this.resultKeys], toolCalls: [...this.toolCalls],
-      changes: [...this.changes], changeKeys: [...this.changeKeys], contextRevisions: [...this.contextRevisions], readPositions: [...this.readPositions], delivery: this.delivery.snapshot() });
+      changes: [...this.changes], changeKeys: [...this.changeKeys], contextRevisions: [...this.contextRevisions], readPositions: [...this.readPositions], delivery: this.delivery.snapshot(), memberships: this.memberships.snapshot() });
   }
   restore(data: ReturnType<ControlState['snapshot']>): void {
     const restoreMap = <K, V>(map: Map<K, V>, entries: [K, V][]) => { map.clear(); for (const [key, value] of entries) map.set(key, value); };
@@ -44,6 +46,7 @@ export class ControlState {
     restoreMap(this.contextRevisions, data.contextRevisions ?? []);
     restoreMap(this.readPositions, data.readPositions ?? []);
     this.delivery.restore(data.delivery);
+    this.memberships.restore(data.memberships);
     this.decisions.splice(0, this.decisions.length, ...data.decisions);
     this.restoreAudit(data.audit);
   }
@@ -73,7 +76,38 @@ export class ControlState {
     return grant;
   }
   authorization(actorId: string, action: Action, scope: Scope, bound?: { id: string; revision: number }): AuthorizationDecision {
-    return decideAuthorization(this.config, actorId, action, scope, this.now(), bound);
+    const memberships = Object.fromEntries(this.config.members.map(member => [member.id, this.memberScopes(member.id)]));
+    return decideAuthorization({ ...this.config, memberships }, actorId, action, scope, this.now(), bound);
+  }
+  memberScopes(memberId: string): Scope[] {
+    return this.memberships.scopes(memberId, this.config.memberships[memberId] ?? []);
+  }
+  membershipRoster(actorId: string, scope: Scope) {
+    this.authorize(actorId, 'manage_resource', scope);
+    const members = this.config.members.filter(member => this.memberScopes(member.id).some(s => s.conversationId === scope.conversationId && s.threadId === scope.threadId));
+    return { ...scope, revision: this.memberships.revision(scope), members };
+  }
+  removeScopeMember(actorId: string, targetMemberId: string, scope: Scope, expectedRevision: number, clientEventId: string) {
+    // Management of membership is independent of permission to read private content.
+    this.authorize(actorId, 'manage_resource', scope);
+    const result = this.memberships.remove(actorId, targetMemberId, scope, expectedRevision, clientEventId, this.config.memberships[targetMemberId] ?? [], this.now());
+    const affectedRunIds: string[] = [];
+    if (!result.duplicate) {
+      this.contextRevisions.set(JSON.stringify([scope.conversationId, scope.threadId]), this.contextRevision(scope) + 1);
+      for (const run of this.runs.values()) {
+        if (run.work.route.conversationId !== scope.conversationId || run.work.route.threadId !== scope.threadId) continue;
+        // A stopped run may still be waiting to rebuild after an earlier edit.
+        run.rebuildAfterInvalidation = false;
+        if (terminal(run.status)) continue;
+        run.invalidatedBy = result.change.id;
+        if (run.status !== 'unknown') run.status = 'cancel_requested';
+        affectedRunIds.push(run.id);
+      }
+      for (const message of this.messages.values()) if (message.origin === 'research' && message.conversationId === scope.conversationId && message.threadId === scope.threadId) {
+        message.invalidated = true; message.text = ''; delete message.result;
+      }
+    }
+    return { ...result, affectedRunIds };
   }
   visible(actorId: string, scope: Scope): boolean {
     try { this.authorize(actorId, 'read', scope); return true; } catch { return false; }

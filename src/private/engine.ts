@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ControlState, type ControlConfig } from '../control/state.js';
-import { ApiError, objectValue, requireCondition, stringValue, terminal, type Run, type RuntimeEvent, type WorkPackage } from '../contracts.js';
+import { ApiError, objectValue, requireCondition, stringValue, terminal, type Run, type RuntimeEvent, type Scope, type WorkPackage } from '../contracts.js';
 import { SnapshotStore } from './store.js';
 
 interface Lease { id: string; runId: string; memberId: string; instanceId: string; expiresAt: number; cancel: boolean; finished: boolean }
@@ -82,7 +82,7 @@ export class PrivateEngine {
   poll(actor: string, instanceId: string): Delivery {
     this.agent(actor);
     const actions = ['read', 'send', 'claim', 'request_approval'] as const;
-    const scope = this.state.config.memberships[actor]?.find(scope => actions.every(action => this.state.authorization(actor, action, scope).allowed));
+    const scope = this.state.memberScopes(actor).find(scope => actions.every(action => this.state.authorization(actor, action, scope).allowed));
     requireCondition(scope, 403, 'worker_poll_denied');
     for (const action of actions) this.state.authorize(actor, action, scope);
     this.sweep();
@@ -148,6 +148,19 @@ export class PrivateEngine {
       }
     }
     this.state.rebuildInvalidated();
+    return result;
+  }
+  removeScopeMember(actor: string, targetMemberId: string, scope: Scope, expectedRevision: number, clientEventId: string) {
+    const result = this.state.removeScopeMember(actor, targetMemberId, scope, expectedRevision, clientEventId);
+    for (const id of result.affectedRunIds) {
+      const run = this.state.runs.get(id)!, lease = [...this.leases.values()].find(l => l.runId === id);
+      if (lease) {
+        lease.cancel = true;
+        if (run.memberId === targetMemberId) { run.status = 'unknown'; run.error = 'membership_removed_reconciliation_required'; }
+      } else if (run.status !== 'unknown') {
+        run.status = 'stopped'; run.stopEvidence = { scope: 'runtime_session_not_created', executionStarted: false };
+      }
+    }
     return result;
   }
   notStarted(actor: string, instanceId: string, leaseId: string) {
