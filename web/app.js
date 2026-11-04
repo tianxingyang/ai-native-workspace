@@ -281,6 +281,11 @@ async function sync() {
     for (const [id, room] of state.rooms) {
       if (room.pending?.status === 'failed' && !authorized('send', room)) void reconcilePending(room, id);
     }
+    updateMessageChange();
+    if (messageChange?.submittedText !== undefined && !messageChange.sending && !messageChange.autoChecked
+        && (messageChange.targetRetracted || !authorized('send', state.rooms.get(messageChange.roomId)))) {
+      messageChange.autoChecked = true; void submitMessageChange(true);
+    }
     state.lastSync = Date.now(); setConnection('ok'); $('sync-error').hidden = true;
     return true;
   } catch (error) {
@@ -306,7 +311,16 @@ function applySnapshot(room, data, selected) {
   const before = new Map(room.runs.map(run => [run.id, run.status])), firstLoad = !room.loaded;
   room.messages = data.messages; room.runs = data.runs; room.loaded = true;
   applyReadPosition(room, data.readThroughMessageId);
-  if (messageChange?.roomId === key(room.scope) && room.messages.find(m => m.id === messageChange.messageId)?.retracted) closeMessageChange();
+  if (messageChange?.roomId === key(room.scope) && room.messages.find(m => m.id === messageChange.messageId)?.retracted) {
+    if (messageChange.submittedText === undefined) closeMessageChange();
+    else {
+      // A tombstone is not proof that this particular operation was received.
+      // Keep its identity for a read-only check, but discard the withdrawn body.
+      messageChange.targetRetracted = true; messageChange.submittedText = '';
+      $('change-text').value = ''; $('change-text').hidden = true; $('change-label').hidden = true;
+      $('change-help').textContent = '消息已撤回，仍需核对该次变更。核对不会恢复正文或重新提交。';
+    }
+  }
   for (const run of room.runs) if (SETTLED.has(run.status)) state.cancels.delete(run.id);
   // Retry only a previously visible target, even after switching rooms. Never
   // advance to newer background messages merely because a sync received them.
@@ -614,8 +628,11 @@ async function cancelRun(id) {
 }
 
 function closeMessageChange() {
+  const wasOpen = $('message-change').open;
   messageChange = null;
   $('message-change').close(); $('change-text').value = ''; $('change-error').textContent = '';
+  // The invoking edit button may have disappeared after send loss or retraction.
+  if (wasOpen && !$('app').hidden) $('timeline').focus({ preventScroll: true });
 }
 function openMessageChange(room, message, kind) {
   messageChange = { roomId: key(room.scope), messageId: message.id, revision: message.revision, kind, id: crypto.randomUUID(), sending: false, submittedText: undefined };
@@ -629,37 +646,67 @@ function openMessageChange(room, message, kind) {
 }
 $('change-close').addEventListener('click', closeMessageChange);
 $('message-change').addEventListener('cancel', event => { if (messageChange?.sending) event.preventDefault(); else closeMessageChange(); });
-$('change-form').addEventListener('submit', async event => {
-  event.preventDefault(); const change = messageChange, client = state.client;
+function updateMessageChange() {
+  const change = messageChange; if (!change || change.sending) return;
+  const allowed = authorized('send', state.rooms.get(change.roomId)), submitted = change.submittedText !== undefined;
+  $('change-save').disabled = change.conflict || (!submitted && !allowed);
+  $('change-save').textContent = submitted ? (allowed && !change.targetRetracted ? '重试同一变更' : '核对变更结果') : change.kind === 'edit' ? '保存修改' : '确认撤回';
+  if (allowed && !change.targetRetracted) change.autoChecked = false;
+}
+function acceptMessageChange(change, result) {
+  const latest = state.rooms.get(change.roomId);
+  if (!latest || !authorized('read', latest)) { expireReadScopes(); return; }
+  cancellationRevision++;
+  latest.messages = latest.messages.map(m => m.id === result.message.id && m.revision <= result.message.revision ? result.message : m);
+  // Hide cached derived output immediately, before the next snapshot.
+  latest.messages = latest.messages.map(m => m.origin === 'research' ? { ...m, text: '', result: undefined, invalidated: true } : m);
+  closeMessageChange(); renderMessages(); renderPane(); renderRooms();
+  announce(result.message.revision > result.change.revision
+    ? '该次消息变更已收到，消息随后又有变更，当前显示最新记录。'
+    : '消息变更已收到，正在核对相关研究的停止与应用状态。');
+  void sync();
+}
+async function submitMessageChange(receiptOnly = false) {
+  const change = messageChange, client = state.client;
   if (!change || !client || change.sending) return;
   const room = state.rooms.get(change.roomId);
-  if (!room || !authorized('read', room) || !authorized('send', room)) { closeMessageChange(); return; }
+  if (!room || !authorized('read', room)) { closeMessageChange(); return; }
+  const retry = change.submittedText !== undefined;
+  if (!retry && !authorized('send', room)) { updateMessageChange(); return; }
   const text = change.submittedText ?? $('change-text').value.trim();
-  if (change.kind === 'edit' && !text) return;
+  if (change.kind === 'edit' && !text && !change.targetRetracted) return;
   change.submittedText = text; change.sending = true;
+  const restoreFocus = document.activeElement === $('change-save');
   $('change-text').disabled = true; $('change-save').disabled = true; $('change-close').disabled = true;
+  $('change-error').textContent = retry ? '正在核对变更结果…' : '正在提交变更…';
+  $('change-error').tabIndex = -1;
+  if (restoreFocus) $('change-error').focus();
   try {
+    if (retry) {
+      const { receipt } = await client.changeReceipt(room.scope, change.id);
+      if (client !== state.client || messageChange !== change) return;
+      if (receipt) { acceptMessageChange(change, receipt); return; }
+    }
+    if (receiptOnly || change.targetRetracted || !authorized('send', state.rooms.get(change.roomId))) {
+      $('change-error').textContent = '暂未查到该次变更，请求仍可能到达。保留待确认；当前不会重新提交。'; return;
+    }
     const result = await client.change(change.messageId, change.kind, change.revision, change.id, text);
     if (client !== state.client || messageChange !== change) return;
-    cancellationRevision++;
-    const latest = state.rooms.get(change.roomId);
-    if (latest) {
-      latest.messages = latest.messages.map(m => m.id === result.message.id && m.revision <= result.message.revision ? result.message : m);
-      // Hide cached derived output immediately, before the next snapshot.
-      latest.messages = latest.messages.map(m => m.origin === 'research' ? { ...m, text: '', result: undefined, invalidated: true } : m);
-    }
-    closeMessageChange(); renderMessages(); renderPane(); renderRooms();
-    announce('消息变更已收到，正在核对相关研究的停止与应用状态。'); await sync();
+    acceptMessageChange(change, result);
   } catch (error) {
     if (client !== state.client || messageChange !== change) return;
-    if (error instanceof ApiError && [401, 403].includes(error.status)) { invalidate(error); return; }
-    const conflict = error instanceof ApiError && error.status === 409;
-    $('change-error').textContent = conflict ? '消息版本已变化，请返回讨论并重新打开最新消息。' : errorText(error);
-    $('change-save').disabled = conflict; $('change-save').textContent = '重试同一变更';
-    $('change-close').disabled = false; change.sending = false;
-    if (conflict) void sync();
+    if (error instanceof ApiError && error.status === 401) { invalidate(error); return; }
+    change.conflict = error instanceof ApiError && error.status === 409;
+    $('change-error').textContent = change.conflict ? '消息版本已变化，请返回讨论并重新打开最新消息。' : errorText(error);
+    if (change.conflict || (error instanceof ApiError && error.status === 403)) void sync();
+  } finally {
+    if (client === state.client && messageChange === change) {
+      change.sending = false; $('change-close').disabled = false; updateMessageChange();
+      if (restoreFocus && document.activeElement === $('change-error')) ($('change-save').disabled ? $('change-close') : $('change-save')).focus();
+    }
   }
-});
+}
+$('change-form').addEventListener('submit', event => { event.preventDefault(); void submitMessageChange(); });
 
 function lapse(grant) {
   return grant.reason === 'expired' ? `已于 ${clock(grant.until)} 到期` : grant.reason === 'withdrawn' ? '已被收回' : '未授权';

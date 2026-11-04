@@ -99,6 +99,7 @@ fn permitted(path: &str, body: &Option<Value>) -> bool {
     path == "/session"
         || path.starts_with("/messages?")
         || path.starts_with("/messages/receipt?")
+        || path.starts_with("/messages/change-receipt?")
         || path.starts_with("/runs?")
 }
 
@@ -311,6 +312,11 @@ mod tests {
         assert!(!permitted("/read-position", &None));
         assert!(permitted("/messages/receipt?clientEventId=test", &None));
         assert!(!permitted("/messages/receipt", &Some(json!({}))));
+        assert!(permitted(
+            "/messages/change-receipt?clientEventId=test",
+            &None
+        ));
+        assert!(!permitted("/messages/change-receipt", &Some(json!({}))));
         assert!(permitted("/runs/run_123/cancel", &Some(json!({}))));
         assert!(permitted("/messages/msg_123/edit", &Some(json!({}))));
         assert!(permitted("/messages/msg_123/retract", &Some(json!({}))));

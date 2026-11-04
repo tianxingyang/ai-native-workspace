@@ -423,6 +423,133 @@ test('editing running research rebuilds its session; retract removes content and
   await expect(page.getByRole('button', { name: '编辑消息', exact: true })).toHaveCount(0);
 });
 
+test('lost edit acknowledgement reconciles after speaking loss without replacing a newer device edit', async ({ page }) => {
+  await connect(page); await send(page, '编辑核对原文'); let posts = 0, receipts = 0;
+  await page.route(url => url.pathname === '/messages/change-receipt', async route => { receipts++; await route.continue(); });
+  await page.route('**/messages/*/edit', async route => {
+    posts++; const response = await forward(route), result = await response.json();
+    demo.engine.commit(() => demo.engine.changeMessage('demo-owner', result.message.id, 'edit', 2, 'newer-device-edit', '另一设备的最新版本'));
+    demo.engine.state.config.grants.find(g => g.memberId === 'demo-owner' && g.conversationId === '产品讨论').actions = ['read'];
+    await route.abort('failed');
+  });
+  await page.getByRole('button', { name: '编辑消息', exact: true }).click();
+  await page.getByLabel('消息内容', { exact: true }).fill('已接收但随后被更新的版本');
+  await page.getByRole('button', { name: '保存修改', exact: true }).click();
+  await expect.poll(() => receipts).toBeGreaterThan(0);
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await expect(page.locator('.message-text')).toHaveText('另一设备的最新版本');
+  await expect(page.locator('#announcement')).toContainText('消息随后又有变更');
+  await expect(page.locator('#timeline')).toBeFocused();
+  await expect(page.locator('#connect')).toBeHidden(); expect(posts).toBe(1);
+  expect(demo.engine.state.changes.size).toBe(2);
+});
+
+test('missing change receipt preserves uncertainty and explicit retry reuses its original id', async ({ page }) => {
+  await connect(page); await send(page, '待修改原文');
+  const grant = demo.engine.state.config.grants.find(g => g.memberId === 'demo-owner' && g.conversationId === '产品讨论');
+  const actions = [...grant.actions], ids = []; let blocked = true;
+  await page.route('**/messages/*/edit', async route => {
+    ids.push(route.request().postDataJSON().clientEventId);
+    if (blocked) { blocked = false; grant.actions = ['read']; return route.abort('failed'); }
+    await route.continue();
+  });
+  await page.getByRole('button', { name: '编辑消息', exact: true }).click();
+  await page.getByLabel('消息内容', { exact: true }).fill('同一变更重试后正文');
+  await page.getByRole('button', { name: '保存修改', exact: true }).click();
+  await expect(page.locator('#change-error')).toContainText('暂未查到该次变更');
+  const check = page.getByRole('button', { name: '核对变更结果', exact: true });
+  await check.click(); await expect(check).toBeEnabled(); await expect(check).toBeFocused();
+  expect(ids).toHaveLength(1); expect(demo.engine.state.changes.size).toBe(0);
+  grant.actions = actions;
+  const retry = page.getByRole('button', { name: '重试同一变更', exact: true });
+  await expect(retry).toBeEnabled(); await retry.click();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await expect(page.locator('.message-text')).toHaveText('同一变更重试后正文');
+  expect(ids).toHaveLength(2); expect(ids[0]).toBe(ids[1]); expect(demo.engine.state.changes.size).toBe(1);
+});
+
+test('a delayed change receipt cannot restore an unreadable room or submit again', async ({ page }) => {
+  await connect(page); await send(page, '撤权后不应恢复的编辑正文'); let posts = 0;
+  await page.route('**/messages/*/edit', async route => { posts++; await forward(route); await route.abort('failed'); });
+  let release, received = false; const hold = new Promise(resolve => { release = resolve; });
+  await page.route(url => url.pathname === '/messages/change-receipt', async route => {
+    const response = await forward(route); received = true; await hold; await route.fulfill({ response });
+  });
+  try {
+    await page.getByRole('button', { name: '编辑消息', exact: true }).click();
+    await page.getByLabel('消息内容', { exact: true }).fill('撤权后的迟到回执正文');
+    await page.getByRole('button', { name: '保存修改', exact: true }).click();
+    await page.getByRole('button', { name: '重试同一变更', exact: true }).click();
+    await expect.poll(() => received).toBe(true); await expect(page.locator('#change-error')).toBeFocused();
+    demo.engine.state.config.grants.find(g => g.memberId === 'demo-owner' && g.conversationId === '产品讨论').revoked = true;
+    await expect(page.locator('#room-title')).toHaveText('研发讨论');
+    await expect(page.getByRole('dialog')).not.toBeVisible(); release();
+    await expect(page.locator('#change-text')).toHaveValue('');
+    await expect(page.locator('#app')).not.toContainText('撤权后的迟到回执正文');
+    await expect(page.locator('#connect')).toBeHidden(); expect(posts).toBe(1);
+  } finally { release(); }
+});
+
+for (const kind of ['edit', 'retract']) test(`a lost ${kind} receipt survives a retracted snapshot while discarding withdrawn text`, async ({ page }) => {
+  await connect(page); await send(page, '需要从编辑框移除的撤回原文'); let posts = 0, received = false;
+  let release; const hold = new Promise(resolve => { release = resolve; });
+  await page.route(url => url.pathname === '/messages/change-receipt', async route => {
+    const response = await forward(route); received = true; await hold; await route.fulfill({ response });
+  });
+  await page.route(`**/messages/*/${kind}`, async route => {
+    posts++; const response = await forward(route), result = await response.json();
+    if (kind === 'edit') demo.engine.commit(() => demo.engine.changeMessage('demo-owner', result.message.id, 'retract', 2, 'other-device-retract'));
+    else demo.engine.state.config.grants.find(g => g.memberId === 'demo-owner' && g.conversationId === '产品讨论').actions = ['read'];
+    await route.abort('failed');
+  });
+  try {
+    await page.getByRole('button', { name: kind === 'edit' ? '编辑消息' : '撤回消息', exact: true }).click();
+    if (kind === 'edit') await page.getByLabel('消息内容', { exact: true }).fill('被撤回的编辑版本');
+    await page.getByRole('button', { name: kind === 'edit' ? '保存修改' : '确认撤回', exact: true }).click();
+    await expect.poll(() => received).toBe(true);
+    await expect(page.getByRole('dialog')).toBeVisible(); await expect(page.locator('#change-text')).toHaveValue('');
+    await expect(page.locator('#change-text')).toBeHidden(); release();
+    await expect(page.getByRole('dialog')).not.toBeVisible();
+    await expect(page.locator('.message-text')).toHaveText('消息已撤回');
+    await expect(page.locator('#announcement')).toContainText('消息变更已收到');
+    await expect(page.locator('#timeline')).toBeFocused(); expect(posts).toBe(1);
+  } finally { release(); }
+});
+
+test('another device retracting a message does not confirm an unreceived edit', async ({ page }) => {
+  await connect(page); await send(page, '被另一设备撤回的正文'); let posts = 0;
+  const source = [...demo.engine.state.messages.values()][0];
+  await page.route('**/messages/*/edit', async route => {
+    posts++; demo.engine.commit(() => demo.engine.changeMessage('demo-owner', source.id, 'retract', 1, 'independent-retraction'));
+    await route.abort('failed');
+  });
+  await page.getByRole('button', { name: '编辑消息', exact: true }).click();
+  await page.getByLabel('消息内容', { exact: true }).fill('从未接收的编辑');
+  await page.getByRole('button', { name: '保存修改', exact: true }).click();
+  await expect(page.locator('#change-error')).toContainText('暂未查到该次变更');
+  await expect(page.locator('#change-text')).toHaveValue('');
+  await page.getByRole('button', { name: '核对变更结果', exact: true }).click();
+  await expect(page.getByRole('button', { name: '核对变更结果', exact: true })).toBeEnabled();
+  expect(posts).toBe(1); expect(demo.engine.state.changes.size).toBe(1);
+});
+
+test('send-only edit denial preserves readable conversations and permits receipt checks', async ({ page }) => {
+  await connect(page); await send(page, '仍可阅读的原文');
+  await page.route('**/messages/*/edit', async route => {
+    demo.engine.state.config.grants.find(g => g.memberId === 'demo-owner' && g.conversationId === '产品讨论').actions = ['read'];
+    await route.continue();
+  });
+  await page.getByRole('button', { name: '编辑消息', exact: true }).click();
+  await page.getByLabel('消息内容', { exact: true }).fill('未获授权的编辑');
+  await page.getByRole('button', { name: '保存修改', exact: true }).click();
+  await expect(page.getByRole('button', { name: '核对变更结果', exact: true })).toBeEnabled();
+  await expect(page.locator('#change-error')).toContainText('暂未查到该次变更');
+  await page.getByRole('button', { name: '返回讨论', exact: true }).click();
+  await expect(page.locator('.message-text')).toHaveText('仍可阅读的原文');
+  await expect(page.locator('#timeline')).toBeFocused();
+  await expect(page.locator('#connect')).toBeHidden(); expect(demo.engine.state.changes.size).toBe(0);
+});
+
 test('lost edit response retries one change and a concurrent version conflict never overwrites newer content', async ({ page }) => {
   await connect(page); await send(page, '原始消息');
   let once = true;

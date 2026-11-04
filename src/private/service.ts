@@ -21,6 +21,10 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
       const scope = scopeValue(Object.fromEntries(url.searchParams));
       respond(response, 200, commit(() => ({ message: state.messageReceipt(actor, scope, stringValue(url.searchParams.get('clientEventId'), 'clientEventId', 128)) }))); return;
     }
+    if (url.pathname === '/messages/change-receipt' && request.method === 'GET') {
+      const scope = scopeValue(Object.fromEntries(url.searchParams));
+      respond(response, 200, commit(() => ({ receipt: state.messageChangeReceipt(actor, scope, stringValue(url.searchParams.get('clientEventId'), 'clientEventId', 128)) }))); return;
+    }
     if (url.pathname === '/read-position' && body) {
       respond(response, 200, commit(() => state.advanceReadPosition(actor, scopeValue(body), stringValue(body.messageId, 'messageId', 128)))); return;
     }
