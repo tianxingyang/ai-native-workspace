@@ -137,8 +137,8 @@ export class PrivateEngine {
     }
     return { status: run.status, publishedReceiptId: run.receiptId ?? null };
   }
-  changeMessage(actor: string, messageId: string, kind: 'edit' | 'retract', expectedRevision: number, clientEventId: string, text?: string) {
-    const result = this.state.changeMessage(actor, messageId, kind, expectedRevision, clientEventId, text);
+  changeMessage(actor: string, messageId: string, kind: 'edit' | 'retract', expectedRevision: number, clientEventId: string, text?: string, expectedMembershipGeneration?: unknown) {
+    const result = this.state.changeMessage(actor, messageId, kind, expectedRevision, clientEventId, text, expectedMembershipGeneration);
     if (!result.duplicate) for (const id of result.change.affectedRunIds) {
       const run = this.state.runs.get(id)!;
       const lease = [...this.leases.values()].find(l => l.runId === id);
@@ -152,16 +152,24 @@ export class PrivateEngine {
   }
   removeScopeMember(actor: string, targetMemberId: string, scope: Scope, expectedRevision: number, clientEventId: string) {
     const result = this.state.removeScopeMember(actor, targetMemberId, scope, expectedRevision, clientEventId);
-    for (const id of result.affectedRunIds) {
+    this.cancelMembershipRuns(result.affectedRunIds, targetMemberId);
+    return result;
+  }
+  addScopeMember(actor: string, targetMemberId: string, scope: Scope, expectedRevision: number, clientEventId: string, grant?: unknown) {
+    const result = this.state.addScopeMember(actor, targetMemberId, scope, expectedRevision, clientEventId, grant);
+    this.cancelMembershipRuns(result.affectedRunIds);
+    return result;
+  }
+  private cancelMembershipRuns(ids: string[], removedMember?: string) {
+    for (const id of ids) {
       const run = this.state.runs.get(id)!, lease = [...this.leases.values()].find(l => l.runId === id);
       if (lease) {
         lease.cancel = true;
-        if (run.memberId === targetMemberId) { run.status = 'unknown'; run.error = 'membership_removed_reconciliation_required'; }
+        if (run.memberId === removedMember) { run.status = 'unknown'; run.error = 'membership_removed_reconciliation_required'; }
       } else if (run.status !== 'unknown') {
         run.status = 'stopped'; run.stopEvidence = { scope: 'runtime_session_not_created', executionStarted: false };
       }
     }
-    return result;
   }
   notStarted(actor: string, instanceId: string, leaseId: string) {
     const lease = this.owned(actor, instanceId, leaseId), run = this.state.runs.get(lease.runId)!;

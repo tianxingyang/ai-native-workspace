@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { PROTOCOL_VERSION, requireCondition, resultValue, terminal, type Action, type AuthorizationPolicy, type Grant, type Member, type Message, type ResearchResult, type Run, type RuntimeEvent, type Scope, type Source, type WorkPackage } from '../contracts.js';
+import { PROTOCOL_VERSION, objectValue, requireCondition, resultValue, terminal, type Action, type AuthorizationPolicy, type Grant, type Member, type Message, type ResearchResult, type Run, type RuntimeEvent, type Scope, type Source, type WorkPackage } from '../contracts.js';
 import { decideParticipation } from '../participation.js';
-import { decideAuthorization, policyDigest, type AuthorizationDecision } from './authorization.js';
+import { actionList, decideAuthorization, policyDigest, type AuthorizationDecision } from './authorization.js';
 import type { MessageChange } from '../contracts.js';
 import { DeliveryJournal } from './delivery.js';
 import { MembershipRegistry } from './memberships.js';
-import { ConversationRegistry, creationRuleValue, conversationInput, digest, type ConversationCreationRule, type GrantSource } from './conversations.js';
+import { ConversationRegistry, creationRuleValue, conversationInput, digest, type ConversationCreationRule, type GrantSource, type InitialGrant } from './conversations.js';
 
 export interface ControlConfig {
   members: Member[]; grants: Grant[]; tokens: Record<string, string>;
@@ -75,7 +75,7 @@ export class ControlState {
   authorize(actorId: string, action: Action, scope: Scope, bound?: { id: string; revision: number }): Grant {
     const { allowed, reason, policyVersion, policyDigest, grantIds, grant } = this.authorization(actorId, action, scope, bound);
     // Resolve audit metadata independently of expiry passing between two clock reads.
-    const grants = [...this.config.grants, ...this.conversations.effectiveGrants(() => true)];
+    const grants = [...this.config.grants, ...this.conversations.allGrants()];
     const grantRevisions = grantIds.map(id => ({ id, revision: grants.find(g => g.id === id)!.revision }));
     this.audit.push({ actorId, action, allowed, reason, policyVersion, policyDigest, grantIds, grantRevisions, resource: { conversationId: scope.conversationId, threadId: scope.threadId }, at: this.now() });
     requireCondition(allowed && grant, 403, 'scope_denied');
@@ -92,80 +92,148 @@ export class ControlState {
   memberScopes(memberId: string): Scope[] {
     return this.memberships.scopes(memberId, this.configuredScopes(memberId));
   }
+  membershipGeneration(memberId: string, scope: Scope): string { return this.memberships.generation(memberId, scope); }
+  private requireMembershipGeneration(memberId: string, scope: Scope, expected: unknown): void {
+    requireCondition((expected ?? 'initial') === this.membershipGeneration(memberId, scope), 409, 'membership_generation_conflict');
+  }
   private validGrantSource(source: GrantSource, now: number): boolean {
     if (digest(this.config.conversationCreation) !== source.ruleDigest || policyDigest(this.config.policy) !== source.policyDigest) return false;
     // Only static source Grants are eligible. Never recurse through a dynamic grant.
     const memberships = Object.fromEntries(this.config.members.map(member => [member.id, this.memberships.scopes(member.id, this.config.memberships[member.id] ?? [])]));
     return source.bindings.every(binding => {
-      const decision = decideAuthorization({ ...this.config, memberships }, source.actorId, binding.action, source.scope, now, binding);
+      const decision = decideAuthorization({ ...this.config, memberships, grants: this.staticGrants() }, source.actorId, binding.action, source.scope, now, binding);
       return decision.allowed && digest(decision.grant) === binding.digest;
     });
   }
   private effectiveGrants(now = this.now()): Grant[] {
-    return [...this.config.grants, ...this.conversations.effectiveGrants(source => this.validGrantSource(source, now))];
+    return [...this.staticGrants(), ...this.conversations.effectiveGrants(source => this.validGrantSource(source, now), (id, scope) => this.memberships.generation(id, scope))];
   }
+  private staticGrants(): Grant[] { return this.config.grants.filter(g => g.effect === 'deny' || this.memberships.generation(g.memberId, g) === 'initial'); }
   conversationMetadata(scope: Scope) {
     const conversation = this.conversations.metadata(scope);
     return conversation ? { title: conversation.title, kind: conversation.kind } : undefined;
   }
-  createConversation(actorId: string, raw: unknown) {
+  private creationAuthority(actorId: string, issuing: boolean) {
     requireCondition(this.config.conversationCreation, 403, 'conversation_creation_disabled');
     const rule = creationRuleValue(this.config.conversationCreation), scope = rule.authorityScope;
+    requireCondition(!this.conversations.metadata(scope), 403, 'static_creation_authority_required');
     const creator = this.authorize(actorId, 'manage_workspace', scope);
-    const input = conversationInput(raw);
     const bindings: GrantSource['bindings'] = [{ action: 'manage_workspace', id: creator.id, revision: creator.revision, digest: digest(creator) }];
     let deadline = creator.expiresAt;
-    if (input.initialGrants.length) {
+    if (issuing) {
       const issuer = this.authorize(actorId, 'grant_permissions', scope);
       bindings.push({ action: 'grant_permissions', id: issuer.id, revision: issuer.revision, digest: digest(issuer) });
       deadline = Math.min(deadline, issuer.expiresAt);
     }
     requireCondition(bindings.every(binding => this.config.grants.some(grant => grant.id === binding.id)), 403, 'static_creation_authority_required');
+    const source: GrantSource = { actorId, scope, bindings, ruleDigest: digest(this.config.conversationCreation), policyDigest: policyDigest(this.config.policy) };
+    return { rule, scope, source, deadline };
+  }
+  private eligibleMember(id: string, scope: Scope): boolean {
+    return this.config.members.some(member => member.id === id) && this.memberships.scopes(id, this.config.memberships[id] ?? [])
+      .some(s => s.conversationId === scope.conversationId && s.threadId === scope.threadId);
+  }
+  private validateIssuedGrant(grant: InitialGrant, rule: ConversationCreationRule, deadline: number, now: number) {
+    requireCondition(grant.actions.every(action => rule.allowedActions.includes(action)), 403, 'conversation_action_not_grantable');
+    requireCondition(grant.expiresAt > now && grant.expiresAt <= deadline && grant.expiresAt - now <= rule.maxGrantDurationMs, 400, 'conversation_grant_expiry_out_of_bounds');
+  }
+  conversationOptions(actorId: string) {
+    const authority = this.creationAuthority(actorId, false);
+    const issuing = this.authorization(actorId, 'grant_permissions', authority.scope).grant;
+    const canIssue = issuing && this.config.grants.some(g => g.id === issuing.id);
+    return { members: this.config.members.filter(member => this.eligibleMember(member.id, authority.scope)),
+      allowedActions: canIssue ? authority.rule.allowedActions : [],
+      expiresAt: canIssue ? Math.min(authority.deadline, issuing.expiresAt, this.now() + authority.rule.maxGrantDurationMs) : 0,
+      until: authority.deadline };
+  }
+  managementCapabilities(actorId: string) {
+    let createUntil = 0, issueUntil = 0;
+    if (this.config.conversationCreation && !this.conversations.metadata(this.config.conversationCreation.authorityScope)) {
+      const grant = this.authorization(actorId, 'manage_workspace', this.config.conversationCreation.authorityScope).grant;
+      if (grant && this.config.grants.some(g => g.id === grant.id)) {
+        createUntil = grant.expiresAt;
+        const issuer = this.authorization(actorId, 'grant_permissions', this.config.conversationCreation.authorityScope).grant;
+        if (issuer && this.config.grants.some(g => g.id === issuer.id)) issueUntil = Math.min(createUntil, issuer.expiresAt);
+      }
+    }
+    const scopes = this.memberScopes(actorId).filter((scope, index, all) => all.findIndex(s => s.conversationId === scope.conversationId && s.threadId === scope.threadId) === index)
+      .flatMap(scope => { const grant = this.authorization(actorId, 'manage_resource', scope).grant;
+        return grant ? [{ ...scope, ...this.conversationMetadata(scope), membershipGeneration: this.membershipGeneration(actorId, scope), until: grant.expiresAt }] : []; });
+    return { createUntil, issueUntil, scopes, creationVersion: digest([this.config.conversationCreation, this.config.policy,
+      this.config.grants.filter(g => g.memberId === actorId && g.conversationId === this.config.conversationCreation?.authorityScope.conversationId && g.threadId === this.config.conversationCreation?.authorityScope.threadId)]) };
+  }
+  createConversation(actorId: string, raw: unknown) {
+    // Validate authority before exposing request-specific information.
+    this.creationAuthority(actorId, false);
+    const input = conversationInput(raw), { rule, scope, source, deadline } = this.creationAuthority(actorId, input.initialGrants.length > 0);
     // Current authority is required even for an exact retry; expiry validation is
     // for new issuance, so a lost successful response remains recoverable later.
     const previous = this.conversations.prior(actorId, input);
     if (previous) return previous;
     const now = this.now();
-    requireCondition(input.memberIds.every(id => this.config.members.some(member => member.id === id)
-      && this.memberships.scopes(id, this.config.memberships[id] ?? []).some(s => s.conversationId === scope.conversationId && s.threadId === scope.threadId)), 403, 'conversation_member_unavailable');
-    for (const grant of input.initialGrants) {
-      requireCondition(grant.actions.every(action => rule.allowedActions.includes(action)), 403, 'conversation_action_not_grantable');
-      requireCondition(grant.expiresAt > now && grant.expiresAt <= deadline && grant.expiresAt - now <= rule.maxGrantDurationMs, 400, 'conversation_grant_expiry_out_of_bounds');
-    }
-    return this.conversations.create(actorId, input, { actorId, scope, bindings, ruleDigest: digest(this.config.conversationCreation), policyDigest: policyDigest(this.config.policy) }, now);
+    requireCondition(input.memberIds.every(id => this.eligibleMember(id, scope)), 403, 'conversation_member_unavailable');
+    for (const grant of input.initialGrants) this.validateIssuedGrant(grant, rule, deadline, now);
+    return this.conversations.create(actorId, input, source, now);
   }
   membershipRoster(actorId: string, scope: Scope) {
     this.authorize(actorId, 'manage_resource', scope);
     const members = this.config.members.filter(member => this.memberScopes(member.id).some(s => s.conversationId === scope.conversationId && s.threadId === scope.threadId));
-    return { ...scope, revision: this.memberships.revision(scope), members };
+    const conversation = this.conversations.metadata(scope), authority = this.conversations.authority(scope);
+    return { ...scope, ...this.conversationMetadata(scope), revision: this.memberships.revision(scope), members,
+      canAdd: Boolean(authority && this.config.conversationCreation && digest(authority) === digest(this.config.conversationCreation.authorityScope)),
+      ...(conversation?.kind === 'direct' ? { pair: conversation.memberIds } : {}) };
+  }
+  addScopeMember(actorId: string, targetMemberId: string, scope: Scope, expectedRevision: number, clientEventId: string, rawGrant?: unknown) {
+    this.authorize(actorId, 'manage_resource', scope);
+    const conversation = this.conversations.metadata(scope), authorityScope = this.conversations.authority(scope), rule = this.config.conversationCreation;
+    requireCondition(conversation && authorityScope && rule && digest(authorityScope) === digest(rule.authorityScope), 409, 'conversation_membership_unavailable');
+    let grant: InitialGrant | undefined, source: GrantSource | undefined;
+    if (rawGrant !== undefined) {
+      const value = objectValue(rawGrant), actions = actionList(value.actions);
+      requireCondition(actions.length > 0 && Number.isSafeInteger(value.expiresAt), 400, 'invalid_membership_grant');
+      grant = { targetMemberId, actions, expiresAt: Number(value.expiresAt) };
+      source = this.creationAuthority(actorId, true).source;
+    }
+    const previous = this.memberships.priorAddition(actorId, targetMemberId, scope, expectedRevision, clientEventId, grant);
+    if (previous) return { ...previous, affectedRunIds: [] as string[] };
+    requireCondition(conversation.kind === 'group' || conversation.memberIds.includes(targetMemberId), 409, 'direct_members_fixed');
+    requireCondition(conversation.memberIds.includes(targetMemberId) || conversation.memberIds.length < 20, 409, 'conversation_member_limit');
+    requireCondition(this.eligibleMember(targetMemberId, authorityScope), 403, 'conversation_member_unavailable');
+    if (grant) this.validateIssuedGrant(grant, rule, this.creationAuthority(actorId, true).deadline, this.now());
+    const result = this.memberships.add(actorId, targetMemberId, scope, expectedRevision, clientEventId, this.configuredScopes(targetMemberId), grant, this.now());
+    this.conversations.addMember(scope, targetMemberId, result.change.id, grant, source);
+    this.readPositions.delete(JSON.stringify([targetMemberId, scope.conversationId, scope.threadId]));
+    return { ...result, affectedRunIds: this.invalidateMembershipContext(scope, result.change.id) };
   }
   removeScopeMember(actorId: string, targetMemberId: string, scope: Scope, expectedRevision: number, clientEventId: string) {
     // Management of membership is independent of permission to read private content.
     this.authorize(actorId, 'manage_resource', scope);
     const result = this.memberships.remove(actorId, targetMemberId, scope, expectedRevision, clientEventId, this.configuredScopes(targetMemberId), this.now());
-    const affectedRunIds: string[] = [];
-    if (!result.duplicate) {
+    return { ...result, affectedRunIds: result.duplicate ? [] : this.invalidateMembershipContext(scope, result.change.id) };
+  }
+  private invalidateMembershipContext(scope: Scope, changeId: string): string[] {
+      const affectedRunIds: string[] = [];
       this.contextRevisions.set(JSON.stringify([scope.conversationId, scope.threadId]), this.contextRevision(scope) + 1);
       for (const run of this.runs.values()) {
         if (run.work.route.conversationId !== scope.conversationId || run.work.route.threadId !== scope.threadId) continue;
         // A stopped run may still be waiting to rebuild after an earlier edit.
         run.rebuildAfterInvalidation = false;
         if (terminal(run.status)) continue;
-        run.invalidatedBy = result.change.id;
+        run.invalidatedBy = changeId;
         if (run.status !== 'unknown') run.status = 'cancel_requested';
         affectedRunIds.push(run.id);
       }
       for (const message of this.messages.values()) if (message.origin === 'research' && message.conversationId === scope.conversationId && message.threadId === scope.threadId) {
         message.invalidated = true; message.text = ''; delete message.result;
       }
-    }
-    return { ...result, affectedRunIds };
+    return affectedRunIds;
   }
   visible(actorId: string, scope: Scope): boolean {
     try { this.authorize(actorId, 'read', scope); return true; } catch { return false; }
   }
-  createMessage(actorId: string, scope: Scope, text: string, clientEventId: string, replyToMessageId?: string): { message: Message; duplicate: boolean } {
+  createMessage(actorId: string, scope: Scope, text: string, clientEventId: string, replyToMessageId?: string, expectedMembershipGeneration?: unknown): { message: Message; duplicate: boolean } {
     this.authorize(actorId, 'send', scope);
+    this.requireMembershipGeneration(actorId, scope, expectedMembershipGeneration);
     if (replyToMessageId !== undefined) this.authorize(actorId, 'read', scope);
     const key = JSON.stringify([actorId, clientEventId]);
     // Preserve existing no-reply keys across upgrades; a reply is part of its identity.
@@ -224,8 +292,9 @@ export class ControlState {
       && change.conversationId === scope.conversationId && change.threadId === scope.threadId
       ? { change, message } : null;
   }
-  advanceReadPosition(actorId: string, scope: Scope, messageId: string): { readThroughMessageId: string } {
+  advanceReadPosition(actorId: string, scope: Scope, messageId: string, expectedMembershipGeneration?: unknown): { readThroughMessageId: string } {
     const messages = this.readMessages(actorId, scope), ids = messages.map(message => message.id);
+    this.requireMembershipGeneration(actorId, scope, expectedMembershipGeneration);
     const index = ids.indexOf(messageId);
     requireCondition(index >= 0, 404, 'read_target_unavailable');
     const key = JSON.stringify([actorId, scope.conversationId, scope.threadId]), previous = this.readPositions.get(key);
@@ -236,11 +305,12 @@ export class ControlState {
   contextRevision(scope: Scope): number {
     return this.contextRevisions.get(JSON.stringify([scope.conversationId, scope.threadId])) ?? 1;
   }
-  changeMessage(actorId: string, messageId: string, kind: 'edit' | 'retract', expectedRevision: number, clientEventId: string, text?: string) {
+  changeMessage(actorId: string, messageId: string, kind: 'edit' | 'retract', expectedRevision: number, clientEventId: string, text?: string, expectedMembershipGeneration?: unknown) {
     const source = this.messages.get(messageId);
     requireCondition(source, 404, 'message_not_found');
     this.authorize(actorId, 'read', source);
     this.authorize(actorId, 'send', source);
+    this.requireMembershipGeneration(actorId, source, expectedMembershipGeneration);
     requireCondition(source.authorId === actorId && source.origin === 'chat', 403, 'message_change_denied');
     requireCondition(Number.isSafeInteger(expectedRevision) && expectedRevision > 0, 400, 'invalid_revision');
     requireCondition(kind === 'retract' || (typeof text === 'string' && text.trim().length > 0 && text.length <= 8000), 400, 'invalid_text');

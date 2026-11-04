@@ -1,5 +1,6 @@
 import { Client, ApiError, errorText } from './client.js';
 import { presentation, text as t, applyStaticText } from './presentation.js';
+import { conversationManagement } from './conversation-management.js';
 
 document.documentElement.lang = presentation.locale;
 applyStaticText(document);
@@ -25,6 +26,8 @@ const SUGGESTIONS = ['请调研一下插件协议', '大家好，同步一下今
 
 let cancellationRevision = 0;
 let messageChange = null;
+const managementDialog = conversationManagement({ client: () => state.client, session: () => state.session, now: serverNow,
+  refresh: sync, invalidate, beforeOpen: () => closePane(false), announce });
 function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
 function button(text, fn, className = 'quiet') { const node = el('button', className, text); node.type = 'button'; node.addEventListener('click', fn); return node; }
 function icon(name, className = 'icon') {
@@ -83,7 +86,7 @@ function applyReadPosition(room, messageId) {
   if (index >= room.messages.findIndex(message => message.id === room.pendingReadMessageId)) room.pendingReadMessageId = undefined;
 }
 function markSeen(room) {
-  if (!room || room !== current() || !authorized('read', room) || document.hidden || $('app').hidden || $('message-change').open
+  if (!room || room !== current() || !authorized('read', room) || document.hidden || $('app').hidden || $('message-change').open || $('conversation-management').open
       || $('app').classList.contains('show-rooms') || (state.pane && paneOverlay.matches)) return;
   const timeline = $('timeline');
   if (timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight >= 90) return;
@@ -106,7 +109,16 @@ function flushReadPosition(room) {
     // Other failures retain the fixed target for a later idempotent retry.
   }).finally(() => { if (state.reads.get(id) === attempt) state.reads.delete(id); });
 }
-function accessEnded() { return state.rooms.size > 0 && [...state.rooms.values()].every(room => deadline('read', room) <= serverNow()); }
+function hasManagement(session = state.session) { return session?.management?.createUntil > serverNow() || session?.management?.scopes.some(scope => scope.until > serverNow()); }
+function accessEnded() { return !hasManagement() && [...state.rooms.values()].every(room => deadline('read', room) <= serverNow()); }
+function renderManagement() {
+  $('create-conversation').hidden = !(state.session?.management?.createUntil > serverNow());
+  $('manage-conversation').hidden = !state.session?.management?.scopes.some(scope => scope.until > serverNow());
+  $('management-toolbar').hidden = $('create-conversation').hidden && $('manage-conversation').hidden;
+  $('management-empty').hidden = state.rooms.size > 0;
+  $('app').classList.toggle('management-empty', state.rooms.size === 0);
+  managementDialog.update();
+}
 
 function denyReadScope(client, room) {
   const latest = state.rooms.get(key(room.scope));
@@ -134,19 +146,27 @@ function expireReadScopes() {
     state.reads.delete(id);
     state.rooms.delete(id);
   }
-  if (!state.rooms.size) { invalidate(new ApiError(403, 'grant_expired')); return; }
+  if (!state.rooms.size && !hasManagement()) { invalidate(new ApiError(403, 'grant_expired')); return; }
   state.session.scopes = state.session.scopes.filter(scope => state.rooms.has(key(scope)));
   setText($('room-count'), t('room.count', { count: state.rooms.size }));
-  if (!state.rooms.has(state.selected)) {
+  if (state.rooms.size && !state.rooms.has(state.selected)) {
     void selectRoom(state.rooms.keys().next().value);
     announce(t('room.readExpired'));
   } else renderRooms();
-  const next = Math.min(...[...state.rooms.values()].map(room => deadline('read', room)));
+  if (!state.rooms.size) {
+    state.selected = ''; state.pane = null; state.paneReturn = null; renderPane();
+    for (const id of ['messages', 'outbox', 'reply-preview', 'seats', 'seat', 'members', 'my-seat', 'details-thread', 'search-results', 'search-count']) $(id).replaceChildren();
+    $('message').value = ''; $('search-query').value = '';
+  }
+  renderManagement();
+  const next = Math.min(...[...state.rooms.values()].map(room => deadline('read', room)),
+    ...[state.session?.management?.createUntil ?? 0, state.session?.management?.issueUntil ?? 0, ...(state.session?.management?.scopes ?? []).map(scope => scope.until)].filter(until => until > serverNow()));
   state.expiryTimer = setTimeout(expireReadScopes, Math.min(2147483647, Math.max(1, next - serverNow())));
 }
 
 function invalidate(error) {
   closeMessageChange();
+  managementDialog.close();
   if (desktop) void desktop.core.invoke('desktop_connected', { connected: false });
   state.client?.close(); state.client = null; state.epoch++; clearTimeout(state.timer); clearTimeout(state.expiryTimer); state.syncing = false;
   state.session = null; state.rooms.clear(); state.cancels.clear(); state.reads.clear(); state.selected = ''; state.lastSync = 0;
@@ -174,16 +194,26 @@ function sessionReceived(session) {
   const offset = session.serverTime - Date.now();
   state.offset = state.session ? Math.max(state.offset, offset) : offset;
   session.scopes = session.scopes.filter(scope => scope.permissions.read > serverNow());
-  if (!session.scopes.length) throw new ApiError(403, 'grant_expired');
+  if (!session.scopes.length && !hasManagement(session)) throw new ApiError(403, 'grant_expired');
   state.session = session;
   const next = new Map();
   for (const scope of session.scopes) {
-    const id = key(scope), old = state.rooms.get(id), known = { ...old?.known };
+    const id = key(scope), previous = state.rooms.get(id);
+    const old = previous?.scope.membershipGeneration === scope.membershipGeneration ? previous : undefined, known = { ...old?.known };
+    if (previous && !old) {
+      state.reads.delete(id); for (const run of previous.runs) state.cancels.delete(run.id);
+      if (messageChange?.roomId === id) closeMessageChange();
+      if (state.selected === id) {
+        $('message').value = ''; $('messages').replaceChildren(); $('outbox').replaceChildren(); state.ui.outbox = '';
+        $('reply-preview').replaceChildren(); $('reply-preview').hidden = true; delete $('reply-preview').dataset.signature;
+        state.pane = null; renderPane();
+      }
+    }
     for (const [name, until] of Object.entries(scope.permissions)) if (until > 0) known[name] = until;
     next.set(id, old ? { ...old, scope, known } : { scope, known, cacheIdentity: {}, messages: [], runs: [], loaded: false, draft: '', pending: null, signature: '', seen: new Set(), rendered: 0, entering: true });
   }
   state.rooms = next;
-  if (!next.has(state.selected)) { state.selected = next.keys().next().value; current().entering = true; state.pane = null; renderPane(); }
+  if (!next.has(state.selected)) { state.selected = next.keys().next().value ?? ''; if (current()) current().entering = true; state.pane = null; renderPane(); }
   renderIdentity();
   setText($('room-count'), t('room.count', { count: session.scopes.length }));
   renderRooms(); renderHeader();
@@ -246,6 +276,7 @@ function renderHeader() {
 }
 
 function renderSeats(room) {
+  if (!room) return;
   const live = new Set(room.runs.filter(run => LIVE.has(run.status)).map(run => run.memberId));
   const shown = room.scope.members.slice(0, 4);
   const signature = JSON.stringify([shown, [...live], state.session?.member.id, room.scope.members.length]);
@@ -285,7 +316,7 @@ async function sync() {
     const session = await client.session();
     if (epoch !== state.epoch) return;
     sessionReceived(session);
-    if (selection !== state.selected) { $('message').value = current().draft; renderMessages(true); }
+    if (selection !== state.selected) { $('message').value = current()?.draft ?? ''; renderMessages(true); }
     // Every authorized room is refreshed so the list can show activity; only the
     // open room's failure decides the connection state.
     const ids = [...state.rooms.keys()], revision = cancellationRevision;
@@ -692,7 +723,7 @@ function closeMessageChange() {
   if (wasOpen && !$('app').hidden) $('timeline').focus({ preventScroll: true });
 }
 function openMessageChange(room, message, kind) {
-  messageChange = { roomId: key(room.scope), messageId: message.id, revision: message.revision, kind, id: crypto.randomUUID(), sending: false, submittedText: undefined };
+  messageChange = { roomId: key(room.scope), membershipGeneration: room.scope.membershipGeneration ?? 'initial', messageId: message.id, revision: message.revision, kind, id: crypto.randomUUID(), sending: false, submittedText: undefined };
   $('change-title').textContent = t(kind === 'edit' ? 'editor.editTitle' : 'editor.retractTitle');
   $('change-text').value = message.text; $('change-text').hidden = kind === 'retract'; $('change-label').hidden = kind === 'retract';
   $('change-text').disabled = false; $('change-save').disabled = false; $('change-close').disabled = false;
@@ -749,7 +780,7 @@ async function submitMessageChange(receiptOnly = false) {
     if (receiptOnly || change.targetRetracted || !authorized('send', state.rooms.get(change.roomId))) {
       $('change-error').textContent = t('editor.missingReceipt'); return;
     }
-    const result = await client.change(change.messageId, change.kind, change.revision, change.id, text);
+    const result = await client.change(change.messageId, change.kind, change.revision, change.id, text, change.membershipGeneration);
     if (client !== state.client || messageChange !== change) return;
     acceptMessageChange(change, result);
   } catch (error) {
@@ -1087,8 +1118,8 @@ $('connect-form').addEventListener('submit', async event => {
     const session = await client.session(); state.client = client; state.epoch++;
     if (desktop) void desktop.core.invoke('desktop_connected', { connected: true });
     sessionReceived(session); $('connect').hidden = true; $('app').hidden = false;
-    $('message').value = current().draft; renderMessages(true); renderOutbox(); await sync();
-    if (state.client) $('message').focus();
+    $('message').value = current()?.draft ?? ''; renderMessages(true); renderOutbox(); await sync();
+    if (state.client) (current() ? $('message') : $('create-conversation').hidden ? $('manage-conversation') : $('create-conversation')).focus();
   } catch (error) { client.close(); invalidate(error); }
 });
 $('composer').addEventListener('submit', event => {
@@ -1130,7 +1161,7 @@ $('timeline').addEventListener('scroll', () => {
   markSeen(current());
 }, { passive: true });
 document.addEventListener('keydown', event => {
-  if (event.isComposing || !state.client || $('app').hidden || $('message-change').open) return;
+  if (event.isComposing || !state.client || $('app').hidden || $('message-change').open || $('conversation-management').open) return;
   if (event.key === 'Escape' && state.pane) { event.preventDefault(); closePane($('details').contains(document.activeElement)); return; }
   if (state.pane && paneOverlay.matches && event.key === 'Tab') {
     const targets = [...$('details').querySelectorAll('button, a[href], input, select, textarea, [tabindex]')]

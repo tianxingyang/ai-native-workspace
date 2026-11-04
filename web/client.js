@@ -30,24 +30,26 @@ export class Client {
     } finally { clearTimeout(timeout); this.#controllers.delete(controller); }
   }
   session() { return this.request('/session'); }
+  conversationOptions() { return this.request('/conversations/options'); }
+  memberships(scope) { return this.request(`/memberships?${new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId })}`); }
   snapshot(scope, cursor) {
     const query = new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId });
     if (cursor !== undefined) query.set('cursor', cursor);
     return this.request(`/sync?${query}`);
   }
-  markRead(scope, messageId) { return this.request('/read-position', { conversationId: scope.conversationId, threadId: scope.threadId, messageId }); }
+  markRead(scope, messageId) { return this.request('/read-position', { conversationId: scope.conversationId, threadId: scope.threadId, messageId, expectedMembershipGeneration: scope.membershipGeneration ?? 'initial' }); }
   receipt(scope, clientEventId) {
     const query = new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId, clientEventId });
     return this.request(`/messages/receipt?${query}`);
   }
-  send(scope, text, clientEventId, replyToMessageId) { return this.request('/messages', { conversationId: scope.conversationId, threadId: scope.threadId, text, clientEventId, ...(replyToMessageId ? { replyToMessageId } : {}) }); }
+  send(scope, text, clientEventId, replyToMessageId) { return this.request('/messages', { conversationId: scope.conversationId, threadId: scope.threadId, text, clientEventId, expectedMembershipGeneration: scope.membershipGeneration ?? 'initial', ...(replyToMessageId ? { replyToMessageId } : {}) }); }
   cancel(runId) { return this.request(`/runs/${encodeURIComponent(runId)}/cancel`, {}); }
   changeReceipt(scope, clientEventId) {
     const query = new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId, clientEventId });
     return this.request(`/messages/change-receipt?${query}`);
   }
-  change(messageId, kind, expectedRevision, clientEventId, text) {
-    return this.request(`/messages/${encodeURIComponent(messageId)}/${kind}`, { expectedRevision, clientEventId, ...(kind === 'edit' ? { text } : {}) });
+  change(messageId, kind, expectedRevision, clientEventId, text, expectedMembershipGeneration = 'initial') {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/${kind}`, { expectedRevision, clientEventId, expectedMembershipGeneration, ...(kind === 'edit' ? { text } : {}) });
   }
 }
 export function errorText(error) {

@@ -81,6 +81,9 @@ fn permitted(path: &str, body: &Option<Value>) -> bool {
     if body.is_some() {
         return path == "/messages"
             || path == "/read-position"
+            || path == "/conversations"
+            || path == "/memberships/add"
+            || path == "/memberships/remove"
             || path
                 .strip_prefix("/runs/")
                 .and_then(|p| p.strip_suffix("/cancel"))
@@ -98,7 +101,22 @@ fn permitted(path: &str, body: &Option<Value>) -> bool {
                             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
                 });
     }
+    if let Some(query) = path.strip_prefix("/memberships?") {
+        let mut keys = Vec::new();
+        for part in query.split('&') {
+            let Some((key, value)) = part.split_once('=') else {
+                return false;
+            };
+            if value.is_empty() || value.contains('#') {
+                return false;
+            }
+            keys.push(key);
+        }
+        keys.sort_unstable();
+        return keys == ["conversationId", "threadId"];
+    }
     path == "/session"
+        || path == "/conversations/options"
         || path.starts_with("/sync?")
         || path.starts_with("/messages?")
         || path.starts_with("/messages/receipt?")
@@ -314,6 +332,23 @@ mod tests {
             &Some(json!({"messageId":"msg_123"}))
         ));
         assert!(!permitted("/read-position", &None));
+        for route in ["/conversations", "/memberships/add", "/memberships/remove"] {
+            assert!(permitted(route, &Some(json!({}))));
+            assert!(!permitted(route, &None));
+            assert!(!permitted(&format!("{route}?admin=true"), &Some(json!({}))));
+        }
+        assert!(permitted("/conversations/options", &None));
+        assert!(!permitted("/conversations/options", &Some(json!({}))));
+        assert!(!permitted("/conversations/options?scope=all", &None));
+        assert!(permitted("/memberships?conversationId=a&threadId=b", &None));
+        for query in [
+            "conversationId=a",
+            "conversationId=a&threadId=",
+            "conversationId=a&threadId=b&admin=1",
+            "conversationId=a&threadId=b&threadId=c",
+        ] {
+            assert!(!permitted(&format!("/memberships?{query}"), &None));
+        }
         assert!(permitted("/sync?conversationId=test&threadId=one", &None));
         assert!(!permitted(
             "/sync?conversationId=test&threadId=one",

@@ -57,6 +57,8 @@
   <aside id="sidebar" class="sidebar" aria-label="会话导航" data-i18n-aria-label="shell.navigation">
     <div class="brand-row"><div class="wordmark">CoSeat <span>同席</span></div><span class="tag" data-i18n="shell.demo">本地演示</span></div>
     <div class="section-title"><h1 data-i18n="shell.conversations">会话</h1><span id="room-count"></span></div>
+    <div id="management-toolbar" class="management-toolbar" hidden><button id="create-conversation" class="quiet" type="button" hidden data-i18n="management.create">新建会话</button><button id="manage-conversation" class="quiet" type="button" hidden data-i18n="management.manage">管理成员</button></div>
+    <p id="management-empty" class="pane-note" hidden data-i18n="management.empty">没有可阅读的会话；你仍可使用已获授权的创建或成员管理功能。</p>
     <nav id="rooms" aria-label="已授权会话" data-i18n-aria-label="shell.authorizedConversations"></nav>
     <div class="sidebar-footer"><div id="identity" class="identity"></div><button id="logout" class="rail-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-logout"/></svg><span data-i18n="shell.logout">退出连接</span></button></div>
   </aside>
@@ -119,6 +121,15 @@
     <p id="change-help" data-i18n="editor.editHelp">保存后，相关研究会停止使用旧内容；确认旧运行结束后重新处理。</p>
     <p id="change-error" role="alert"></p>
     <div class="change-actions"><button type="button" id="change-close" class="quiet" data-i18n="editor.return">返回讨论</button><button type="submit" id="change-save" class="primary" data-i18n="editor.save">保存修改</button></div>
+  </form>
+</dialog>
+<dialog id="conversation-management" aria-labelledby="management-title">
+  <form id="management-form">
+    <h2 id="management-title" tabindex="-1"></h2>
+    <p class="muted" data-i18n="management.privacy">加入不会自动获得权限。阅读权包含该会话的历史消息；重新加入需要重新授权。</p>
+    <fieldset id="management-fields"></fieldset>
+    <p id="management-status" role="status"></p>
+    <div class="change-actions"><button id="management-close" type="button" class="quiet" data-i18n="management.close">关闭</button><button id="management-save" type="submit" class="primary" data-i18n="management.save">确认提交</button></div>
   </form>
 </dialog>
 <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>

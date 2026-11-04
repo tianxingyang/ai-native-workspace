@@ -24,6 +24,15 @@ test('desktop route boundary excludes URLs, authority changes, arbitrary command
   assert.equal(permittedRequest('/read-position', {}), true);
   assert.equal(permittedRequest('/read-position', undefined), false);
   assert.equal(permittedRequest('/read-position?conversationId=a&threadId=b', {}), false);
+  for (const path of ['/conversations', '/memberships/add', '/memberships/remove']) {
+    assert.equal(permittedRequest(path, {}), true); assert.equal(permittedRequest(path, undefined), false);
+    assert.equal(permittedRequest(`${path}?admin=true`, {}), false);
+  }
+  assert.equal(permittedRequest('/conversations/options', undefined), true);
+  assert.equal(permittedRequest('/conversations/options', {}), false);
+  assert.equal(permittedRequest('/conversations/options?scope=all', undefined), false);
+  assert.equal(permittedRequest('/memberships?conversationId=a&threadId=b', undefined), true);
+  for (const path of ['/memberships?conversationId=a', '/memberships?conversationId=a&threadId=b&admin=1', '/memberships?conversationId=a&threadId=b&threadId=duplicate', '/memberships?conversationId=a&threadId=b#fragment']) assert.equal(permittedRequest(path, undefined), false);
   for (const route of ['/messages/receipt', '/messages/change-receipt']) {
     const query = `${route}?conversationId=a&threadId=b&clientEventId=original`;
     assert.equal(permittedRequest(query, undefined), true);
@@ -75,6 +84,12 @@ test('native sidecar performs real authorized HTTP, rejects unshared scope, dedu
   assert.equal(delta.status, 200); assert.equal(delta.value.reset, false);
   assert.deepEqual(delta.value.messages.map((m: { text: string }) => m.text), [body.text]);
   const query = new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId });
+  assert.equal((await request('/conversations/options')).status, 403);
+  assert.equal((await request('/conversations', { kind: 'group' })).status, 403);
+  assert.equal((await request(`/memberships?${query}`)).status, 403);
+  for (const path of ['/memberships/add', '/memberships/remove']) {
+    assert.equal((await request(path, { conversationId: scope.conversationId, threadId: scope.threadId, targetMemberId: 'demo-researcher', expectedRevision: 1, clientEventId: 'unauthorized-management' })).status, 403);
+  }
   const receiptPath = `/messages/receipt?${query}&clientEventId=${body.clientEventId}`;
   assert.equal((await request(receiptPath)).value.message.id, sent.value.message.id);
   assert.equal((await request('/read-position', { conversationId: scope.conversationId, threadId: scope.threadId, messageId: sent.value.message.id })).value.readThroughMessageId, sent.value.message.id);

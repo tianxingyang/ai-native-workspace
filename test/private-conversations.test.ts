@@ -202,3 +202,132 @@ test('persistent removal from the source authority disables all derived grants w
   await expectStatus(env.api('reader', route('/messages', conversation)), 403, 'scope_denied');
   await env.restart(); await expectStatus(env.api('worker', route('/messages', conversation)), 403, 'scope_denied');
 });
+
+async function managedGroup(env: Awaited<ReturnType<typeof setup>>) {
+  const input = env.input('managed-group'); input.kind = 'group'; input.memberIds = ['manager', 'reader'];
+  input.initialGrants = [{ targetMemberId: 'manager', actions: ['manage_resource'], expiresAt: Date.now() + 240000 }, input.initialGrants[0]!];
+  return (await env.create(input)).conversation;
+}
+const addedGrant = (actions: Action[] = ['read', 'send', 'claim', 'request_approval']) => ({ actions, expiresAt: Date.now() + 180000 });
+test('group add and rejoin issue new generations without reviving old grants or replayed removals', async t => {
+  const env = await setup(t), scope = await managedGroup(env);
+  const remove = { ...scope, targetMemberId: 'reader', expectedRevision: 1, clientEventId: 'remove-reader' };
+  await env.api('reader', '/messages', { ...scope, text: 'history remains readable only with a fresh grant', clientEventId: 'history' });
+  await env.api('manager', '/memberships/remove', remove);
+  env.config.grants.push({ ...scope, id: 'old-static', memberId: 'reader', actions: ['send', 'manage_resource'], revision: 1, expiresAt: Date.now() + 200000, revoked: false });
+  const request = { ...scope, targetMemberId: 'reader', expectedRevision: 2, clientEventId: 'rejoin', grant: addedGrant(['read']) };
+  const added = await env.api('manager', '/memberships/add', request);
+  assert.equal(added.change.revision, 3);
+  assert.equal((await env.api('manager', '/memberships/add', request)).duplicate, true);
+  assert.equal((await env.api('manager', '/memberships/remove', remove)).duplicate, true);
+  assert.equal((await env.api('reader', route('/messages', scope))).messages.length, 1);
+  await expectStatus(env.api('reader', '/messages', { ...scope, text: 'old send cannot return', clientEventId: 'forbidden' }), 403);
+  await expectStatus(env.api('reader', route('/memberships', scope)), 403);
+  await expectStatus(env.api('manager', '/memberships/add', { ...request, grant: addedGrant(['send']) }), 409, 'membership_request_conflict');
+  await env.restart();
+  assert.equal((await env.api('reader', '/session')).scopes[0].membershipGeneration, added.change.id);
+  assert.equal((await env.api('manager', route('/memberships', scope))).revision, 3);
+  env.config.grants.push({ ...scope, id: 'persistent-deny', memberId: 'reader', actions: ['read'], effect: 'deny', revision: 1, expiresAt: Date.now() + 200000, revoked: false });
+  await expectStatus(env.api('reader', route('/messages', scope)), 403);
+  await env.api('manager', '/memberships/remove', { ...remove, expectedRevision: 3, clientEventId: 'remove-again' });
+  await env.api('manager', '/memberships/add', { ...request, expectedRevision: 4, clientEventId: 'rejoin-again' });
+  await expectStatus(env.api('reader', route('/messages', scope)), 403);
+});
+
+test('membership-only addition grants no actions, directories require source authority and management needs no read', async t => {
+  const env = await setup(t), scope = await managedGroup(env);
+  const managerSession = await env.api('manager', '/session');
+  assert.deepEqual(managerSession.scopes, []); assert.equal(managerSession.management.scopes.length, 1);
+  const options = await env.api('manager', '/conversations/options');
+  assert.deepEqual(options.members.map((m: any) => m.id), ['manager', 'reader', 'worker']);
+  await expectStatus(env.api('reader', '/conversations/options'), 403);
+  await env.api('reader', '/memberships/add', { ...scope, targetMemberId: 'worker', expectedRevision: 1, clientEventId: 'membership-only' });
+  await expectStatus(env.api('worker', route('/messages', scope)), 403);
+  await expectStatus(env.api('reader', '/memberships/add', { ...scope, targetMemberId: 'worker', expectedRevision: 2, clientEventId: 'cannot-issue', grant: addedGrant() }), 403);
+  await expectStatus(env.api('manager', '/memberships/add', { ...scope, targetMemberId: 'worker', expectedRevision: 2, clientEventId: 'already-present' }), 409, 'scope_member_already_present');
+  await expectStatus(env.api('manager', route('/messages', scope)), 403);
+});
+
+test('add transactions roll back grants, membership generations, revision and old execution invalidation', async t => {
+  const env = await setup(t), scope = await managedGroup(env);
+  const request = { ...scope, targetMemberId: 'worker', expectedRevision: 1, clientEventId: 'atomic-add', grant: addedGrant() };
+  const save = env.engine.store.save.bind(env.engine.store), before = env.engine.state.snapshot();
+  env.engine.store.save = () => { throw new Error('injected failure'); };
+  await expectStatus(env.api('manager', '/memberships/add', request), 500); env.engine.store.save = save;
+  assert.deepEqual(env.engine.state.snapshot().memberships, before.memberships);
+  assert.deepEqual(env.engine.state.snapshot().conversations, before.conversations);
+  assert.equal(env.engine.state.contextRevision(scope), 1);
+  const results = await Promise.allSettled([env.api('manager', '/memberships/add', request), env.api('manager', '/memberships/remove', { ...scope, targetMemberId: 'reader', expectedRevision: 1, clientEventId: 'racing-remove' })]);
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+  assert.equal((results.find(r => r.status === 'rejected') as PromiseRejectedResult).reason.code, 'membership_revision_conflict');
+});
+
+test('worker rejoin never reuses an old lease, result or pending rebuild', async t => {
+  const env = await setup(t), scope = await managedGroup(env);
+  const join = { ...scope, targetMemberId: 'worker', expectedRevision: 1, clientEventId: 'worker-add', grant: addedGrant() };
+  await env.api('manager', '/memberships/add', join);
+  await env.api('reader', '/messages', { ...scope, text: '请调研一下成员版本', clientEventId: 'research-membership' });
+  const delivery = await env.api('worker', '/worker/poll', { instanceId: 'old-device' });
+  assert.equal(delivery.command, 'execute');
+  await env.api('manager', '/memberships/remove', { ...scope, targetMemberId: 'worker', expectedRevision: 2, clientEventId: 'worker-remove' });
+  await env.api('manager', '/memberships/add', { ...join, expectedRevision: 3, clientEventId: 'worker-rejoin' });
+  const run = env.engine.state.runs.get(delivery.runId)!;
+  assert.equal(run.status, 'unknown'); assert.equal(run.rebuildAfterInvalidation, false);
+  await expectStatus(env.api('worker', '/tools/send', { runId: run.id, result: fixtureResult() }, { 'x-coseat-instance': 'old-device', 'x-coseat-lease': delivery.leaseId }), 409);
+  await expectStatus(env.api('worker', '/worker/not-started', { instanceId: 'old-device', leaseId: delivery.leaseId }), 409);
+  await env.restart(); assert.equal(env.engine.state.runs.get(run.id)!.status, 'unknown');
+  await expectStatus(env.api('worker', '/worker/poll', { instanceId: 'new-device' }), 409, 'grant_revision_changed');
+  assert.equal([...env.engine.state.messages.values()].filter(m => m.origin === 'research').length, 0);
+});
+
+test('direct membership keeps its original pair and legacy authority is recovered only from evidence', async t => {
+  const env = await setup(t), input = env.input();
+  // reader can manage membership but cannot issue permissions.
+  const scope = (await env.create(input)).conversation;
+  await expectStatus(env.api('reader', '/memberships/add', { ...scope, targetMemberId: 'manager', expectedRevision: 1, clientEventId: 'third' }), 409, 'direct_members_fixed');
+  await env.api('reader', '/memberships/remove', { ...scope, targetMemberId: 'worker', expectedRevision: 1, clientEventId: 'pair-remove' });
+  await env.api('reader', '/memberships/add', { ...scope, targetMemberId: 'worker', expectedRevision: 2, clientEventId: 'pair-rejoin' });
+  await expectStatus(env.api('worker', route('/messages', scope)), 403);
+  const saved = env.engine.store.load<{ state: { conversations: { authorities?: unknown } } }>()!;
+  delete saved.state.conversations.authorities; env.engine.store.save(saved); await env.restart();
+  await env.api('reader', '/memberships/remove', { ...scope, targetMemberId: 'worker', expectedRevision: 3, clientEventId: 'pair-remove-again' });
+  await env.api('reader', '/memberships/add', { ...scope, targetMemberId: 'worker', expectedRevision: 4, clientEventId: 'pair-rejoin-again' });
+  env.config.conversationCreation!.authorityScope = other;
+  // Even static target management cannot move this resource to a new authority.
+  env.config.grants.push({ ...scope, id: 'static-manager', memberId: 'reader', actions: ['manage_resource'], revision: 1, expiresAt: Date.now() + 200000, revoked: false });
+  await expectStatus(env.api('reader', '/memberships/add', { ...scope, targetMemberId: 'worker', expectedRevision: 5, clientEventId: 'wrong-source' }), 409, 'conversation_membership_unavailable');
+});
+
+test('old-generation send, edit, retract and read intents cannot execute under freshly issued permissions', async t => {
+  const env = await setup(t), scope = await managedGroup(env);
+  const message = (await env.api('reader', '/messages', { ...scope, text: 'original', clientEventId: 'before-generation' })).message;
+  await env.api('manager', '/memberships/remove', { ...scope, targetMemberId: 'reader', expectedRevision: 1, clientEventId: 'intent-remove' });
+  const joined = await env.api('manager', '/memberships/add', { ...scope, targetMemberId: 'reader', expectedRevision: 2, clientEventId: 'intent-rejoin', grant: addedGrant(['read', 'send']) });
+  const expectedMembershipGeneration = joined.change.id;
+  for (const old of [undefined, 'initial']) {
+    const body = old === undefined ? {} : { expectedMembershipGeneration: old };
+    await expectStatus(env.api('reader', '/messages', { ...scope, text: 'held old send', clientEventId: 'held-send', ...body }), 409, 'membership_generation_conflict');
+    await expectStatus(env.api('reader', '/read-position', { ...scope, messageId: message.id, ...body }), 409, 'membership_generation_conflict');
+    for (const kind of ['edit', 'retract']) await expectStatus(env.api('reader', `/messages/${message.id}/${kind}`, { expectedRevision: 1, clientEventId: 'held-change', text: 'old edit', ...body }), 409, 'membership_generation_conflict');
+  }
+  assert.equal(env.engine.state.readPosition('reader', scope), null); assert.equal(env.engine.state.messages.get(message.id)!.text, 'original');
+  await env.api('reader', '/messages', { ...scope, text: 'new intent', clientEventId: 'fresh-send', expectedMembershipGeneration });
+  await env.api('reader', '/read-position', { ...scope, messageId: message.id, expectedMembershipGeneration });
+  await env.api('reader', `/messages/${message.id}/edit`, { text: 'fresh edit', expectedRevision: 1, clientEventId: 'fresh-edit', expectedMembershipGeneration });
+  assert.equal(env.engine.state.messages.get(message.id)!.text, 'fresh edit');
+});
+
+test('adding a new audience member cancels existing work and blocks its late publication', async t => {
+  const env = await setup(t), scope = await managedGroup(env);
+  await env.api('manager', '/memberships/add', { ...scope, targetMemberId: 'worker', expectedRevision: 1, clientEventId: 'start-worker', grant: addedGrant() });
+  await env.api('reader', '/messages', { ...scope, text: '请调研一下新受众', clientEventId: 'audience-work' });
+  const delivery = await env.api('worker', '/worker/poll', { instanceId: 'audience-device' });
+  env.config.memberships.outsider!.push(authority);
+  await env.api('manager', '/memberships/add', { ...scope, targetMemberId: 'outsider', expectedRevision: 2, clientEventId: 'new-audience', grant: addedGrant(['read']) });
+  const run = env.engine.state.runs.get(delivery.runId)!;
+  assert.equal(run.status, 'cancel_requested'); assert.equal(run.rebuildAfterInvalidation, false);
+  assert.equal((await env.api('worker', '/worker/poll', { instanceId: 'audience-device' })).command, 'cancel');
+  await expectStatus(env.api('worker', '/tools/send', { runId: run.id, result: fixtureResult() }, { 'x-coseat-instance': 'audience-device', 'x-coseat-lease': delivery.leaseId }), 409);
+  assert.equal((await env.api('outsider', route('/messages', scope))).messages.length, 1);
+  assert.equal(env.engine.state.contextRevision(scope), 3);
+});
