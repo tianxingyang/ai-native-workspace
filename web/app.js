@@ -102,7 +102,8 @@ function invalidate(error) {
   state.pane = null; state.paneReturn = null;
   for (const name of Object.keys(state.ui)) state.ui[name] = '';
   $('app').hidden = true; $('connect').hidden = false; $('token').value = ''; $('message').value = '';
-  for (const id of ['messages', 'rooms', 'outbox', 'reply-preview', 'seats', 'seat', 'members', 'my-seat', 'details-thread', 'identity']) $(id).replaceChildren();
+  for (const id of ['messages', 'rooms', 'outbox', 'reply-preview', 'seats', 'seat', 'members', 'my-seat', 'details-thread', 'identity', 'search-results', 'search-count']) $(id).replaceChildren();
+  $('search-query').value = ''; $('search-toggle').setAttribute('aria-expanded', 'false');
   $('reply-preview').hidden = true; delete $('reply-preview').dataset.signature;
   $('details').hidden = true; $('app').classList.remove('show-rooms', 'has-pane'); $('members-toggle').setAttribute('aria-expanded', 'false');
   updatePaneAccessibility();
@@ -718,8 +719,13 @@ function renderPane() {
   const pane = state.pane, room = current();
   $('details').hidden = !pane; $('app').classList.toggle('has-pane', Boolean(pane));
   $('members-toggle').setAttribute('aria-expanded', String(pane?.kind === 'members'));
+  $('search-toggle').setAttribute('aria-expanded', String(pane?.kind === 'search'));
   $('details-members').hidden = pane?.kind !== 'members';
   $('details-thread').hidden = pane?.kind !== 'discussion';
+  $('details-search').hidden = pane?.kind !== 'search';
+  if (pane?.kind !== 'search') {
+    $('search-query').value = ''; $('search-results').replaceChildren(); $('search-count').textContent = '';
+  }
   updatePaneAccessibility();
   if (!pane) {
     state.ui.pane = '';
@@ -727,7 +733,39 @@ function renderPane() {
     return;
   }
   if (!room) return;
-  if (pane.kind === 'members') renderMembersPane(room); else renderThreadPane(room, pane.messageId);
+  if (pane.kind === 'search') renderSearchPane(room);
+  else if (pane.kind === 'members') renderMembersPane(room);
+  else renderThreadPane(room, pane.messageId);
+}
+
+function renderSearchPane(room, focusId) {
+  const pane = state.pane, query = pane.query.trim().toLowerCase();
+  const matches = query && authorized('read', room) ? room.messages.filter(message =>
+    !message.retracted && !message.invalidated && message.text.toLowerCase().includes(query)).reverse() : [];
+  const shown = matches.slice(0, pane.limit), signature = JSON.stringify(['search', key(room.scope), query, pane.limit, matches]);
+  if (signature === state.ui.pane) return;
+  const restoreFocus = $('search-results').contains(document.activeElement);
+  focusId ??= document.activeElement?.dataset.searchMessage;
+  state.ui.pane = signature; setText($('details-title'), '查找当前讨论');
+  setText($('search-count'), !query ? '输入关键词查找消息。' : matches.length ? `找到 ${matches.length} 条，显示 ${shown.length} 条（最新在前）。` : '没有匹配的消息。');
+  const nodes = shown.map(message => {
+    const row = button('', () => {
+      const latest = current();
+      if (!latest || key(latest.scope) !== key(room.scope) || !authorized('read', latest)) return;
+      const target = latest.messages.find(item => item.id === message.id);
+      if (!target || target.retracted || target.invalidated) return;
+      closePane(false); focusMessage(message.id);
+    }, 'search-result');
+    row.dataset.searchMessage = message.id;
+    const head = el('span', 'thread-head');
+    head.append(el('strong', '', memberIn(room, message.authorId).name), timeNode(message.createdAt));
+    const start = Math.max(0, message.text.toLowerCase().indexOf(query) - 60), end = start + 240;
+    row.append(head, el('span', 'search-excerpt', `${start ? '…' : ''}${message.text.slice(start, end)}${message.text.length > end ? '…' : ''}`));
+    return row;
+  });
+  if (matches.length > shown.length) nodes.push(button('显示更多消息', () => { pane.limit += 50; renderSearchPane(current(), matches[shown.length]?.id); }, 'text-button'));
+  $('search-results').replaceChildren(...nodes);
+  if (restoreFocus) (nodes.find(node => node.dataset.searchMessage === focusId) ?? $('search-query')).focus();
 }
 
 function updatePaneAccessibility() {
@@ -840,6 +878,14 @@ $('message').addEventListener('keydown', event => { if (event.key === 'Enter' &&
 $('token').addEventListener('input', () => $('token').setAttribute('aria-invalid', 'false'));
 $('logout').addEventListener('click', () => invalidate());
 $('members-toggle').addEventListener('click', event => { if (state.pane?.kind === 'members') closePane(true); else openPane({ kind: 'members' }, event.currentTarget); });
+$('search-toggle').addEventListener('click', event => {
+  if (state.pane?.kind === 'search') closePane(true);
+  else { openPane({ kind: 'search', query: '', limit: 50 }, event.currentTarget); $('search-query').focus(); }
+});
+$('search-query').addEventListener('input', () => {
+  if (state.pane?.kind !== 'search') return;
+  state.pane.query = $('search-query').value; state.pane.limit = 50; renderSearchPane(current());
+});
 $('details-close').addEventListener('click', () => closePane(true));
 $('reconnect').addEventListener('click', () => void sync());
 $('back').addEventListener('click', () => { closePane(false); $('app').classList.add('show-rooms'); $('rooms').querySelector('[aria-current=true]')?.focus(); });

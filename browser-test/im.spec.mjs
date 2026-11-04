@@ -34,6 +34,70 @@ async function send(page, text) {
   await expect(page.locator('.message-text').filter({ hasText: text })).toHaveCount(1);
 }
 
+test('message search matches literal text only in the current scope and follows changes', async ({ page }) => {
+  await connect(page); await send(page, 'Release [draft] <script>literal</script>');
+  const source = [...demo.engine.state.messages.values()][0];
+  await requestJson(demo.url, demo.ownerToken, '/messages', { conversationId: '研发讨论', threadId: '插件协议', text: 'RELEASE other scope', clientEventId: 'search-other' });
+  await page.getByRole('button', { name: '查找当前讨论的消息', exact: true }).click();
+  const query = page.getByLabel('查找消息正文');
+  await expect(query).toBeFocused(); await query.fill('release');
+  await expect(page.locator('.search-result')).toHaveCount(1);
+  await expect(page.locator('#search-results')).not.toContainText('other scope');
+  await query.fill('[draft]'); await expect(page.locator('.search-result')).toHaveCount(1);
+  expect(await page.locator('#search-results script').count()).toBe(0);
+  await page.locator('.search-result').click();
+  await expect(page.locator('#details')).toBeHidden(); await expect(page.locator('.message').first()).toBeFocused();
+  await expect(query).toHaveValue(''); await expect(page.locator('#search-results')).toBeEmpty();
+  await page.getByRole('button', { name: '查找当前讨论的消息', exact: true }).click(); await query.fill('release');
+  await requestJson(demo.url, demo.ownerToken, `/messages/${source.id}/edit`, { expectedRevision: 1, clientEventId: 'search-edit', text: 'Changed body' });
+  await expect(page.locator('.search-result')).toHaveCount(0); await query.fill('changed');
+  await expect(page.locator('.search-result')).toHaveCount(1); await expect(query).toBeFocused();
+  await page.locator('.search-result').focus();
+  await requestJson(demo.url, demo.ownerToken, `/messages/${source.id}/retract`, { expectedRevision: 2, clientEventId: 'search-retract' });
+  await expect(page.locator('.search-result')).toHaveCount(0); await expect(page.locator('#search-results')).not.toContainText('Changed body');
+  await expect(query).toBeFocused();
+  await page.getByRole('button', { name: '研发讨论 插件协议' }).click();
+  await expect(query).toHaveValue(''); await expect(page.locator('#details')).toBeHidden();
+  await page.getByRole('button', { name: '查找当前讨论的消息', exact: true }).click(); await query.fill('release');
+  await expect(page.locator('.search-result')).toContainText('other scope');
+});
+
+test('message search is readable without send permission and expands result batches', async ({ page }) => {
+  for (let i = 0; i < 53; i++) demo.engine.state.createMessage('demo-owner', { conversationId: '产品讨论', threadId: '日常交流' }, `可检索消息 ${i}`, `search-batch-${i}`);
+  demo.engine.state.config.grants.find(g => g.memberId === 'demo-owner' && g.conversationId === '产品讨论').actions = ['read'];
+  await page.setViewportSize({ width: 390, height: 844 }); await connect(page);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole('button', { name: '查找当前讨论的消息', exact: true }).click();
+  await page.getByLabel('查找消息正文').fill('可检索');
+  await expect(page.locator('.search-result')).toHaveCount(50);
+  await expect(page.locator('.search-result').first()).toContainText('52');
+  await page.getByRole('button', { name: '显示更多消息', exact: true }).click();
+  await expect(page.locator('.search-result')).toHaveCount(53);
+  await expect(page.locator('.search-result').nth(50)).toBeFocused();
+  const focusedMessage = await page.locator('.search-result').nth(50).getAttribute('data-search-message');
+  demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', { conversationId: '产品讨论', threadId: '日常交流' }, '可检索的新消息', 'search-incoming'));
+  await expect(page.locator('.search-result')).toHaveCount(54);
+  await expect(page.locator(`.search-result[data-search-message="${focusedMessage}"]`)).toBeFocused();
+  await expect(page.locator('#chat')).toHaveAttribute('inert');
+  await capture(page, 'scoped-search-mobile', { fullPage: true });
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: '查找当前讨论的消息', exact: true })).toBeFocused();
+  await expect(page.locator('#search-results')).toBeEmpty();
+});
+
+test('message search clears query and matches at offline read expiry', async ({ page, context }) => {
+  const grant = demo.engine.state.config.grants.find(g => g.memberId === 'demo-owner' && g.conversationId === '产品讨论');
+  grant.expiresAt = Date.now() + 6000;
+  await connect(page); await send(page, '到期必须清除的查找正文');
+  await page.getByRole('button', { name: '查找当前讨论的消息', exact: true }).click();
+  await page.getByLabel('查找消息正文').fill('必须清除');
+  await expect(page.locator('.search-result')).toHaveCount(1); await context.setOffline(true);
+  await expect(page.locator('#room-title')).toHaveText('研发讨论');
+  await expect(page.locator('#search-results')).toBeEmpty(); await expect(page.locator('#search-query')).toHaveValue('');
+  await expect(page.locator('#details')).toBeHidden(); await expect(page.locator('#app')).not.toContainText('到期必须清除的查找正文');
+  await context.setOffline(false);
+});
+
 test('nested replies stay in their discussion and quotes follow edits and retractions', async ({ page }) => {
   await connect(page); await send(page, '引用源消息');
   await page.locator('.message').first().getByRole('button', { name: '回复消息', exact: true }).click();
