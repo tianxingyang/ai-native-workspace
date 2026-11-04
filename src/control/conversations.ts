@@ -12,8 +12,8 @@ export interface GrantSource {
   actorId: string; scope: Scope; ruleDigest: string; policyDigest: string;
   bindings: { action: 'manage_workspace' | 'grant_permissions'; id: string; revision: number; digest: string }[];
 }
-interface IssuedGrant { grant: Grant; source: GrantSource }
-interface SavedConversations { conversations: Conversation[]; grants: IssuedGrant[]; requests: [string, { fingerprint: string; conversationId: string }][] }
+interface IssuedGrant { grant: Grant; source: GrantSource; generation?: string }
+interface SavedConversations { conversations: Conversation[]; grants: IssuedGrant[]; requests: [string, { fingerprint: string; conversationId: string; receipt?: Conversation }][]; authorities?: [string, Scope][] }
 export const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value) ?? 'null').digest('hex');
 
 export function creationRuleValue(raw: unknown): ConversationCreationRule {
@@ -45,13 +45,21 @@ export function conversationInput(raw: unknown): ConversationInput {
 export class ConversationRegistry {
   private readonly conversations = new Map<string, Conversation>();
   private readonly grants: IssuedGrant[] = [];
-  private readonly requests = new Map<string, { fingerprint: string; conversationId: string }>();
-  snapshot(): SavedConversations { return structuredClone({ conversations: [...this.conversations.values()], grants: this.grants, requests: [...this.requests] }); }
+  private readonly requests = new Map<string, { fingerprint: string; conversationId: string; receipt?: Conversation }>();
+  private readonly authorities = new Map<string, Scope>();
+  snapshot(): SavedConversations { return structuredClone({ conversations: [...this.conversations.values()], grants: this.grants, requests: [...this.requests], authorities: [...this.authorities] }); }
   restore(saved?: SavedConversations): void {
-    this.conversations.clear(); this.requests.clear(); this.grants.length = 0;
+    this.conversations.clear(); this.requests.clear(); this.authorities.clear(); this.grants.length = 0;
     for (const conversation of structuredClone(saved?.conversations ?? [])) this.conversations.set(conversation.conversationId, conversation);
     this.grants.push(...structuredClone(saved?.grants ?? []));
-    for (const [key, value] of structuredClone(saved?.requests ?? [])) this.requests.set(key, value);
+    for (const [key, value] of structuredClone(saved?.requests ?? [])) this.requests.set(key, { ...value, receipt: value.receipt ?? structuredClone(this.conversations.get(value.conversationId)!) });
+    for (const [id, scope] of structuredClone(saved?.authorities ?? [])) this.authorities.set(id, scope);
+    // PR26 snapshots can prove their original authority through issued Grants.
+    // A legacy resource without this evidence is not silently assigned a source.
+    if (!saved?.authorities) for (const conversation of this.conversations.values()) {
+      const sources = this.grants.filter(g => g.grant.conversationId === conversation.conversationId).map(g => g.source.scope);
+      if (sources.length && sources.every(scope => digest(scope) === digest(sources[0]))) this.authorities.set(conversation.conversationId, structuredClone(sources[0]!));
+    }
   }
   metadata(scope: Scope): Conversation | undefined {
     const conversation = this.conversations.get(scope.conversationId);
@@ -60,25 +68,34 @@ export class ConversationRegistry {
   scopes(memberId: string): Scope[] {
     return [...this.conversations.values()].filter(c => c.memberIds.includes(memberId)).map(({ conversationId, threadId }) => ({ conversationId, threadId }));
   }
-  effectiveGrants(validSource: (source: GrantSource) => boolean): Grant[] {
-    return this.grants.filter(entry => validSource(entry.source)).map(entry => structuredClone(entry.grant));
+  authority(scope: Scope): Scope | undefined { return this.metadata(scope) ? structuredClone(this.authorities.get(scope.conversationId)) : undefined; }
+  allGrants(): Grant[] { return this.grants.map(entry => structuredClone(entry.grant)); }
+  effectiveGrants(validSource: (source: GrantSource) => boolean, generation: (memberId: string, scope: Scope) => string): Grant[] {
+    return this.grants.filter(entry => (entry.generation ?? 'initial') === generation(entry.grant.memberId, entry.grant) && validSource(entry.source)).map(entry => structuredClone(entry.grant));
+  }
+  addMember(scope: Scope, targetMemberId: string, generation: string, grant: InitialGrant | undefined, source: GrantSource | undefined) {
+    const conversation = this.conversations.get(scope.conversationId)!;
+    if (!conversation.memberIds.includes(targetMemberId)) conversation.memberIds.push(targetMemberId);
+    if (grant && source) this.grants.push({ generation, source: structuredClone(source), grant: { ...scope, id: randomUUID(), revision: 1,
+      memberId: targetMemberId, actions: [...grant.actions], expiresAt: grant.expiresAt, revoked: false } });
   }
   prior(actorId: string, input: ConversationInput) {
     const previous = this.requests.get(JSON.stringify([actorId, input.clientEventId]));
     if (!previous) return undefined;
     requireCondition(previous.fingerprint === digest(input), 409, 'conversation_request_conflict');
-    return { conversation: structuredClone(this.conversations.get(previous.conversationId)!), duplicate: true };
+    return { conversation: structuredClone(previous.receipt ?? this.conversations.get(previous.conversationId)!), duplicate: true };
   }
   create(actorId: string, input: ConversationInput, source: GrantSource, now: number) {
     requireCondition(this.conversations.size < 500, 507, 'conversation_capacity_reached');
     const conversation: Conversation = { conversationId: randomUUID(), threadId: 'main', kind: input.kind, title: input.title,
       memberIds: [...input.memberIds], createdBy: actorId, createdAt: now };
     this.conversations.set(conversation.conversationId, conversation);
+    this.authorities.set(conversation.conversationId, structuredClone(source.scope));
     for (const initial of input.initialGrants) this.grants.push({ source: structuredClone(source), grant: {
       conversationId: conversation.conversationId, threadId: conversation.threadId, id: randomUUID(), revision: 1,
       memberId: initial.targetMemberId, actions: [...initial.actions], expiresAt: initial.expiresAt, revoked: false,
     } });
-    this.requests.set(JSON.stringify([actorId, input.clientEventId]), { fingerprint: digest(input), conversationId: conversation.conversationId });
+    this.requests.set(JSON.stringify([actorId, input.clientEventId]), { fingerprint: digest(input), conversationId: conversation.conversationId, receipt: structuredClone(conversation) });
     return { conversation: structuredClone(conversation), duplicate: false };
   }
 }

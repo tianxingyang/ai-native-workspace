@@ -17,6 +17,9 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
     // Body reads and idle long polls await I/O: recheck credentials immediately before each operation.
     const commit = <T>(fn: () => T) => engine.commit(() => { state.authenticate(token); return fn(); });
     const guard = (runId: string) => engine.guardTool(actor, stringValue(request.headers['x-coseat-instance'], 'instance', 128), stringValue(request.headers['x-coseat-lease'], 'lease', 128), runId);
+    if (url.pathname === '/conversations/options' && request.method === 'GET') {
+      respond(response, 200, commit(() => state.conversationOptions(actor))); return;
+    }
     if (url.pathname === '/conversations' && body) {
       const value = commit(() => state.createConversation(actor, body));
       respond(response, value.duplicate ? 200 : 201, value); return;
@@ -29,6 +32,11 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
       const value = commit(() => engine.removeScopeMember(actor, stringValue(body.targetMemberId, 'target_member_id', 128), scopeValue(body),
         body.expectedRevision as number, stringValue(body.clientEventId, 'client_event_id', 128)));
       // Management responses contain membership metadata, never message/run contents.
+      respond(response, 200, { change: value.change, duplicate: value.duplicate }); return;
+    }
+    if (url.pathname === '/memberships/add' && body) {
+      const value = commit(() => engine.addScopeMember(actor, stringValue(body.targetMemberId, 'target_member_id', 128), scopeValue(body),
+        body.expectedRevision as number, stringValue(body.clientEventId, 'client_event_id', 128), body.grant));
       respond(response, 200, { change: value.change, duplicate: value.duplicate }); return;
     }
     if (url.pathname === '/sync' && request.method === 'GET') {
@@ -45,19 +53,19 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
       respond(response, 200, commit(() => ({ receipt: state.messageChangeReceipt(actor, scope, stringValue(url.searchParams.get('clientEventId'), 'clientEventId', 128)) }))); return;
     }
     if (url.pathname === '/read-position' && body) {
-      respond(response, 200, commit(() => state.advanceReadPosition(actor, scopeValue(body), stringValue(body.messageId, 'messageId', 128)))); return;
+      respond(response, 200, commit(() => state.advanceReadPosition(actor, scopeValue(body), stringValue(body.messageId, 'messageId', 128), body.expectedMembershipGeneration))); return;
     }
     const changeMatch = /^\/messages\/([^/]+)\/(edit|retract)$/.exec(url.pathname);
     if (changeMatch && body) {
       const value = commit(() => engine.changeMessage(actor, changeMatch[1]!, changeMatch[2] as 'edit' | 'retract',
         body.expectedRevision as number, stringValue(body.clientEventId, 'client_event_id', 128),
-        changeMatch[2] === 'edit' ? stringValue(body.text, 'text') : undefined));
+        changeMatch[2] === 'edit' ? stringValue(body.text, 'text') : undefined, body.expectedMembershipGeneration));
       respond(response, 200, value); return;
     }
     if (url.pathname === '/messages' && body) {
       const value = commit(() => {
         const result = state.createMessage(actor, scopeValue(body), stringValue(body.text, 'text'), stringValue(body.clientEventId, 'client_event_id', 128),
-          body.replyToMessageId === undefined ? undefined : stringValue(body.replyToMessageId, 'replyToMessageId', 128));
+          body.replyToMessageId === undefined ? undefined : stringValue(body.replyToMessageId, 'replyToMessageId', 128), body.expectedMembershipGeneration);
         if (!result.duplicate && state.evaluate(result.message)) {
           // Missing execution permissions do not reject otherwise valid chat.
           try { state.claim(state.config.researchMemberId, result.message.id); } catch { /* audit retains the denial */ }
