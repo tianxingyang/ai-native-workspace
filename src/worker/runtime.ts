@@ -43,7 +43,7 @@ export class LocalRuntime implements RuntimeProvider {
     requireCondition(s.status === 'queued' && !s.input, 409, 'append_input_not_supported');
     requireCondition(input.contextRevision === s.work.contextRevision, 409, 'context_revision_changed');
     s.input = structuredClone(input);
-    this.emit(s, 'input_received', { inputId: input.id });
+    this.emit(s, 'input_received', { inputId: input.id, contextRevision: s.work.contextRevision });
     // The RPC acknowledges receipt; only the provider can acknowledge application.
     s.completion = new Promise<void>(resolve => setImmediate(resolve)).then(async () => {
       if (s.cancelRequested) return;
@@ -55,7 +55,7 @@ export class LocalRuntime implements RuntimeProvider {
         // still evidence and must not be hidden by the aborted signal.
         if (inputApplied || executionSettled) return;
         inputApplied = true;
-        this.emit(s, 'input_applied', { inputId: input.id });
+        this.emit(s, 'input_applied', { inputId: input.id, contextRevision: s.work.contextRevision });
       };
       let budgetExpired = false;
       const timer = setTimeout(() => { budgetExpired = true; s.abort.abort(new Error('runtime_budget_exceeded')); }, s.work.budget.maxDurationMs);

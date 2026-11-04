@@ -15,6 +15,9 @@ test('desktop route boundary excludes URLs, authority changes, arbitrary command
   for (const path of ['/runs/a%2fcancel/cancel', '/runs/../cancel', '/session', 'file:///anything']) assert.equal(permittedRequest(path, {}), false);
   assert.equal(permittedRequest('/messages?conversationId=a&threadId=b', undefined), true);
   assert.equal(permittedRequest('/runs/run_1/cancel', {}), true);
+  assert.equal(permittedRequest('/messages/msg_1/edit', {}), true);
+  assert.equal(permittedRequest('/messages/msg_1/retract', {}), true);
+  for (const path of ['/messages/../edit', '/messages/a%2fretract/retract', '/messages/a/delete']) assert.equal(permittedRequest(path, {}), false);
 });
 
 test('desktop demo does not persist owner credentials or serve a remotely privileged web frontend', async t => {

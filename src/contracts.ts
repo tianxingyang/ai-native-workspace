@@ -15,6 +15,11 @@ export interface Grant extends Scope {
 export interface Message extends Scope {
   id: string; revision: number; authorId: string; text: string; createdAt: number;
   origin: 'chat' | 'research'; sourceMessageId?: string; result?: ResearchResult;
+  retracted?: boolean; changedAt?: number; invalidated?: boolean;
+}
+export interface MessageChange extends Scope {
+  id: string; messageId: string; actorId: string; kind: 'edit' | 'retract';
+  revision: number; contextRevision: number; at: number; affectedRunIds: string[];
 }
 export interface Source { id: string; title: string; url: string; excerpt: string }
 export interface ResearchResult {
@@ -61,6 +66,10 @@ export interface Run {
   id: string; taskId: string; memberId: string; sourceMessageId: string; intent: 'research';
   work: WorkPackage; status: RunStatus; sessionId?: string; receiptId?: string;
   events: RuntimeEvent[]; error?: string;
+  invalidatedBy?: string;
+  replacementRunId?: string;
+  rebuildAfterInvalidation?: boolean;
+  contextInvalidated?: boolean;
   stopEvidence?: { scope: 'runtime_session_not_created' | 'worker_acknowledged_not_started'; executionStarted: false };
 }
 export class ApiError extends Error {

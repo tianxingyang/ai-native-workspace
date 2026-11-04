@@ -101,5 +101,15 @@
     <div id="details-thread" class="details-body" hidden></div>
   </aside>
 </div>
+<dialog id="message-change" aria-labelledby="change-title">
+  <form id="change-form">
+    <h2 id="change-title">编辑消息</h2>
+    <label for="change-text" id="change-label">消息内容</label>
+    <textarea id="change-text" rows="5" maxlength="8000"></textarea>
+    <p id="change-help">保存后，相关研究会停止使用旧内容；确认旧运行结束后重新处理。</p>
+    <p id="change-error" role="alert"></p>
+    <div class="change-actions"><button type="button" id="change-close" class="quiet">返回讨论</button><button type="submit" id="change-save" class="primary">保存修改</button></div>
+  </form>
+</dialog>
 <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
 </body></html>

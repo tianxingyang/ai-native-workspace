@@ -17,6 +17,13 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
     // Body reads and idle long polls await I/O: recheck credentials immediately before each operation.
     const commit = <T>(fn: () => T) => engine.commit(() => { state.authenticate(token); return fn(); });
     const guard = (runId: string) => engine.guardTool(actor, stringValue(request.headers['x-coseat-instance'], 'instance', 128), stringValue(request.headers['x-coseat-lease'], 'lease', 128), runId);
+    const changeMatch = /^\/messages\/([^/]+)\/(edit|retract)$/.exec(url.pathname);
+    if (changeMatch && body) {
+      const value = commit(() => engine.changeMessage(actor, changeMatch[1]!, changeMatch[2] as 'edit' | 'retract',
+        body.expectedRevision as number, stringValue(body.clientEventId, 'client_event_id', 128),
+        changeMatch[2] === 'edit' ? stringValue(body.text, 'text') : undefined));
+      respond(response, 200, value); return;
+    }
     if (url.pathname === '/messages' && body) {
       const value = commit(() => {
         const result = state.createMessage(actor, scopeValue(body), stringValue(body.text, 'text'), stringValue(body.clientEventId, 'client_event_id', 128));
@@ -73,11 +80,11 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
     if (url.pathname === '/runs' && request.method === 'GET') {
       const scope = scopeValue(Object.fromEntries(url.searchParams));
       const runs = commit(() => { state.authorize(actor, 'read', scope); engine.sweep(); return [...state.runs.values()].filter(r => r.work.route.conversationId === scope.conversationId && r.work.route.threadId === scope.threadId); });
-      respond(response, 200, { runs }); return;
+      respond(response, 200, { runs: runs.map(run => state.presentRun(run)) }); return;
     }
     const match = /^\/runs\/([^/]+)(\/cancel)?$/.exec(url.pathname);
     if (match?.[2] && body) { respond(response, 202, commit(() => engine.cancel(actor, match[1]!))); return; }
-    if (match && request.method === 'GET') { respond(response, 200, commit(() => { state.visibleRun(actor, match[1]!); engine.sweep(); return state.runs.get(match[1]!); })); return; }
+    if (match && request.method === 'GET') { respond(response, 200, commit(() => { state.visibleRun(actor, match[1]!); engine.sweep(); return state.presentRun(state.runs.get(match[1]!)!); })); return; }
     respond(response, 404, { error: 'not_found' });
   });
 }

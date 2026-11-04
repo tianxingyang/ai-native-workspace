@@ -34,6 +34,69 @@ async function send(page, text) {
   await expect(page.locator('.message-text').filter({ hasText: text })).toHaveCount(1);
 }
 
+test('editing running research rebuilds its session; retract removes content and obsolete results', async ({ page }) => {
+  await connect(page); await send(page, '请调研编辑前的要求');
+  await expect(page.locator('.status-label')).toHaveText('正在研究');
+  const original = [...demo.engine.state.runs.values()][0];
+  await page.getByRole('button', { name: '编辑消息', exact: true }).click();
+  await page.getByLabel('消息内容', { exact: true }).fill('请调研编辑后的新要求');
+  await capture(page, 'message-edit-dialog');
+  await page.getByRole('button', { name: '保存修改', exact: true }).click();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await expect(page.locator('.message-text').first()).toHaveText('请调研编辑后的新要求');
+  await expect(page.locator('.status-label').last()).toHaveText('已完成');
+  const replacement = [...demo.engine.state.runs.values()].find(r => r.id !== original.id);
+  expect(replacement.sessionId).not.toBe(original.sessionId);
+  expect(original.status).toBe('stopped'); expect(replacement.work.contextRevision).toBe(2);
+  await page.getByRole('button', { name: '撤回消息', exact: true }).click();
+  await page.getByRole('button', { name: '确认撤回', exact: true }).click();
+  await expect(page.locator('.message-text').first()).toHaveText('消息已撤回');
+  await expect(page.locator('.message-text').last()).toHaveText('原上下文已变更，此结果已失效。');
+  await expect(page.locator('.sources')).toHaveCount(0);
+  await page.reload(); await page.getByLabel('本地演示访问凭据').fill(demo.ownerToken);
+  await page.getByRole('button', { name: '连接会话', exact: true }).click();
+  await expect(page.locator('.message-text').first()).toHaveText('消息已撤回');
+  await expect(page.getByRole('button', { name: '编辑消息', exact: true })).toHaveCount(0);
+});
+
+test('lost edit response retries one change and a concurrent version conflict never overwrites newer content', async ({ page }) => {
+  await connect(page); await send(page, '原始消息');
+  let once = true;
+  await page.route('**/messages/*/edit', async route => {
+    if (!once) return route.continue();
+    once = false; await forward(route); await route.abort('failed');
+  });
+  await page.getByRole('button', { name: '编辑消息', exact: true }).click();
+  await page.getByLabel('消息内容', { exact: true }).fill('网络恢复后的编辑');
+  await page.getByRole('button', { name: '保存修改', exact: true }).click();
+  await expect(page.getByRole('button', { name: '重试同一变更' })).toBeEnabled();
+  await page.getByRole('button', { name: '重试同一变更' }).click();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  expect(demo.engine.state.changes.size).toBe(1);
+  await page.getByRole('button', { name: '编辑消息', exact: true }).click();
+  const message = [...demo.engine.state.messages.values()][0];
+  await requestJson(demo.url, demo.ownerToken, `/messages/${message.id}/edit`, { expectedRevision: 2, clientEventId: 'other-device', text: '另一台设备的新内容' });
+  await page.getByLabel('消息内容', { exact: true }).fill('陈旧编辑');
+  await page.getByRole('button', { name: '保存修改', exact: true }).click();
+  await expect(page.locator('#change-error')).toContainText('消息版本已变化');
+  await expect(page.getByRole('button', { name: '重试同一变更' })).toBeDisabled();
+  await page.getByRole('button', { name: '返回讨论', exact: true }).click();
+  await expect(page.locator('.message-text')).toHaveText('另一台设备的新内容');
+  expect(demo.engine.state.changes.size).toBe(2);
+});
+
+test('revoking the edited room clears the modal while another readable room remains', async ({ page }) => {
+  await connect(page); await send(page, '失去权限后不能留在编辑框的内容');
+  await page.getByRole('button', { name: '编辑消息', exact: true }).click();
+  await expect(page.getByLabel('消息内容', { exact: true })).toHaveValue('失去权限后不能留在编辑框的内容');
+  demo.engine.state.config.grants.find(g => g.memberId === 'demo-owner' && g.conversationId === '产品讨论').revoked = true;
+  await expect(page.locator('#room-title')).toHaveText('研发讨论');
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await expect(page.locator('#change-text')).toHaveValue('');
+  await expect(page.locator('#messages')).not.toContainText('失去权限后不能留在编辑框的内容');
+  await expect(page.locator('#connect')).toBeHidden();
+});
+
 test('real two-process research returns to its source, sources are honest, desktop and narrow screen', async ({ page }) => {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await connect(page);

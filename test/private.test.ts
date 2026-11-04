@@ -83,6 +83,132 @@ test('configuration accepts composed roles and denies, rejects malformed authori
 // Synthetic, process-local test values, never deployment credentials.
 const secrets = { COSEAT_OWNER_TOKEN: randomBytes(32).toString('hex'), COSEAT_AGENT_TOKEN: randomBytes(32).toString('hex'), COSEAT_OTHER_TOKEN: randomBytes(32).toString('hex') };
 const scope = { conversationId: 'trial-room', threadId: 'research-thread' };
+test('message changes enforce author/read/send, optimistic versions and durable idempotent retries', async t => {
+  const env = await setup(t), { message } = await env.post();
+  const path = `/messages/${message.id}/edit`;
+  const body = { expectedRevision: 1, clientEventId: 'edit-once', text: '请调研新的上下文' };
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OTHER_TOKEN, path, body), 403, 'message_change_denied');
+  const owner = env.config.control.grants.find(g => g.memberId === 'owner1')!;
+  const actions = [...owner.actions]; owner.actions = ['read', 'cancel'];
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, path, body), 403, 'scope_denied');
+  owner.actions = ['send'];
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, path, body), 403, 'scope_denied');
+  owner.actions = actions;
+  const responses = await Promise.all(Array.from({ length: 4 }, () => requestJson<any>(env.url, secrets.COSEAT_OWNER_TOKEN, path, body)));
+  assert.equal(responses.filter(r => !r.duplicate).length, 1);
+  assert.equal(new Set(responses.map(r => r.change.id)).size, 1);
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, path, { ...body, text: 'different' }), 409, 'idempotency_key_conflict');
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, path, { ...body, clientEventId: 'stale' }), 409, 'message_revision_conflict');
+  await env.restart();
+  const retry = await requestJson<any>(env.url, secrets.COSEAT_OWNER_TOKEN, path, body);
+  assert.equal(retry.duplicate, true); assert.equal(retry.message.revision, 2);
+  assert.equal(env.engine.state.changes.size, 1);
+  owner.actions = ['read'];
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, path, body), 403);
+});
+
+test('editing loaded sibling context fences late output and rebuilds a fresh session after stop evidence', async t => {
+  const hold = gate(); t.after(() => { hold.release(); return Promise.resolve(); });
+  const env = await setup(t);
+  let count = 0;
+  const worker = env.worker(async (...args) => {
+    count++;
+    if (count === 1) { args[5](); await hold.promise; }
+    await fakeExecution(0)(...args);
+  });
+  const sibling = await requestJson<any>(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...scope, text: '参考旧背景', clientEventId: 'sibling' });
+  await env.post(); const delivery = await worker.step();
+  await waitFor(() => count === 1);
+  const original = env.engine.state.runs.get(delivery.runId!)!;
+  const response = await requestJson<any>(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages/${sibling.message.id}/edit`, { expectedRevision: 1, clientEventId: 'sibling-edit', text: '新的背景' });
+  assert.ok(response.change.affectedRunIds.includes(original.id));
+  await expectStatus(requestJson(env.url, secrets.COSEAT_AGENT_TOKEN, '/tools/send', { runId: original.id, result: fixtureResult() }, undefined, { 'x-coseat-instance': worker.instanceId, 'x-coseat-lease': delivery.leaseId! }), 409, 'lease_not_executable');
+  assert.equal((await worker.step()).command, 'cancel');
+  assert.equal(env.engine.state.runs.size, 1); assert.equal(count, 1);
+  hold.release();
+  const completed = await waitFor(async () => {
+    await worker.step();
+    return [...env.engine.state.runs.values()].find(r => r.id !== original.id && r.status === 'completed');
+  }, 10000);
+  const settled = env.engine.state.runs.get(original.id)!;
+  assert.equal(settled.status, 'stopped');
+  assert.ok(settled.events.some(e => e.kind === 'stopped' && e.data.executionSettled === true));
+  assert.notEqual(completed.sessionId, settled.sessionId);
+  assert.equal(completed.work.contextRevision, 2); assert.equal(completed.work.source.revision, 1);
+  assert.equal(count, 2);
+  assert.equal([...env.engine.state.messages.values()].filter(m => m.origin === 'research' && !m.invalidated).length, 1);
+});
+
+test('retraction fences leased work across restart, redacts reads and never reruns its source', async t => {
+  const env = await setup(t), { message } = await env.post();
+  const delivery = env.engine.commit(() => env.engine.poll('agent1', 'disconnected'));
+  const path = `/messages/${message.id}/retract`, body = { expectedRevision: 1, clientEventId: 'retract-1' };
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, path, body);
+  await env.restart();
+  const other = env.engine.commit(() => env.engine.poll('agent1', 'new-worker'));
+  assert.equal(other.command, 'blocked');
+  assert.equal(env.engine.state.runs.size, 1);
+  const read = await requestJson<any>(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages?${new URLSearchParams(scope)}`);
+  assert.equal(read.messages[0].retracted, true); assert.equal(read.messages[0].text, '');
+  assert.equal((await requestJson<any>(env.url, secrets.COSEAT_OWNER_TOKEN, path, body)).duplicate, true);
+  const command = env.engine.commit(() => env.engine.poll('agent1', 'disconnected'));
+  assert.equal(command.command, 'cancel');
+  env.engine.commit(() => env.engine.notStarted('agent1', 'disconnected', delivery.leaseId!));
+  assert.equal(env.engine.commit(() => env.engine.poll('agent1', 'disconnected')).command, 'idle');
+  assert.equal(env.engine.state.runs.size, 1);
+});
+
+test('expired lease after edit stays unknown and blocks replacements until actual reconciliation', async t => {
+  let now = Date.now(); const env = await setup(t, () => now), { message } = await env.post();
+  env.engine.commit(() => env.engine.poll('agent1', 'lost'));
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages/${message.id}/edit`, { expectedRevision: 1, clientEventId: 'lost-edit', text: '请调研新的要求' });
+  now += 11000; env.engine.commit(() => env.engine.sweep());
+  assert.equal([...env.engine.state.runs.values()][0]!.status, 'unknown');
+  assert.equal(env.engine.commit(() => env.engine.poll('agent1', 'replacement')).command, 'blocked');
+  assert.equal(env.engine.state.runs.size, 1);
+});
+
+test('publishing before retraction retains receipt but removes obsolete result content from reads', async t => {
+  const env = await setup(t), { message } = await env.post();
+  const run = await env.run(env.worker()); assert.ok(run.receiptId);
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages/${message.id}/retract`, { expectedRevision: 1, clientEventId: 'after-publish' });
+  const read = await requestJson<any>(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages?${new URLSearchParams(scope)}`);
+  assert.ok(read.messages.every((m: Message) => m.text === '' && !m.result));
+  assert.equal(read.messages[1].invalidated, true); assert.ok(run.receiptId);
+  for (const path of [`/runs?${new URLSearchParams(scope)}`, `/runs/${run.id}`]) {
+    const view = await requestJson<any>(env.url, secrets.COSEAT_OWNER_TOKEN, path);
+    assert.equal(JSON.stringify(view).includes(fixtureResult().conclusion), false);
+    const projected = view.runs?.[0] ?? view;
+    assert.equal(projected.contextInvalidated, true); assert.equal(projected.receiptId, run.receiptId);
+  }
+  assert.ok(JSON.stringify(run.events).includes(fixtureResult().conclusion), 'internal replay ledger stays intact');
+  assert.equal(env.engine.state.runs.size, 1);
+});
+
+test('new research accepted while stale execution is stopping survives restart and remains queued', async t => {
+  const env = await setup(t), { message } = await env.post();
+  const old = env.engine.commit(() => env.engine.poll('agent1', 'busy'));
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages/${message.id}/edit`, { expectedRevision: 1, clientEventId: 'queued-edit', text: '请调研修改后的请求' });
+  const next = await env.post('new-intent');
+  const queued = [...env.engine.state.runs.values()].find(r => r.sourceMessageId === next.message.id)!;
+  assert.ok(queued); assert.equal(queued.status, 'queued'); assert.equal(queued.sessionId, undefined);
+  assert.equal(env.engine.commit(() => env.engine.poll('agent1', 'busy')).command, 'cancel');
+  await env.restart();
+  assert.equal(env.engine.state.runs.get(queued.id)!.status, 'queued');
+  env.engine.commit(() => env.engine.notStarted('agent1', 'busy', old.leaseId!));
+  const delivery = env.engine.commit(() => env.engine.poll('agent1', 'busy'));
+  assert.equal(delivery.command, 'execute'); assert.equal(delivery.runId, queued.id);
+});
+
+test('editing after a user cancellation does not revive the cancelled task', async t => {
+  const env = await setup(t), { message } = await env.post();
+  const delivery = env.engine.commit(() => env.engine.poll('agent1', 'user-cancel'));
+  env.engine.commit(() => env.engine.cancel('owner1', delivery.runId!));
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages/${message.id}/edit`, { expectedRevision: 1, clientEventId: 'cancel-edit', text: '请调研新的要求' });
+  env.engine.commit(() => env.engine.notStarted('agent1', 'user-cancel', delivery.leaseId!));
+  assert.equal(env.engine.commit(() => env.engine.poll('agent1', 'user-cancel')).command, 'idle');
+  assert.equal(env.engine.state.runs.size, 1);
+});
 function rawConfig(path: string) {
   return { version: 2, mode: 'private-mock', databasePath: path, port: 0, researchMemberId: 'agent1',
     members: [ ['owner1', 'human', 'COSEAT_OWNER_TOKEN'], ['agent1', 'agent', 'COSEAT_AGENT_TOKEN'], ['agent2', 'agent', 'COSEAT_OTHER_TOKEN'] ].map(([id, kind, tokenEnv]) => ({ id, kind, name: id, tokenEnv, tokenExpiresAt: Date.now() + 3600000, scopes: [scope] })),

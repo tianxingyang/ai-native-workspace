@@ -1,7 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { PROTOCOL_VERSION, requireCondition, resultValue, terminal, type Action, type AuthorizationPolicy, type Grant, type Member, type Message, type ResearchResult, type Run, type RuntimeEvent, type Scope, type Source, type WorkPackage } from '../contracts.js';
 import { decideParticipation } from '../participation.js';
 import { decideAuthorization, policyDigest, type AuthorizationDecision } from './authorization.js';
+import type { MessageChange } from '../contracts.js';
 
 export interface ControlConfig {
   members: Member[]; grants: Grant[]; tokens: Record<string, string>;
@@ -12,6 +13,9 @@ export interface ControlConfig {
 }
 export class ControlState {
   readonly messages = new Map<string, Message>();
+  readonly changes = new Map<string, MessageChange>();
+  private readonly changeKeys = new Map<string, { fingerprint: string; changeId: string }>();
+  private readonly contextRevisions = new Map<string, number>();
   readonly runs = new Map<string, Run>();
   readonly approvals = new Map<string, { id: string; runId: string; memberId: string; action: string; reason: string; status: 'pending' }>();
   readonly decisions: { messageId: string; participate: boolean; reason: string }[] = [];
@@ -25,13 +29,16 @@ export class ControlState {
   snapshot() {
     return structuredClone({ messages: [...this.messages], runs: [...this.runs], approvals: [...this.approvals],
       decisions: this.decisions, audit: this.audit.slice(-1000), messageKeys: [...this.messageKeys],
-      claims: [...this.claims], resultKeys: [...this.resultKeys], toolCalls: [...this.toolCalls] });
+      claims: [...this.claims], resultKeys: [...this.resultKeys], toolCalls: [...this.toolCalls],
+      changes: [...this.changes], changeKeys: [...this.changeKeys], contextRevisions: [...this.contextRevisions] });
   }
   restore(data: ReturnType<ControlState['snapshot']>): void {
     const restoreMap = <K, V>(map: Map<K, V>, entries: [K, V][]) => { map.clear(); for (const [key, value] of entries) map.set(key, value); };
     restoreMap(this.messages, data.messages); restoreMap(this.runs, data.runs); restoreMap(this.approvals, data.approvals);
     restoreMap(this.messageKeys, data.messageKeys); restoreMap(this.claims, data.claims);
     restoreMap(this.resultKeys, data.resultKeys); restoreMap(this.toolCalls, data.toolCalls);
+    restoreMap(this.changes, data.changes ?? []); restoreMap(this.changeKeys, data.changeKeys ?? []);
+    restoreMap(this.contextRevisions, data.contextRevisions ?? []);
     this.decisions.splice(0, this.decisions.length, ...data.decisions);
     this.restoreAudit(data.audit);
   }
@@ -89,7 +96,71 @@ export class ControlState {
     }
     return [...this.messages.values()].filter(m => m.conversationId === scope.conversationId && m.threadId === scope.threadId);
   }
+  contextRevision(scope: Scope): number {
+    return this.contextRevisions.get(JSON.stringify([scope.conversationId, scope.threadId])) ?? 1;
+  }
+  changeMessage(actorId: string, messageId: string, kind: 'edit' | 'retract', expectedRevision: number, clientEventId: string, text?: string) {
+    const source = this.messages.get(messageId);
+    requireCondition(source, 404, 'message_not_found');
+    this.authorize(actorId, 'read', source);
+    this.authorize(actorId, 'send', source);
+    requireCondition(source.authorId === actorId && source.origin === 'chat', 403, 'message_change_denied');
+    requireCondition(Number.isSafeInteger(expectedRevision) && expectedRevision > 0, 400, 'invalid_revision');
+    requireCondition(kind === 'retract' || (typeof text === 'string' && text.trim().length > 0 && text.length <= 8000), 400, 'invalid_text');
+    const key = JSON.stringify([actorId, clientEventId]);
+    // A retry token must not retain a withdrawn body in event metadata.
+    const fingerprint = createHash('sha256').update(JSON.stringify([messageId, kind, expectedRevision, text])).digest('hex');
+    const prior = this.changeKeys.get(key);
+    if (prior) {
+      requireCondition(prior.fingerprint === fingerprint, 409, 'idempotency_key_conflict');
+      return { message: source, change: this.changes.get(prior.changeId)!, duplicate: true };
+    }
+    requireCondition(!source.retracted, 409, 'message_retracted');
+    requireCondition(source.revision === expectedRevision, 409, 'message_revision_conflict');
+    const revision = this.contextRevision(source) + 1;
+    this.contextRevisions.set(JSON.stringify([source.conversationId, source.threadId]), revision);
+    const change: MessageChange = { id: randomUUID(), messageId, actorId, kind, revision: source.revision + 1,
+      contextRevision: revision, conversationId: source.conversationId, threadId: source.threadId, at: this.now(), affectedRunIds: [] };
+    const updated: Message = { ...source, revision: change.revision, text: kind === 'retract' ? '' : text!, retracted: kind === 'retract', changedAt: change.at };
+    this.messages.set(messageId, updated);
+    for (const run of this.runs.values()) {
+      if (run.work.route.conversationId !== source.conversationId || run.work.route.threadId !== source.threadId || terminal(run.status)) continue;
+      if (!run.invalidatedBy) run.rebuildAfterInvalidation = run.status !== 'cancel_requested';
+      run.invalidatedBy = change.id;
+      // Unknown is not evidence that a remote execution has stopped.
+      if (run.status !== 'unknown') run.status = 'cancel_requested';
+      change.affectedRunIds.push(run.id);
+    }
+    // Previously published results remain receipts, but are no longer current content.
+    for (const message of this.messages.values()) if (message.origin === 'research' && message.conversationId === source.conversationId && message.threadId === source.threadId) {
+      message.invalidated = true; message.text = ''; delete message.result;
+    }
+    this.changes.set(change.id, change); this.changeKeys.set(key, { fingerprint, changeId: change.id });
+    return { message: updated, change, duplicate: false };
+  }
+  rebuildInvalidated(): Run[] {
+    const created: Run[] = [];
+    for (const old of [...this.runs.values()]) {
+      if (!old.invalidatedBy || !old.rebuildAfterInvalidation || old.replacementRunId || !terminal(old.status)) continue;
+      const source = this.messages.get(old.sourceMessageId);
+      if (!source || source.retracted) { old.rebuildAfterInvalidation = false; continue; }
+      // Never overlap replacement work with an unconfirmed stale execution.
+      if ([...this.runs.values()].some(r => r.memberId === old.memberId && r.invalidatedBy && !terminal(r.status)
+        && r.work.route.conversationId === source.conversationId && r.work.route.threadId === source.threadId)) continue;
+      if (!this.evaluate(source)) { old.rebuildAfterInvalidation = false; continue; }
+      try {
+        const replacement = this.claim(old.memberId, source.id);
+        old.replacementRunId = replacement.run.id;
+        if (!replacement.duplicate) created.push(replacement.run);
+      } catch {
+        // Revocation ends this attempt; restoring authority must not silently revive it.
+        old.rebuildAfterInvalidation = false; old.error = 'context_rebuild_authorization_denied';
+      }
+    }
+    return created;
+  }
   evaluate(message: Message): boolean {
+    if (message.retracted) return false;
     const memberId = this.config.researchMemberId;
     // Inaccessible contents never enter the participation policy or worker queue.
     if (!this.visible(memberId, message)) return false;
@@ -101,6 +172,7 @@ export class ControlState {
   claim(actorId: string, messageId: string): { run: Run; duplicate: boolean } {
     const source = this.messages.get(messageId);
     requireCondition(source, 404, 'source_not_found');
+    requireCondition(!source.retracted, 409, 'message_retracted');
     const readGrant = this.authorize(actorId, 'read', source);
     const grant = this.authorize(actorId, 'claim', source);
     const sendGrant = this.authorize(actorId, 'send', source);
@@ -109,8 +181,11 @@ export class ControlState {
       .map(([action, g]) => ({ action, id: g.id, revision: g.revision, expiresAt: g.expiresAt }));
     requireCondition(source.origin === 'chat' && this.config.members.find(m => m.id === source.authorId)?.kind === 'human', 409, 'not_a_research_source');
     // Synchronous transaction in this single process. No awaits between check and insert.
-    const key = JSON.stringify([messageId, source.revision, 'research']);
-    const prior = this.claims.get(key);
+    const contextRevision = this.contextRevision(source);
+    const key = JSON.stringify([messageId, source.revision, 'research', contextRevision]);
+    // Keep persisted pre-versioning claim keys idempotent on the original context.
+    const legacyKey = contextRevision === 1 ? JSON.stringify([messageId, source.revision, 'research']) : '';
+    const prior = this.claims.get(key) ?? this.claims.get(legacyKey);
     if (prior) {
       const run = this.runs.get(prior)!;
       requireCondition(run.memberId === actorId, 409, 'already_claimed');
@@ -120,7 +195,7 @@ export class ControlState {
     const scope = { conversationId: source.conversationId, threadId: source.threadId };
     const work: WorkPackage = {
       protocol: PROTOCOL_VERSION, memberId: actorId, taskId, runId,
-      source: { ...scope, messageId, revision: source.revision }, contextRevision: 1,
+      source: { ...scope, messageId, revision: source.revision }, contextRevision,
       grant: { id: grant.id, revision: grant.revision, expiresAt: Math.min(...bindings.map(g => g.expiresAt)) },
       authorization: { policyVersion: this.config.policy?.version ?? 0, policyDigest: policyDigest(this.config.policy), grants: bindings },
       tools: ['read_messages', 'send_message', 'claim_task', 'request_approval'],
@@ -144,8 +219,24 @@ export class ControlState {
     this.authorizeRunGrant(actorId, run, [action, 'read']);
     const source = this.messages.get(run.sourceMessageId);
     requireCondition(source?.revision === run.work.source.revision, 409, 'source_revision_changed');
+    requireCondition(!source.retracted && !run.invalidatedBy && run.work.contextRevision === this.contextRevision(run.work.route), 409, 'context_revision_changed');
+    requireCondition(!this.contextBlocked(run), 409, 'context_rebuild_waiting');
     requireCondition(run.status === 'queued' || run.status === 'running' || (allowCompleted && run.status === 'completed'), 409, 'run_not_active');
     return run;
+  }
+  contextBlocked(run: Run): boolean {
+    return [...this.runs.values()].some(r => r.id !== run.id && r.memberId === run.memberId && r.invalidatedBy && !terminal(r.status)
+      && r.work.route.conversationId === run.work.route.conversationId && r.work.route.threadId === run.work.route.threadId);
+  }
+  presentRun(run: Run): Run {
+    const source = this.messages.get(run.sourceMessageId);
+    if (!run.invalidatedBy && source?.revision === run.work.source.revision && !source.retracted
+      && run.work.contextRevision === this.contextRevision(run.work.route)) return run;
+    // Keep the internal event ledger intact for worker replay/idempotency. A public
+    // view must not resurrect withdrawn content through output or provider events.
+    return { ...run, contextInvalidated: true, events: run.events.map(event => ({ ...event,
+      data: event.kind === 'stopped' ? { executionSettled: event.data.executionSettled === true } : {},
+    })) };
   }
   // Event/stop reconciliation may outlive an active Run, but never its bound authorization.
   authorizeRunGrant(actorId: string, run: Run, actions: Action[]): void {
@@ -229,6 +320,7 @@ export class ControlState {
     requireCondition(run, 404, 'run_not_found');
     this.authorize(actorId, 'read', run.work.route);
     this.authorize(actorId, 'cancel', run.work.route);
+    run.rebuildAfterInvalidation = false;
     if (!terminal(run.status)) run.status = 'cancel_requested';
     return run;
   }
@@ -256,6 +348,6 @@ export class ControlState {
     const run = this.runs.get(id);
     requireCondition(run, 404, 'run_not_found');
     this.authorize(actorId, 'read', run.work.route);
-    return run;
+    return this.presentRun(run);
   }
 }

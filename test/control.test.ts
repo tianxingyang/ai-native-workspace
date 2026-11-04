@@ -7,6 +7,42 @@ import { fakeExecution, fixtureResult } from '../src/worker/fake.js';
 import type { Run } from '../src/contracts.js';
 import { environment, expectStatus, gate, query, runResult, scope, waitFor } from './helpers.js';
 
+test('development transport cancels stale sessions and creates a new session for edited input', async t => {
+  const hold = gate(); let starts = 0;
+  const env = await environment(async (...args) => { starts++; if (starts === 1) { args[5](); await hold.promise; } await fakeExecution(0)(...args); });
+  t.after(async () => { hold.release(); await env.dispose(); });
+  const { message } = await env.post();
+  const original = await waitFor(() => [...env.state.runs.values()].find(r => r.status === 'running'));
+  await requestJson(env.url, DEV.humanToken, `/messages/${message.id}/edit`, { expectedRevision: 1, clientEventId: 'edit-dev', text: '请调研新的版本' });
+  await expectStatus(requestJson(env.url, DEV.agentToken, '/tools/send', { runId: original.id, result: fixtureResult() }), 409, 'source_revision_changed');
+  assert.equal(env.state.runs.size, 1);
+  const next = await env.post('请调研等待期间收到的新请求');
+  const queued = await waitFor(() => [...env.state.runs.values()].find(r => r.sourceMessageId === next.message.id));
+  assert.equal(queued.status, 'queued'); assert.equal(queued.sessionId, undefined); assert.equal(starts, 1);
+  hold.release();
+  const replacement = await env.completed();
+  assert.notEqual(replacement.id, original.id); assert.notEqual(replacement.sessionId, original.sessionId);
+  assert.equal(original.status, 'stopped'); assert.equal(replacement.work.contextRevision, 2);
+  await waitFor(() => [...env.state.runs.values()].filter(r => r.status === 'completed').length === 2);
+  assert.equal(env.state.runs.get(original.replacementRunId!)!.work.source.revision, 2);
+});
+
+test('development edit during createSession fences input and waits for confirmed stop before rebuilding', async t => {
+  const env = await environment(), hold = gate();
+  t.after(async () => { hold.release(); await env.dispose(); });
+  const create = env.runtimeClient.createSession.bind(env.runtimeClient);
+  let creating = false;
+  env.runtimeClient.createSession = async work => { if (!creating) { creating = true; await hold.promise; } return create(work); };
+  const { message } = await env.post(); await waitFor(() => creating);
+  const original = [...env.state.runs.values()][0]!;
+  await requestJson(env.url, DEV.humanToken, `/messages/${message.id}/edit`, { expectedRevision: 1, clientEventId: 'edit-create', text: '请调研新指令' });
+  assert.equal(original.status, 'cancel_requested'); assert.equal(original.stopEvidence, undefined); assert.equal(env.state.runs.size, 1);
+  hold.release();
+  const replacement = await env.completed();
+  assert.notEqual(replacement.id, original.id); assert.equal(original.status, 'stopped');
+  assert.equal(original.events.some(e => e.kind === 'input_applied'), false);
+});
+
 test('unmentioned research runs in background; chat remains responsive and result returns to source', async t => {
   const hold = gate();
   const env = await environment(async (...args) => { await hold.promise; await fakeExecution(0)(...args); });

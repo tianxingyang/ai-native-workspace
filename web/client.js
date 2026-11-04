@@ -35,6 +35,9 @@ export class Client {
   }
   send(scope, text, clientEventId) { return this.request('/messages', { conversationId: scope.conversationId, threadId: scope.threadId, text, clientEventId }); }
   cancel(runId) { return this.request(`/runs/${encodeURIComponent(runId)}/cancel`, {}); }
+  change(messageId, kind, expectedRevision, clientEventId, text) {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/${kind}`, { expectedRevision, clientEventId, ...(kind === 'edit' ? { text } : {}) });
+  }
 }
 export function errorText(error) {
   if (error instanceof ApiError) {
