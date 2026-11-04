@@ -40,6 +40,10 @@ export class Client {
   }
   send(scope, text, clientEventId, replyToMessageId) { return this.request('/messages', { conversationId: scope.conversationId, threadId: scope.threadId, text, clientEventId, ...(replyToMessageId ? { replyToMessageId } : {}) }); }
   cancel(runId) { return this.request(`/runs/${encodeURIComponent(runId)}/cancel`, {}); }
+  changeReceipt(scope, clientEventId) {
+    const query = new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId, clientEventId });
+    return this.request(`/messages/change-receipt?${query}`);
+  }
   change(messageId, kind, expectedRevision, clientEventId, text) {
     return this.request(`/messages/${encodeURIComponent(messageId)}/${kind}`, { expectedRevision, clientEventId, ...(kind === 'edit' ? { text } : {}) });
   }

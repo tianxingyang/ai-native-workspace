@@ -21,6 +21,23 @@ import { type Message, type Run, terminal } from '../src/contracts.js';
 import { expectStatus, gate, waitFor } from './helpers.js';
 import { defaultPolicy } from '../src/control/authorization.js';
 
+test('change receipt survives restart without repeating an edit after speaking is withdrawn', async t => {
+  const env = await setup(t);
+  const sent = await requestJson<{ message: Message }>(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...scope, text: 'original', clientEventId: 'change-source' });
+  const body = { expectedRevision: 1, clientEventId: 'durable-change', text: 'edited' };
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages/${sent.message.id}/edit`, body);
+  await env.restart();
+  const grant = env.config.control.grants.find(g => g.memberId === 'owner1')!; grant.actions = ['read'];
+  const path = `/messages/change-receipt?${new URLSearchParams({ ...scope, clientEventId: 'durable-change' })}`;
+  const { receipt } = await requestJson<{ receipt: { message: Message; change: { revision: number } } }>(env.url, secrets.COSEAT_OWNER_TOKEN, path);
+  assert.equal(receipt.message.text, 'edited'); assert.equal(receipt.change.revision, 2);
+  assert.equal((await requestJson<{ receipt: null }>(env.url, secrets.COSEAT_AGENT_TOKEN, path)).receipt, null);
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages/${sent.message.id}/edit`, body), 403, 'scope_denied');
+  assert.equal(env.engine.state.changes.size, 1);
+  grant.revoked = true;
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, path), 403, 'scope_denied');
+});
+
 test('send receipt survives restart and remains readable after send permission is withdrawn', async t => {
   const env = await setup(t);
   const sent = await requestJson<{ message: Message }>(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...scope, text: 'receipt body', clientEventId: 'durable-receipt' });

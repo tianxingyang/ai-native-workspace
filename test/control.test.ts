@@ -6,6 +6,19 @@ import { requestJson } from '../src/http.js';
 import { fakeExecution, fixtureResult } from '../src/worker/fake.js';
 import type { Run } from '../src/contracts.js';
 import { environment, expectStatus, gate, query, runResult, scope, waitFor } from './helpers.js';
+test('development change receipts require current read and the authenticated actor', async t => {
+  const env = await environment(); t.after(() => env.dispose());
+  const { message } = await env.post('ordinary source');
+  await requestJson(env.url, DEV.humanToken, `/messages/${message.id}/retract`, { expectedRevision: 1, clientEventId: 'dev-change' });
+  const path = `/messages/change-receipt?${query}&clientEventId=dev-change`;
+  const grant = env.state.config.grants.find(g => g.memberId === DEV.humanId)!; grant.actions = ['read'];
+  const { receipt } = await requestJson<{ receipt: { message: { retracted: boolean }; change: { kind: string } } }>(env.url, DEV.humanToken, path);
+  assert.ok(receipt.message.retracted); assert.equal(receipt.change.kind, 'retract');
+  assert.equal((await requestJson<{ receipt: null }>(env.url, DEV.agentToken, path)).receipt, null);
+  grant.revoked = true;
+  await expectStatus(requestJson(env.url, DEV.humanToken, path), 403, 'scope_denied');
+});
+
 test('development send receipt is a read-only lookup of the authenticated sender', async t => {
   const env = await environment(); t.after(() => env.dispose());
   const sent = await requestJson<{ message: { id: string } }>(env.url, DEV.humanToken, '/messages', { ...scope, text: 'receipt', clientEventId: 'dev-receipt' });

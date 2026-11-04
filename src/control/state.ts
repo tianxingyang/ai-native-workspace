@@ -119,6 +119,16 @@ export class ControlState {
     return message && message.authorId === actorId && message.conversationId === scope.conversationId
       && message.threadId === scope.threadId ? message : null;
   }
+  messageChangeReceipt(actorId: string, scope: Scope, clientEventId: string) {
+    this.authorize(actorId, 'read', scope);
+    const entry = this.changeKeys.get(JSON.stringify([actorId, clientEventId]));
+    const change = entry && this.changes.get(entry.changeId);
+    const message = change && this.messages.get(change.messageId);
+    // Confirm this operation without exposing historical content or fingerprints.
+    return change && message && change.actorId === actorId && message.authorId === actorId
+      && change.conversationId === scope.conversationId && change.threadId === scope.threadId
+      ? { change, message } : null;
+  }
   advanceReadPosition(actorId: string, scope: Scope, messageId: string): { readThroughMessageId: string } {
     const messages = this.readMessages(actorId, scope), ids = messages.map(message => message.id);
     const index = ids.indexOf(messageId);

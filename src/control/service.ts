@@ -95,6 +95,10 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
       const scope = scopeValue(Object.fromEntries(url.searchParams));
       respond(response, 200, { message: state.messageReceipt(actor, scope, stringValue(url.searchParams.get('clientEventId'), 'clientEventId', 128)) }); return;
     }
+    if (url.pathname === '/messages/change-receipt' && request.method === 'GET') {
+      const scope = scopeValue(Object.fromEntries(url.searchParams));
+      respond(response, 200, { receipt: state.messageChangeReceipt(actor, scope, stringValue(url.searchParams.get('clientEventId'), 'clientEventId', 128)) }); return;
+    }
     if (url.pathname === '/read-position' && request.method === 'POST') {
       const body = await jsonBody(request);
       state.authenticate(bearer(request));

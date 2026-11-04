@@ -15,6 +15,25 @@ function setup() {
 }
 function source(state: ControlState) { return state.createMessage('alex', scope, 'research', 'source').message; }
 
+test('change receipts are private, read-authorized and contain current content only', () => {
+  const { state } = setup(), message = source(state), grant = state.config.grants.find(g => g.memberId === 'alex')!;
+  const edited = state.changeMessage('alex', message.id, 'edit', 1, 'lost-edit', 'superseded body');
+  const other = { ...scope, threadId: 'elsewhere' };
+  state.config.grants.push({ ...grant, ...other, id: 'other-receipt-scope' }); state.config.memberships.alex!.push(other);
+  assert.equal(state.messageChangeReceipt('sam', scope, 'lost-edit'), null);
+  assert.equal(state.messageChangeReceipt('alex', other, 'lost-edit'), null);
+  assert.equal(state.messageChangeReceipt('alex', scope, 'missing'), null);
+  state.changeMessage('alex', message.id, 'retract', 2, 'later-retract');
+  grant.actions = ['read'];
+  const receipt = state.messageChangeReceipt('alex', scope, 'lost-edit')!;
+  assert.equal(receipt.change.id, edited.change.id); assert.equal(receipt.change.revision, 2);
+  assert.equal(receipt.message.revision, 3); assert.ok(receipt.message.retracted);
+  assert.equal(receipt.message.text, ''); assert.equal(JSON.stringify(receipt).includes('superseded body'), false);
+  assert.equal(JSON.stringify(receipt).includes('fingerprint'), false);
+  grant.actions = ['send'];
+  assert.throws(() => state.messageChangeReceipt('alex', scope, 'lost-edit'), /scope_denied/);
+});
+
 test('send receipts require read and expose only the sender current message in the requested scope', () => {
   const { state } = setup(), message = state.createMessage('alex', scope, 'private-original-receipt-body', 'source').message;
   const grant = state.config.grants.find(g => g.memberId === 'alex')!;
