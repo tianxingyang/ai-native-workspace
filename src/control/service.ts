@@ -91,6 +91,12 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
   const service = server(async (request, response, url) => {
     if (url.pathname === '/health' && request.method === 'GET') { respond(response, 200, { service: 'control', pid: process.pid, mode: 'development-fixture' }); return; }
     const actor = state.authenticate(bearer(request));
+    if (url.pathname === '/read-position' && request.method === 'POST') {
+      const body = await jsonBody(request);
+      state.authenticate(bearer(request));
+      requireCondition(body.authorId === undefined && body.memberId === undefined, 400, 'identity_is_authenticated');
+      respond(response, 200, state.advanceReadPosition(actor, scopeValue(body), stringValue(body.messageId, 'messageId', 128))); return;
+    }
     const changeMatch = /^\/messages\/([^/]+)\/(edit|retract)$/.exec(url.pathname);
     if (changeMatch && request.method === 'POST') {
       const body = await jsonBody(request);
@@ -130,7 +136,7 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
     if (url.pathname === '/messages' && request.method === 'GET') {
       const scope = scopeValue(Object.fromEntries(url.searchParams));
       const runId = url.searchParams.get('runId') ?? undefined;
-      respond(response, 200, { messages: state.readMessages(actor, scope, runId) }); return;
+      respond(response, 200, { messages: state.readMessages(actor, scope, runId), readThroughMessageId: state.readPosition(actor, scope) }); return;
     }
     if (url.pathname === '/tools/claim' && request.method === 'POST') {
       const body = await jsonBody(request);

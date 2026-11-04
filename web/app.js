@@ -6,7 +6,7 @@ const SVG = 'http://www.w3.org/2000/svg';
 const key = scope => JSON.stringify([scope.conversationId, scope.threadId]);
 const state = {
   client: null, session: null, selected: '', rooms: new Map(), epoch: 0, timer: null, expiryTimer: null, syncing: false, offset: 0,
-  cancels: new Map(), pane: null, paneReturn: null, lastSync: 0,
+  cancels: new Map(), reads: new Map(), pane: null, paneReturn: null, lastSync: 0,
   // Render signatures keep focus, selection and open disclosures stable across polling.
   ui: { nav: '', seats: '', seat: '', expiry: '', pane: '', outbox: '' },
 };
@@ -65,8 +65,36 @@ function dayLabel(ts) {
   return new Date(ts).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' });
 }
 function roomTime(ts) { return startOfDay(ts) === startOfDay(Date.now()) ? clock(ts) : new Date(ts).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }); }
-function unseen(room) { return room.messages.filter(message => !room.seen.has(message.id) && !isMe(message.authorId)).length; }
-function markSeen(room) { for (const message of room.messages) room.seen.add(message.id); }
+function unseen(room) { return room.messages.filter(message => !room.seen.has(message.id) && !isMe(message.authorId) && !message.retracted && !message.invalidated).length; }
+function applyReadPosition(room, messageId) {
+  const index = room.messages.findIndex(message => message.id === messageId);
+  if (index < 0) return;
+  for (const message of room.messages.slice(0, index + 1)) room.seen.add(message.id);
+  if (index > room.messages.findIndex(message => message.id === room.readThroughMessageId)) room.readThroughMessageId = messageId;
+  if (index >= room.messages.findIndex(message => message.id === room.pendingReadMessageId)) room.pendingReadMessageId = undefined;
+}
+function markSeen(room) {
+  if (!room || room !== current() || !authorized('read', room) || document.hidden || $('app').hidden
+      || $('app').classList.contains('show-rooms') || (state.pane && paneOverlay.matches)) return;
+  const timeline = $('timeline');
+  if (timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight >= 90) return;
+  for (const message of room.messages) room.seen.add(message.id);
+  const messageId = room.messages.at(-1)?.id;
+  if (messageId && messageId !== room.readThroughMessageId) room.pendingReadMessageId = messageId;
+  flushReadPosition(room);
+}
+function flushReadPosition(room) {
+  const messageId = room.pendingReadMessageId, id = key(room.scope), client = state.client;
+  if (!client || !authorized('read', room) || !messageId || state.reads.has(id)) return;
+  const attempt = {}; state.reads.set(id, attempt);
+  void client.markRead(room.scope, messageId).then(result => {
+    const latest = state.rooms.get(id);
+    if (client === state.client && latest && authorized('read', latest)) applyReadPosition(latest, result.readThroughMessageId);
+  }).catch(() => {
+    // A lost acknowledgement is safe to retry: the server advances monotonically.
+    // The next authorized sync retries; access failures are handled by that sync.
+  }).finally(() => { if (state.reads.get(id) === attempt) state.reads.delete(id); });
+}
 function accessEnded() { return state.rooms.size > 0 && [...state.rooms.values()].every(room => deadline('read', room) <= serverNow()); }
 
 // Known read deadlines apply to cached content too, independently of a pending
@@ -98,7 +126,7 @@ function invalidate(error) {
   closeMessageChange();
   if (desktop) void desktop.core.invoke('desktop_connected', { connected: false });
   state.client?.close(); state.client = null; state.epoch++; clearTimeout(state.timer); clearTimeout(state.expiryTimer); state.syncing = false;
-  state.session = null; state.rooms.clear(); state.cancels.clear(); state.selected = ''; state.lastSync = 0;
+  state.session = null; state.rooms.clear(); state.cancels.clear(); state.reads.clear(); state.selected = ''; state.lastSync = 0;
   state.pane = null; state.paneReturn = null;
   for (const name of Object.keys(state.ui)) state.ui[name] = '';
   $('app').hidden = true; $('connect').hidden = false; $('token').value = ''; $('message').value = '';
@@ -272,10 +300,13 @@ function setConnection(value) {
 function applySnapshot(room, data, selected) {
   const before = new Map(room.runs.map(run => [run.id, run.status])), firstLoad = !room.loaded;
   room.messages = data.messages; room.runs = data.runs; room.loaded = true;
+  applyReadPosition(room, data.readThroughMessageId);
   if (messageChange?.roomId === key(room.scope) && room.messages.find(m => m.id === messageChange.messageId)?.retracted) closeMessageChange();
   for (const run of room.runs) if (SETTLED.has(run.status)) state.cancels.delete(run.id);
-  // Activity counts are local to this page session; nothing is reported back as a read receipt.
-  if (firstLoad || selected) markSeen(room);
+  if (selected) markSeen(room);
+  // Retry only a previously visible target, even after switching rooms. Never
+  // advance to newer background messages merely because a sync received them.
+  flushReadPosition(room);
   if (!selected || firstLoad) return;
   room.runs.forEach((run, index) => {
     const previous = before.get(run.id);
@@ -893,6 +924,7 @@ $('new-messages').addEventListener('click', () => { $('timeline').scrollTop = $(
 $('timeline').addEventListener('scroll', () => {
   const timeline = $('timeline');
   if (!$('new-messages').hidden && timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 90) $('new-messages').hidden = true;
+  markSeen(current());
 }, { passive: true });
 document.addEventListener('keydown', event => {
   if (event.isComposing || !state.client || $('app').hidden) return;

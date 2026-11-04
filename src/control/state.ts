@@ -16,6 +16,7 @@ export class ControlState {
   readonly changes = new Map<string, MessageChange>();
   private readonly changeKeys = new Map<string, { fingerprint: string; changeId: string }>();
   private readonly contextRevisions = new Map<string, number>();
+  private readonly readPositions = new Map<string, string>();
   readonly runs = new Map<string, Run>();
   readonly approvals = new Map<string, { id: string; runId: string; memberId: string; action: string; reason: string; status: 'pending' }>();
   readonly decisions: { messageId: string; participate: boolean; reason: string }[] = [];
@@ -30,7 +31,7 @@ export class ControlState {
     return structuredClone({ messages: [...this.messages], runs: [...this.runs], approvals: [...this.approvals],
       decisions: this.decisions, audit: this.audit.slice(-1000), messageKeys: [...this.messageKeys],
       claims: [...this.claims], resultKeys: [...this.resultKeys], toolCalls: [...this.toolCalls],
-      changes: [...this.changes], changeKeys: [...this.changeKeys], contextRevisions: [...this.contextRevisions] });
+      changes: [...this.changes], changeKeys: [...this.changeKeys], contextRevisions: [...this.contextRevisions], readPositions: [...this.readPositions] });
   }
   restore(data: ReturnType<ControlState['snapshot']>): void {
     const restoreMap = <K, V>(map: Map<K, V>, entries: [K, V][]) => { map.clear(); for (const [key, value] of entries) map.set(key, value); };
@@ -39,6 +40,7 @@ export class ControlState {
     restoreMap(this.resultKeys, data.resultKeys); restoreMap(this.toolCalls, data.toolCalls);
     restoreMap(this.changes, data.changes ?? []); restoreMap(this.changeKeys, data.changeKeys ?? []);
     restoreMap(this.contextRevisions, data.contextRevisions ?? []);
+    restoreMap(this.readPositions, data.readPositions ?? []);
     this.decisions.splice(0, this.decisions.length, ...data.decisions);
     this.restoreAudit(data.audit);
   }
@@ -103,6 +105,19 @@ export class ControlState {
       this.useTool(run);
     }
     return [...this.messages.values()].filter(m => m.conversationId === scope.conversationId && m.threadId === scope.threadId);
+  }
+  readPosition(actorId: string, scope: Scope): string | null {
+    this.authorize(actorId, 'read', scope);
+    return this.readPositions.get(JSON.stringify([actorId, scope.conversationId, scope.threadId])) ?? null;
+  }
+  advanceReadPosition(actorId: string, scope: Scope, messageId: string): { readThroughMessageId: string } {
+    const messages = this.readMessages(actorId, scope), ids = messages.map(message => message.id);
+    const index = ids.indexOf(messageId);
+    requireCondition(index >= 0, 404, 'read_target_unavailable');
+    const key = JSON.stringify([actorId, scope.conversationId, scope.threadId]), previous = this.readPositions.get(key);
+    // Arrival order is durable, unlike equal timestamps or mutable message revisions.
+    if (index > (previous ? ids.indexOf(previous) : -1)) this.readPositions.set(key, messageId);
+    return { readThroughMessageId: this.readPositions.get(key)! };
   }
   contextRevision(scope: Scope): number {
     return this.contextRevisions.get(JSON.stringify([scope.conversationId, scope.threadId])) ?? 1;

@@ -21,6 +21,26 @@ import { type Message, type Run, terminal } from '../src/contracts.js';
 import { expectStatus, gate, waitFor } from './helpers.js';
 import { defaultPolicy } from '../src/control/authorization.js';
 
+test('read positions survive restart, reject spoofing and never regress on delayed devices', async t => {
+  const env = await setup(t);
+  const send = (id: string) => requestJson<{ message: Message }>(env.url, secrets.COSEAT_OWNER_TOKEN, '/messages', { ...scope, text: id, clientEventId: id });
+  const first = (await send('read-first')).message, second = (await send('read-second')).message;
+  const read = (messageId: string) => requestJson<{ readThroughMessageId: string }>(env.url, secrets.COSEAT_OWNER_TOKEN, '/read-position', { ...scope, messageId });
+  await expectStatus(requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, '/read-position', { ...scope, messageId: first.id, memberId: 'agent1' }), 400, 'identity_is_authenticated');
+  await expectStatus(read('missing'), 404, 'read_target_unavailable');
+  await Promise.all([read(second.id), read(first.id), read(second.id)]);
+  await env.restart();
+  assert.equal((await read(first.id)).readThroughMessageId, second.id);
+  const path = `/messages?${new URLSearchParams(scope)}`;
+  const owner = await requestJson<{ readThroughMessageId: string }>(env.url, secrets.COSEAT_OWNER_TOKEN, path);
+  const agent = await requestJson<{ readThroughMessageId: string | null }>(env.url, secrets.COSEAT_AGENT_TOKEN, path);
+  assert.equal(owner.readThroughMessageId, second.id); assert.equal(agent.readThroughMessageId, null);
+  await requestJson(env.url, secrets.COSEAT_OWNER_TOKEN, `/messages/${second.id}/retract`, { expectedRevision: 1, clientEventId: 'retract-read-anchor' });
+  assert.equal((await read(first.id)).readThroughMessageId, second.id);
+  env.config.control.grants.find(g => g.memberId === 'owner1')!.revoked = true;
+  await expectStatus(read(second.id), 403, 'scope_denied');
+});
+
 test('configured templates and independent action grants execute through outbound HTTP tools', async t => {
   const env = await setup(t);
   env.config.control.policy = defaultPolicy();

@@ -78,6 +78,7 @@ fn permitted(path: &str, body: &Option<Value>) -> bool {
     }
     if body.is_some() {
         return path == "/messages"
+            || path == "/read-position"
             || path
                 .strip_prefix("/runs/")
                 .and_then(|p| p.strip_suffix("/cancel"))
@@ -300,6 +301,11 @@ mod tests {
             assert!(!permitted(path, &Some(json!({}))));
         }
         assert!(permitted("/messages", &Some(json!({"text":"hello"}))));
+        assert!(permitted(
+            "/read-position",
+            &Some(json!({"messageId":"msg_123"}))
+        ));
+        assert!(!permitted("/read-position", &None));
         assert!(permitted("/runs/run_123/cancel", &Some(json!({}))));
         assert!(permitted("/messages/msg_123/edit", &Some(json!({}))));
         assert!(permitted("/messages/msg_123/retract", &Some(json!({}))));

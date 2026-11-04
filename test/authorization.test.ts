@@ -14,6 +14,24 @@ function setup() {
   return { state, advance: (ms: number) => { now += ms; } };
 }
 function source(state: ControlState) { return state.createMessage('alex', scope, 'research', 'source').message; }
+
+test('read positions are private to the authenticated member and require read, not send', () => {
+  const { state } = setup(), first = source(state);
+  const second = state.createMessage('alex', scope, 'second', 'second').message;
+  state.messages.set('elsewhere', { ...first, id: 'elsewhere', threadId: 'other' });
+  for (const actor of ['alex', 'sam']) {
+    const grant = state.config.grants.find(g => g.memberId === actor)!;
+    grant.actions = ['read'];
+    assert.equal(state.readPosition(actor, scope), null);
+    assert.throws(() => state.advanceReadPosition(actor, scope, 'elsewhere'), /read_target_unavailable/);
+    assert.throws(() => state.advanceReadPosition(actor, scope, 'missing'), /read_target_unavailable/);
+    assert.equal(state.advanceReadPosition(actor, scope, second.id).readThroughMessageId, second.id);
+    assert.equal(state.advanceReadPosition(actor, scope, first.id).readThroughMessageId, second.id);
+    grant.actions = ['send'];
+    assert.throws(() => state.readPosition(actor, scope), /scope_denied/);
+    assert.throws(() => state.advanceReadPosition(actor, scope, first.id), /scope_denied/);
+  }
+});
 test('replies require read and send for human and agent equally and cannot cross scopes', () => {
   const { state } = setup(), parent = source(state);
   state.messages.set('hidden', { ...parent, id: 'hidden', conversationId: 'private', text: 'private body' });
