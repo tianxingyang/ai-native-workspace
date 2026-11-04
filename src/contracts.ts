@@ -16,6 +16,7 @@ export interface Message extends Scope {
   id: string; revision: number; authorId: string; text: string; createdAt: number;
   origin: 'chat' | 'research'; sourceMessageId?: string; result?: ResearchResult;
   retracted?: boolean; changedAt?: number; invalidated?: boolean;
+  replyToMessageId?: string;
 }
 export interface MessageChange extends Scope {
   id: string; messageId: string; actorId: string; kind: 'edit' | 'retract';

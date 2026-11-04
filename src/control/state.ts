@@ -73,16 +73,24 @@ export class ControlState {
   visible(actorId: string, scope: Scope): boolean {
     try { this.authorize(actorId, 'read', scope); return true; } catch { return false; }
   }
-  createMessage(actorId: string, scope: Scope, text: string, clientEventId: string): { message: Message; duplicate: boolean } {
+  createMessage(actorId: string, scope: Scope, text: string, clientEventId: string, replyToMessageId?: string): { message: Message; duplicate: boolean } {
     this.authorize(actorId, 'send', scope);
+    if (replyToMessageId !== undefined) this.authorize(actorId, 'read', scope);
     const key = JSON.stringify([actorId, clientEventId]);
-    const fingerprint = JSON.stringify([scope.conversationId, scope.threadId, text]);
+    // Preserve existing no-reply keys across upgrades; a reply is part of its identity.
+    const fingerprint = JSON.stringify([scope.conversationId, scope.threadId, text, ...(replyToMessageId === undefined ? [] : [replyToMessageId])]);
     const prior = this.messageKeys.get(key);
     if (prior) {
       requireCondition(prior.fingerprint === fingerprint, 409, 'idempotency_key_conflict');
       return { message: this.messages.get(prior.messageId)!, duplicate: true };
     }
+    if (replyToMessageId !== undefined) {
+      const parent = this.messages.get(replyToMessageId);
+      requireCondition(parent && parent.conversationId === scope.conversationId && parent.threadId === scope.threadId, 404, 'reply_source_unavailable');
+      requireCondition(!parent.retracted && !parent.invalidated, 409, 'reply_source_unavailable');
+    }
     const message: Message = { ...scope, id: randomUUID(), authorId: actorId, text, revision: 1, origin: 'chat', createdAt: Date.now() };
+    if (replyToMessageId !== undefined) message.replyToMessageId = replyToMessageId;
     this.messages.set(message.id, message);
     this.messageKeys.set(key, { fingerprint, messageId: message.id });
     return { message, duplicate: false };

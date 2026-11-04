@@ -14,6 +14,23 @@ function setup() {
   return { state, advance: (ms: number) => { now += ms; } };
 }
 function source(state: ControlState) { return state.createMessage('alex', scope, 'research', 'source').message; }
+test('replies require read and send for human and agent equally and cannot cross scopes', () => {
+  const { state } = setup(), parent = source(state);
+  state.messages.set('hidden', { ...parent, id: 'hidden', conversationId: 'private', text: 'private body' });
+  for (const actor of ['alex', 'sam']) {
+    const grant = state.config.grants.find(g => g.memberId === actor)!;
+    for (const actions of [['send'], ['read']] as Action[][]) {
+      grant.actions = actions;
+      assert.throws(() => state.createMessage(actor, scope, 'reply', `denied-${actor}`, parent.id), /scope_denied/);
+    }
+    grant.actions = ['read', 'send'];
+    assert.throws(() => state.createMessage(actor, scope, 'reply', `hidden-${actor}`, 'hidden'), /reply_source_unavailable/);
+    assert.throws(() => state.createMessage(actor, scope, 'reply', `missing-${actor}`, 'missing'), /reply_source_unavailable/);
+    const reply = state.createMessage(actor, scope, 'reply', `valid-${actor}`, parent.id).message;
+    assert.equal(reply.replyToMessageId, parent.id); assert.equal(reply.authorId, actor);
+    assert.equal(JSON.stringify(reply).includes(parent.text), false);
+  }
+});
 function split(state: ControlState, memberId: string) {
   const original = state.config.grants.find(g => g.memberId === memberId)!;
   state.config.grants = state.config.grants.filter(g => g.memberId !== memberId);

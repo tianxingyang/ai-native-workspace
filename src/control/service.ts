@@ -114,7 +114,8 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
     if (url.pathname === '/messages' && request.method === 'POST') {
       const body = await jsonBody(request);
       requireCondition(body.authorId === undefined && body.memberId === undefined, 400, 'identity_is_authenticated');
-      const result = state.createMessage(actor, scopeValue(body), stringValue(body.text, 'text'), stringValue(body.clientEventId, 'clientEventId', 128));
+      const result = state.createMessage(actor, scopeValue(body), stringValue(body.text, 'text'), stringValue(body.clientEventId, 'clientEventId', 128),
+        body.replyToMessageId === undefined ? undefined : stringValue(body.replyToMessageId, 'replyToMessageId', 128));
       respond(response, result.duplicate ? 200 : 201, result);
       if (!result.duplicate && options.autoDispatch !== false) setImmediate(() => {
         try {

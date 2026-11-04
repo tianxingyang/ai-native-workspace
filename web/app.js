@@ -102,7 +102,8 @@ function invalidate(error) {
   state.pane = null; state.paneReturn = null;
   for (const name of Object.keys(state.ui)) state.ui[name] = '';
   $('app').hidden = true; $('connect').hidden = false; $('token').value = ''; $('message').value = '';
-  for (const id of ['messages', 'rooms', 'outbox', 'seats', 'seat', 'members', 'my-seat', 'details-thread', 'identity']) $(id).replaceChildren();
+  for (const id of ['messages', 'rooms', 'outbox', 'reply-preview', 'seats', 'seat', 'members', 'my-seat', 'details-thread', 'identity']) $(id).replaceChildren();
+  $('reply-preview').hidden = true; delete $('reply-preview').dataset.signature;
   $('details').hidden = true; $('app').classList.remove('show-rooms', 'has-pane'); $('members-toggle').setAttribute('aria-expanded', 'false');
   updatePaneAccessibility();
   $('announcement').textContent = '';
@@ -284,6 +285,18 @@ function applySnapshot(room, data, selected) {
 
 function context(room) {
   const runsBySource = new Map(), resultsBySource = new Map(), code = new Map();
+  const byId = new Map(room.messages.map(message => [message.id, message])), roots = new Map(), discussions = new Map();
+  for (const message of room.messages) {
+    const path = [], visited = new Set(); let node = message, root = message.id;
+    while (node && !visited.has(node.id)) {
+      if (roots.has(node.id)) { root = roots.get(node.id); break; }
+      visited.add(node.id); path.push(node.id); root = node.id;
+      node = byId.get(node.replyToMessageId ?? node.sourceMessageId);
+    }
+    for (const id of path) roots.set(id, root);
+    if (!discussions.has(root)) discussions.set(root, []);
+    discussions.get(root).push(message);
+  }
   room.runs.forEach((run, index) => {
     code.set(run.id, index + 1);
     if (!runsBySource.has(run.sourceMessageId)) runsBySource.set(run.sourceMessageId, []);
@@ -294,7 +307,23 @@ function context(room) {
     if (!resultsBySource.has(message.sourceMessageId)) resultsBySource.set(message.sourceMessageId, []);
     resultsBySource.get(message.sourceMessageId).push(message);
   }
-  return { runsBySource, resultsBySource, code, byId: new Map(room.messages.map(message => [message.id, message])) };
+  return { runsBySource, resultsBySource, code, byId, roots, discussions };
+}
+function messageText(message) {
+  return !message ? '原消息不可用' : message.retracted ? '消息已撤回' : message.invalidated ? '原上下文已变更，此结果已失效。' : message.text;
+}
+function replyQuote(room, message, ctx) {
+  const parent = ctx.byId.get(message.replyToMessageId);
+  const quote = action('', `quote-${message.id}`, () => { closePane(false); focusMessage(message.replyToMessageId); }, 'quote reply-quote');
+  quote.setAttribute('aria-label', '查看引用消息');
+  quote.append(el('span', 'quote-author', parent ? `回复 ${memberIn(room, parent.authorId).name}${parent.changedAt && !parent.retracted ? ' · 原消息已编辑' : ''}` : '回复消息'),
+    el('span', 'quote-text', firstLine(messageText(parent))));
+  return quote;
+}
+function chooseReply(room, message) {
+  const latest = state.rooms.get(key(room.scope));
+  if (!latest || latest !== current() || latest.pending || !authorized('send', latest)) return;
+  latest.replyToMessageId = message.id; closePane(false); updateComposer(); $('message').focus();
 }
 
 // Consecutive messages from one author read as one turn, as in familiar IMs.
@@ -303,7 +332,7 @@ function context(room) {
 function continues(previous, message, ctx) {
   return Boolean(previous) && previous.authorId === message.authorId
     && message.createdAt - previous.createdAt < GROUP_WINDOW
-    && !previous.result && !message.result
+    && !previous.result && !message.result && !message.replyToMessageId
     && !ctx.runsBySource.has(previous.id);
 }
 
@@ -348,16 +377,18 @@ function renderMessage(room, message, previous, ctx, expanded) {
     head.append(timeNode(message.createdAt)); body.append(head);
   }
   if (message.result) body.append(...resultHead(room, message, ctx));
-  body.append(el('p', 'message-text', message.retracted ? '消息已撤回' : message.invalidated ? '原上下文已变更，此结果已失效。' : message.text));
+  if (message.replyToMessageId) body.append(replyQuote(room, message, ctx));
+  body.append(el('p', 'message-text', messageText(message)));
   if (message.changedAt && !message.retracted) body.append(el('span', 'kind', '已编辑'));
   if (message.result) body.append(sourcesNode(message, expanded));
   const actions = el('div', 'message-actions');
+  if (!message.retracted && !message.invalidated && authorized('send', room)) actions.append(action('回复消息', `reply-${message.id}`, () => chooseReply(room, message)));
   if (message.origin === 'chat' && isMe(message.authorId) && !message.retracted && authorized('send', room)) {
     actions.append(action('编辑消息', `edit-${message.id}`, () => openMessageChange(room, message, 'edit')),
       action('撤回消息', `retract-${message.id}`, () => openMessageChange(room, message, 'retract')));
   }
   if (message.sourceMessageId) actions.append(action('查看来源消息与讨论', `source-${message.id}`, event => openPane({ kind: 'discussion', messageId: message.sourceMessageId }, event.currentTarget)));
-  else if (runs.length || ctx.resultsBySource.has(message.id)) actions.append(action('查看这条消息的讨论', `source-${message.id}`, event => openPane({ kind: 'discussion', messageId: message.id }, event.currentTarget)));
+  else if (runs.length || (ctx.discussions.get(ctx.roots.get(message.id))?.length ?? 0) > 1) actions.append(action('查看这条消息的讨论', `source-${message.id}`, event => openPane({ kind: 'discussion', messageId: message.id }, event.currentTarget)));
   if (actions.firstElementChild) body.append(actions);
   for (const run of runs) body.append(renderRun(room, run, ctx));
   article.append(body);
@@ -578,7 +609,19 @@ function updateComposer() {
   const room = current(); if (!room || !state.session) return;
   const allowed = authorized('send');
   $('message').disabled = !allowed || Boolean(room.pending);
-  $('send').disabled = !allowed || Boolean(room.pending) || !$('message').value.trim();
+  const parent = room.messages.find(m => m.id === room.replyToMessageId);
+  const replyUnavailable = Boolean(room.replyToMessageId && (!parent || parent.retracted || parent.invalidated));
+  $('send').disabled = !allowed || Boolean(room.pending) || !$('message').value.trim() || replyUnavailable;
+  const preview = $('reply-preview'), replySignature = JSON.stringify([state.selected, room.replyToMessageId, parent, Boolean(room.pending)]);
+  if (preview.dataset.signature !== replySignature) {
+    preview.dataset.signature = replySignature; preview.hidden = !room.replyToMessageId; preview.replaceChildren();
+    if (room.replyToMessageId) {
+      const copy = el('div'); copy.append(el('strong', '', parent ? `回复 ${memberIn(room, parent.authorId).name}` : '回复消息'),
+        el('p', '', replyUnavailable ? '原消息已不可用，请取消引用后再发送。' : firstLine(messageText(parent))));
+      const cancel = button('取消引用', () => { current().replyToMessageId = undefined; updateComposer(); $('message').focus(); }, 'quiet');
+      cancel.disabled = Boolean(room.pending); preview.append(copy, cancel);
+    }
+  }
   setText($('send-label'), room.pending?.status === 'sending' ? '发送中…' : '发送');
   $('composer').classList.toggle('is-readonly', !allowed);
   // The input folds away when speaking ends; keep keyboard focus somewhere visible.
@@ -624,6 +667,9 @@ function renderOutbox() {
   if (failed) {
     const actions = el('div', 'outbox-actions');
     actions.append(button('重试同一条消息', () => sendPending(current(), state.selected), 'outline-button'), el('p', 'muted', '重试会使用同一个消息标识，避免重复发送。刷新会丢失此待确认请求，请先核对消息记录。'));
+    if (pending.replyRejected) actions.append(button('取消引用并保留草稿', () => {
+      const room = current(); room.pending = null; room.replyToMessageId = undefined; updateComposer(); renderOutbox(); $('message').focus();
+    }, 'outline-button'));
     node.append(actions);
   }
   $('outbox').replaceChildren(node);
@@ -634,11 +680,11 @@ async function sendPending(room, id) {
   if (!pending || pending.status === 'sending' || !client) return;
   pending.status = 'sending'; if (id === state.selected) { updateComposer(); renderOutbox(); }
   try {
-    const result = await client.send(room.scope, pending.text, pending.id);
+    const result = await client.send(room.scope, pending.text, pending.id, pending.replyToMessageId);
     if (client !== state.client) return;
     // Session polling may replace room wrappers while this request is in flight.
     const latest = state.rooms.get(id); if (!latest || latest.pending !== pending) return;
-    latest.pending = null; latest.draft = ''; latest.seen.add(result.message.id);
+    latest.pending = null; latest.draft = ''; latest.replyToMessageId = undefined; latest.seen.add(result.message.id);
     if (!latest.messages.some(m => m.id === result.message.id)) latest.messages.push(result.message);
     if (id === state.selected) { $('message').value = ''; renderMessages(true); $('message').disabled = false; $('message').focus(); }
     renderRooms();
@@ -647,7 +693,8 @@ async function sendPending(room, id) {
   } catch (error) {
     if (client !== state.client) return;
     if (error instanceof ApiError && [401, 403].includes(error.status)) { invalidate(error); return; }
-    pending.status = 'failed'; pending.error = errorText(error); announce(pending.error);
+    pending.replyRejected = error instanceof ApiError && error.code === 'reply_source_unavailable';
+    pending.status = 'failed'; pending.error = pending.replyRejected ? '原消息已不可用，本次回复未发送。可以取消引用并保留草稿。' : errorText(error); announce(pending.error);
   }
   if (client === state.client && id === state.selected) { updateComposer(); renderOutbox(); }
 }
@@ -722,27 +769,31 @@ function renderMembersPane(room) {
 }
 
 function renderThreadPane(room, messageId) {
-  const source = room.messages.find(message => message.id === messageId);
-  const runs = room.runs.filter(run => run.sourceMessageId === messageId);
-  const results = room.messages.filter(message => message.sourceMessageId === messageId);
-  const signature = JSON.stringify(['discussion', messageId, source, runs, results]);
+  const ctx = context(room), root = ctx.roots.get(messageId);
+  const messages = ctx.discussions.get(root) ?? [];
+  const runs = room.runs.filter(run => ctx.roots.get(run.sourceMessageId) === root);
+  const signature = JSON.stringify(['discussion', messageId, messages, runs, authorized('send', room)]);
   if (signature === state.ui.pane) return;
   state.ui.pane = signature;
   setText($('details-title'), '讨论详情');
-  const ctx = context(room), nodes = [el('p', 'thread-intro', '源消息、由它引发的调研，以及回到本讨论的结果。')];
-  nodes.push(source ? threadMessage(room, source) : el('p', 'pane-note', '这条消息已不在当前记录中。'));
-  for (const run of runs) nodes.push(threadRun(room, run, ctx));
-  for (const result of results) nodes.push(threadMessage(room, result));
-  nodes.push(el('p', 'pane-note', '回复仍发送到当前讨论线程；暂不支持对单条消息单独回复。'));
+  const nodes = [el('p', 'thread-intro', '这条消息的回复、相关调研与结果。')];
+  if (!messages.length) nodes.push(el('p', 'pane-note', '这条消息已不在当前记录中。'));
+  for (const message of messages) {
+    nodes.push(threadMessage(room, message, ctx));
+    for (const run of runs.filter(r => r.sourceMessageId === message.id)) nodes.push(threadRun(room, run, ctx));
+  }
+  nodes.push(el('p', 'pane-note', '回复沿用当前会话的阅读与发言权限。引用内容随原消息更新。'));
   $('details-thread').replaceChildren(...nodes);
 }
 
-function threadMessage(room, message) {
+function threadMessage(room, message, ctx) {
   const member = memberIn(room, message.authorId), item = el('article', 'thread-item'), head = el('div', 'thread-head');
   head.append(el('strong', '', member.name), el('span', 'kind', kindLabel(member)), timeNode(message.createdAt));
   item.append(head);
   if (message.result) item.append(el('span', 'thread-synthetic', '模拟研究结果 · 合成资料'));
-  item.append(el('p', 'thread-text', message.text));
+  if (message.replyToMessageId) item.append(replyQuote(room, message, ctx));
+  item.append(el('p', 'thread-text', messageText(message)));
+  if (!message.retracted && !message.invalidated && authorized('send', room)) item.append(button('回复消息', () => chooseReply(room, message), 'text-button'));
   if (message.result) {
     const list = el('ol', 'thread-sources');
     message.result.sources.forEach((source, index) => {
@@ -780,8 +831,8 @@ $('connect-form').addEventListener('submit', async event => {
 });
 $('composer').addEventListener('submit', event => {
   event.preventDefault(); const room = current(), text = $('message').value.trim();
-  if (!room || room.pending || !text || !authorized('send')) return;
-  room.draft = text; room.pending = { id: crypto.randomUUID(), text, status: 'new', error: '' };
+  if (!room || room.pending || !text || !authorized('send') || $('send').disabled) return;
+  room.draft = text; room.pending = { id: crypto.randomUUID(), text, replyToMessageId: room.replyToMessageId, status: 'new', error: '' };
   void sendPending(room, state.selected);
 });
 $('message').addEventListener('input', () => { if (current() && !current().pending) current().draft = $('message').value; updateComposer(); });
