@@ -166,11 +166,13 @@ test('conversation switching restores a history anchor despite edits above it', 
     return { id: item.dataset.message, offset: item.getBoundingClientRect().top - top };
   });
   await page.getByRole('button', { name: '研发讨论 插件协议' }).click();
+  // A delta appears only once, so register before the mutation can be observed.
+  const editedSnapshot = page.waitForResponse(async response => response.url().includes('/sync?') && response.request().method() === 'GET'
+    && (await response.json()).messages?.some(message => message.id === messages[0].id && message.revision === 2));
   demo.engine.commit(() => demo.engine.changeMessage('demo-researcher', messages[0].id, 'edit', 1, 'edit-above-anchor', '变长的原文\n'.repeat(25)));
   await expect.poll(() => page.locator('.room').filter({ hasText: '产品讨论' }).getAttribute('aria-current')).toBe('false');
   // Wait for the background snapshot containing the edit, not a fixed timeout.
-  await page.waitForResponse(async response => response.url().includes('/sync?') && response.request().method() === 'GET'
-    && (await response.json()).messages?.some(message => message.id === messages[0].id && message.revision === 2));
+  await editedSnapshot;
   await page.getByRole('button', { name: '产品讨论 日常交流' }).click();
   await expect.poll(async () => Math.round((await page.locator(`[data-message="${anchor.id}"]`).boundingBox()).y - (await page.locator('#timeline').boundingBox()).y)).toBe(Math.round(anchor.offset));
   await expect(page.locator('.unread-divider')).toHaveCount(0);
