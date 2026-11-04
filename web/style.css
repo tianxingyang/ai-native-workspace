@@ -9,11 +9,11 @@
 .change-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; margin-top: 20px; }
 #message-change .change-actions button { max-width: 100%; white-space: normal; }
 .reply-quote { display: flex; flex-direction: column; text-align: left; width: 100%; cursor: pointer; }
-.reply-preview { display: flex; align-items: flex-start; gap: 16px; padding: 12px; border-left: 3px solid #52776a; background: #f0f5f2; margin-bottom: 8px; }
+.reply-preview { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px; padding: 12px; border-left: 3px solid #52776a; background: #f0f5f2; margin-bottom: 8px; }
 .reply-preview[hidden] { display: none; }
-.reply-preview > div { min-width: 0; flex: 1; }
+.reply-preview > div { min-width: 0; flex: 1 1 180px; overflow-wrap: anywhere; }
 .reply-preview p { margin: 4px 0 0; overflow-wrap: anywhere; max-height: 5em; overflow: auto; }
-.reply-preview > button { flex-shrink: 0; }
+.reply-preview > button { flex-shrink: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 :root {
   color-scheme: light;
   --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
@@ -329,13 +329,13 @@ h1, h2, h3 { text-wrap: balance; }
 #composer { padding: 8px 10px 8px 12px; border: 1px solid var(--n4); border-radius: var(--r-field); background: var(--n0); box-shadow: var(--card-shadow); transition: border-color .15s ease-out, box-shadow .15s ease-out; }
 #composer:focus-within { border-color: var(--focus); box-shadow: 0 0 0 3px rgb(46 138 103 / .16), var(--card-shadow); }
 #composer.is-readonly { border-style: dashed; border-color: var(--n5); background: var(--n2); box-shadow: none; }
-.seat-card { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; margin-bottom: 4px; padding: 2px 10px 2px 2px; border: 1px solid var(--n3); border-radius: var(--r-card); background: var(--n0); box-shadow: var(--card-shadow); font-size: 12px; color: var(--n7); }
+.seat-card { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; max-width: 100%; margin-bottom: 4px; padding: 2px 10px 2px 2px; border: 1px solid var(--n3); border-radius: var(--r-card); background: var(--n0); box-shadow: var(--card-shadow); font-size: 12px; color: var(--n7); }
 .seat-card:empty { display: none; }
 .seat-card .tile { width: 22px; height: 22px; font-size: 11px; border: 0; box-shadow: none; background: var(--n2); }
 .seat-card .icon { width: 14px; height: 14px; margin-left: 6px; color: var(--n7); }
 .seat-member { white-space: nowrap; }
-.seat-standing { font-weight: 700; color: var(--accent); white-space: nowrap; }
-.seat-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seat-standing { font-weight: 700; color: var(--accent); max-width: 100%; overflow-wrap: anywhere; }
+.seat-detail { max-width: 100%; overflow-wrap: anywhere; }
 .seat-card.is-soon .seat-detail { color: var(--warn-ink); font-weight: 600; }
 .is-readonly .seat-card { margin-bottom: 0; }
 .is-readonly .seat-standing { color: var(--n8); }
@@ -358,13 +358,13 @@ h1, h2, h3 { text-wrap: balance; }
 .details-header h2:focus-visible { outline-offset: 4px; border-radius: 2px; }
 .details-body { flex: 1; min-height: 0; overflow: auto; padding: 16px 20px 24px; }
 .my-seat { padding: 14px; border: 1px solid var(--n3); border-radius: var(--r-card); background: var(--n0); box-shadow: var(--card-shadow); }
-.my-seat-head { display: flex; align-items: center; gap: 10px; }
+.my-seat-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .my-seat-head .tile { width: 40px; height: 40px; font-size: 16px; }
 .my-seat-head strong { display: block; font-size: 15px; }
 .my-seat-head span { font-size: 12px; color: var(--n6); }
-.standing { margin-left: auto; padding: 2px 8px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 700; white-space: nowrap; }
+.standing { margin-left: auto; max-width: 100%; padding: 2px 8px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }
 .standing.is-readonly { background: var(--n2); color: var(--n7); }
-.perm-list { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 12px 0 0; padding-top: 12px; border-top: 1px dashed var(--n4); font-size: 13px; }
+.perm-list { display: grid; grid-template-columns: fit-content(45%) minmax(0, 1fr); gap: 6px 14px; margin: 12px 0 0; padding-top: 12px; border-top: 1px dashed var(--n4); font-size: 13px; overflow-wrap: anywhere; }
 .perm-list dt { color: var(--n7); }
 .perm-list dd { margin: 0; font-variant-numeric: tabular-nums; }
 .perm-on { color: var(--accent); font-weight: 600; }

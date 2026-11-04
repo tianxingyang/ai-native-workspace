@@ -121,10 +121,10 @@ function expireReadScopes() {
   }
   if (!state.rooms.size) { invalidate(new ApiError(403, 'grant_expired')); return; }
   state.session.scopes = state.session.scopes.filter(scope => state.rooms.has(key(scope)));
-  setText($('room-count'), `${state.rooms.size} 个讨论`);
+  setText($('room-count'), t('room.count', { count: state.rooms.size }));
   if (!state.rooms.has(state.selected)) {
     void selectRoom(state.rooms.keys().next().value);
-    announce('当前会话的阅读授权已到期，缓存已清除，已切换到仍获授权的会话。');
+    announce(t('room.readExpired'));
   } else renderRooms();
   const next = Math.min(...[...state.rooms.values()].map(room => deadline('read', room)));
   state.expiryTimer = setTimeout(expireReadScopes, Math.min(2147483647, Math.max(1, next - serverNow())));
@@ -170,7 +170,7 @@ function sessionReceived(session) {
   state.rooms = next;
   if (!next.has(state.selected)) { state.selected = next.keys().next().value; current().entering = true; state.pane = null; renderPane(); }
   renderIdentity();
-  setText($('room-count'), `${session.scopes.length} 个讨论`);
+  setText($('room-count'), t('room.count', { count: session.scopes.length }));
   renderRooms(); renderHeader();
   expireReadScopes();
 }
@@ -205,7 +205,7 @@ function renderRooms() {
 function updateRoomItem(item, room) {
   const selected = item.dataset.room === state.selected, last = room.messages.at(-1);
   const live = room.runs.find(run => LIVE.has(run.status)), fresh = selected ? 0 : unseen(room);
-  const text = live ? `${memberIn(room, live.memberId).name} 正在调研` : last ? `${memberIn(room, last.authorId).name}：${firstLine(last.text)}` : room.loaded ? '还没有消息' : '';
+  const text = live ? t('room.researching', { name: memberIn(room, live.memberId).name }) : last ? t('room.latestMessage', { name: memberIn(room, last.authorId).name, text: firstLine(last.text) }) : room.loaded ? t('room.noMessages') : '';
   const preview = item.querySelector('.room-preview'), previewSignature = JSON.stringify([text, Boolean(live)]);
   if (preview.dataset.signature !== previewSignature) {
     preview.dataset.signature = previewSignature;
@@ -214,7 +214,7 @@ function updateRoomItem(item, room) {
   setText(item.querySelector('.room-time'), last ? roomTime(last.createdAt) : '');
   const badge = item.querySelector('.room-badge'); setText(badge, fresh ? String(fresh) : ''); badge.hidden = !fresh;
   item.classList.toggle('is-live', Boolean(live)); item.classList.toggle('has-new', fresh > 0);
-  const label = [`${room.scope.conversationId} ${room.scope.threadId}`, live && '调研进行中', fresh && `${fresh} 条新消息`].filter(Boolean).join('，');
+  const label = [`${room.scope.conversationId} ${room.scope.threadId}`, live && t('room.researchActive'), fresh && t('room.unread', { count: fresh })].filter(Boolean).join(t('list.separator'));
   if (item.getAttribute('aria-label') !== label) item.setAttribute('aria-label', label);
 }
 
@@ -222,11 +222,11 @@ function renderHeader() {
   const room = current(); if (!room) return;
   const { conversationId, threadId, members } = room.scope;
   setText($('room-title'), conversationId);
-  setText($('thread-title'), `${threadId} · ${members.length} 位成员`);
+  setText($('thread-title'), t('room.threadMembers', { thread: threadId, count: members.length }));
   setText($('room-tile'), initial(conversationId));
-  setText($('members-count'), `${members.length} 位成员`);
+  setText($('members-count'), t('room.members', { count: members.length }));
   setText($('members-short'), String(members.length));
-  setText($('scope-note'), `消息发送到「${conversationId} › ${threadId}」。可编辑或撤回自己的消息；暂不支持附件和私聊。`);
+  setText($('scope-note'), t('room.scopeNote', { conversation: conversationId, thread: threadId }));
   renderSeats(room); updateComposer();
 }
 
@@ -240,7 +240,7 @@ function renderSeats(room) {
     const working = live.has(member.id), seat = el('li', working ? 'seat is-live' : 'seat');
     seat.append(tile(member), el('span', 'seat-name', member.name));
     if (working) seat.append(el('span', 'live-dot'));
-    seat.append(el('span', 'seat-kind', working ? '调研中' : isMe(member.id) ? '你' : kindLabel(member)));
+    seat.append(el('span', 'seat-kind', working ? t('member.researching') : isMe(member.id) ? t('member.you') : kindLabel(member)));
     return seat;
   });
   if (room.scope.members.length > shown.length) seats.push(el('li', 'seats-more', `+${room.scope.members.length - shown.length}`));
@@ -302,7 +302,7 @@ async function sync() {
     // service is expiry, not a transient outage worth retrying forever.
     if (!(error instanceof ApiError) && accessEnded()) { invalidate(new ApiError(403, 'grant_expired')); return; }
     setConnection('down');
-    $('sync-error-text').textContent = `${errorText(error)} ${state.lastSync ? `当前显示 ${clock(state.lastSync)} 同步的记录。` : '当前显示上次同步的记录。'}`;
+    $('sync-error-text').textContent = state.lastSync ? t('sync.staleAt', { error: errorText(error), time: clock(state.lastSync) }) : t('sync.stale', { error: errorText(error) });
     $('sync-error').hidden = false;
   } finally {
     if (epoch === state.epoch) { state.syncing = false; if (state.client) { updateComposer(); state.timer = setTimeout(sync, 1200); } }
@@ -367,13 +367,13 @@ function context(room) {
   return { runsBySource, resultsBySource, code, byId, roots, discussions };
 }
 function messageText(message) {
-  return !message ? '原消息不可用' : message.retracted ? '消息已撤回' : message.invalidated ? '原上下文已变更，此结果已失效。' : message.text;
+  return !message ? t('message.unavailable') : message.retracted ? t('message.retracted') : message.invalidated ? t('message.invalidated') : message.text;
 }
 function replyQuote(room, message, ctx) {
   const parent = ctx.byId.get(message.replyToMessageId);
   const quote = action('', `quote-${message.id}`, () => { closePane(false); focusMessage(message.replyToMessageId); }, 'quote reply-quote');
-  quote.setAttribute('aria-label', '查看引用消息');
-  quote.append(el('span', 'quote-author', parent ? `回复 ${memberIn(room, parent.authorId).name}${parent.changedAt && !parent.retracted ? ' · 原消息已编辑' : ''}` : '回复消息'),
+  quote.setAttribute('aria-label', t('reply.view'));
+  quote.append(el('span', 'quote-author', parent ? t(parent.changedAt && !parent.retracted ? 'reply.editedAuthor' : 'reply.author', { name: memberIn(room, parent.authorId).name }) : t('message.reply')),
     el('span', 'quote-text', firstLine(messageText(parent))));
   return quote;
 }
@@ -425,7 +425,7 @@ function renderMessages(force = false) {
     const label = dayLabel(message.createdAt);
     if (label !== day) { day = label; previous = null; const divider = el('div', 'day-divider', label); divider.setAttribute('role', 'separator'); nodes.push(divider); }
     if (message.id === room.unreadBoundaryId) {
-      const divider = el('div', 'day-divider unread-divider', '新消息'); divider.setAttribute('role', 'separator');
+      const divider = el('div', 'day-divider unread-divider', t('message.new')); divider.setAttribute('role', 'separator');
       nodes.push(divider); previous = null;
     }
     nodes.push(renderMessage(room, message, previous, ctx, expanded));
@@ -458,22 +458,22 @@ function renderMessage(room, message, previous, ctx, expanded) {
   if (!continued) {
     const head = el('div', 'message-head');
     head.append(el('strong', 'author', member.name), el('span', 'kind', kindLabel(member)));
-    if (isMe(member.id)) head.append(el('span', 'kind you', '你'));
+    if (isMe(member.id)) head.append(el('span', 'kind you', t('member.you')));
     head.append(timeNode(message.createdAt)); body.append(head);
   }
   if (message.result) body.append(...resultHead(room, message, ctx));
   if (message.replyToMessageId) body.append(replyQuote(room, message, ctx));
   body.append(el('p', 'message-text', messageText(message)));
-  if (message.changedAt && !message.retracted) body.append(el('span', 'kind', '已编辑'));
+  if (message.changedAt && !message.retracted) body.append(el('span', 'kind', t('message.edited')));
   if (message.result) body.append(sourcesNode(message, expanded));
   const actions = el('div', 'message-actions');
-  if (!message.retracted && !message.invalidated && authorized('send', room)) actions.append(action('回复消息', `reply-${message.id}`, () => chooseReply(room, message)));
+  if (!message.retracted && !message.invalidated && authorized('send', room)) actions.append(action(t('message.reply'), `reply-${message.id}`, () => chooseReply(room, message)));
   if (message.origin === 'chat' && isMe(message.authorId) && !message.retracted && authorized('send', room)) {
-    actions.append(action('编辑消息', `edit-${message.id}`, () => openMessageChange(room, message, 'edit')),
-      action('撤回消息', `retract-${message.id}`, () => openMessageChange(room, message, 'retract')));
+    actions.append(action(t('editor.editTitle'), `edit-${message.id}`, () => openMessageChange(room, message, 'edit')),
+      action(t('editor.retractTitle'), `retract-${message.id}`, () => openMessageChange(room, message, 'retract')));
   }
-  if (message.sourceMessageId) actions.append(action('查看来源消息与讨论', `source-${message.id}`, event => openPane({ kind: 'discussion', messageId: message.sourceMessageId }, event.currentTarget)));
-  else if (runs.length || (ctx.discussions.get(ctx.roots.get(message.id))?.length ?? 0) > 1) actions.append(action('查看这条消息的讨论', `source-${message.id}`, event => openPane({ kind: 'discussion', messageId: message.id }, event.currentTarget)));
+  if (message.sourceMessageId) actions.append(action(t('message.sourceDiscussion'), `source-${message.id}`, event => openPane({ kind: 'discussion', messageId: message.sourceMessageId }, event.currentTarget)));
+  else if (runs.length || (ctx.discussions.get(ctx.roots.get(message.id))?.length ?? 0) > 1) actions.append(action(t('message.discussion'), `source-${message.id}`, event => openPane({ kind: 'discussion', messageId: message.id }, event.currentTarget)));
   if (actions.firstElementChild) body.append(actions);
   for (const run of runs) body.append(renderRun(room, run, ctx));
   article.append(body);
@@ -583,7 +583,7 @@ function renderRun(room, run, ctx) {
 
 function emptyState(room) {
   if (!room.loaded) {
-    const skeleton = el('div', 'skeleton'); skeleton.append(el('p', 'sr-only', '正在加载讨论…'));
+    const skeleton = el('div', 'skeleton'); skeleton.append(el('p', 'sr-only', t('room.loading')));
     for (let row = 0; row < 3; row++) {
       const line = el('div', 'skeleton-row'), lines = el('div', 'skeleton-lines');
       lines.append(el('span'), el('span')); line.append(el('span'), lines); skeleton.append(line);
@@ -591,7 +591,7 @@ function emptyState(room) {
     return skeleton;
   }
   const empty = el('div', 'empty');
-  empty.append(el('h3', '', '从一条消息开始'), el('p', '', '在这里和团队交流。提出明确的调研请求时，模拟 Agent 会在授权范围内参与，并把带来源的结果发回这条讨论。'));
+  empty.append(el('h3', '', t('room.emptyTitle')), el('p', '', t('room.emptyHelp')));
   if (authorized('send', room)) {
     const list = el('div', 'suggestions');
     for (const text of SUGGESTIONS) list.append(button(text, () => { if (current().pending) return; $('message').value = text; current().draft = text; updateComposer(); $('message').focus(); }, 'suggestion'));
@@ -714,11 +714,11 @@ async function submitMessageChange(receiptOnly = false) {
 $('change-form').addEventListener('submit', event => { event.preventDefault(); void submitMessageChange(); });
 
 function lapse(grant) {
-  return grant.reason === 'expired' ? `已于 ${clock(grant.until)} 到期` : grant.reason === 'withdrawn' ? '已被收回' : '未授权';
+  return grant.reason === 'expired' ? t('permission.expired', { time: clock(grant.until) }) : t(grant.reason === 'withdrawn' ? 'permission.withdrawn' : 'permission.none');
 }
 function readOnlyReason(room) {
   const send = permission('send', room);
-  return send.reason === 'none' ? '列席（只读）：你在此讨论没有发言授权' : `列席（只读）：发言授权${lapse(send)}`;
+  return send.reason === 'none' ? t('permission.readOnlyNone') : t('permission.readOnlyLapsed', { reason: lapse(send) });
 }
 
 function updateComposer() {
@@ -732,9 +732,9 @@ function updateComposer() {
   if (preview.dataset.signature !== replySignature) {
     preview.dataset.signature = replySignature; preview.hidden = !room.replyToMessageId; preview.replaceChildren();
     if (room.replyToMessageId) {
-      const copy = el('div'); copy.append(el('strong', '', parent ? `回复 ${memberIn(room, parent.authorId).name}` : '回复消息'),
-        el('p', '', replyUnavailable ? '原消息已不可用，请取消引用后再发送。' : firstLine(messageText(parent))));
-      const cancel = button('取消引用', () => { current().replyToMessageId = undefined; updateComposer(); $('message').focus(); }, 'quiet');
+      const copy = el('div'); copy.append(el('strong', '', parent ? t('reply.author', { name: memberIn(room, parent.authorId).name }) : t('message.reply')),
+        el('p', '', replyUnavailable ? t('reply.unavailable') : firstLine(messageText(parent))));
+      const cancel = button(t('reply.cancel'), () => { current().replyToMessageId = undefined; updateComposer(); $('message').focus(); }, 'quiet');
       cancel.disabled = Boolean(room.pending); preview.append(copy, cancel);
     }
   }
@@ -751,19 +751,19 @@ function updateComposer() {
 function renderSeatCard(room, allowed) {
   const member = state.session.member, send = permission('send', room), left = (send.until ?? 0) - serverNow();
   const soon = allowed && left <= EXPIRY_NOTICE;
-  const detail = allowed ? `可发言至 ${clock(send.until)}（剩 ${remaining(left)}）` : send.reason === 'none' ? '只读，未获发言授权' : `发言授权${lapse(send)}`;
+  const detail = allowed ? t('seat.availableUntil', { time: clock(send.until), duration: remaining(left) }) : send.reason === 'none' ? t('seat.noSpeaking') : t('seat.speakingLapsed', { reason: lapse(send) });
   const signature = JSON.stringify([member.id, allowed, detail, soon]);
   if (signature === state.ui.seat) return;
   state.ui.seat = signature;
   $('seat').classList.toggle('is-soon', soon);
-  $('seat').replaceChildren(tile(member), el('span', 'seat-member', member.name), el('span', 'seat-standing', allowed ? '出席' : '列席（只读）'), el('span', 'seat-detail', detail));
+  $('seat').replaceChildren(tile(member), el('span', 'seat-member', member.name), el('span', 'seat-standing', t(allowed ? 'seat.present' : 'seat.readOnly')), el('span', 'seat-detail', detail));
   if (!allowed) $('seat').prepend(icon('i-lock'));
 }
 
 function renderExpiry(room, allowed) {
   const until = deadline('send', room), left = until - serverNow();
   const text = allowed && left <= EXPIRY_NOTICE
-    ? `你在本讨论的发言授权将于 ${clock(until)} 到期（约 ${remaining(left)}后）。演示授权不会自动续期，${desktop ? '到期后请退出应用并重新开始本地演示。' : '到期后需要重新连接新的演示。'}`
+    ? t(desktop ? 'permission.expiryDesktop' : 'permission.expiryBrowser', { time: clock(until), duration: remaining(left) })
     : '';
   if (text === state.ui.expiry) return;
   state.ui.expiry = text;
@@ -912,8 +912,8 @@ function renderSearchPane(room, focusId) {
   if (signature === state.ui.pane) return;
   const restoreFocus = $('search-results').contains(document.activeElement);
   focusId ??= document.activeElement?.dataset.searchMessage;
-  state.ui.pane = signature; setText($('details-title'), '查找当前讨论');
-  setText($('search-count'), !query ? '输入关键词查找消息。' : matches.length ? `找到 ${matches.length} 条，显示 ${shown.length} 条（最新在前）。` : '没有匹配的消息。');
+  state.ui.pane = signature; setText($('details-title'), t('search.title'));
+  setText($('search-count'), !query ? t('search.prompt') : matches.length ? t('search.count', { total: matches.length, shown: shown.length }) : t('search.empty'));
   const nodes = shown.map(message => {
     const row = button('', () => {
       const latest = current();
@@ -929,7 +929,7 @@ function renderSearchPane(room, focusId) {
     row.append(head, el('span', 'search-excerpt', `${start ? '…' : ''}${message.text.slice(start, end)}${message.text.length > end ? '…' : ''}`));
     return row;
   });
-  if (matches.length > shown.length) nodes.push(button('显示更多消息', () => { pane.limit += 50; renderSearchPane(current(), matches[shown.length]?.id); }, 'text-button'));
+  if (matches.length > shown.length) nodes.push(button(t('search.more'), () => { pane.limit += 50; renderSearchPane(current(), matches[shown.length]?.id); }, 'text-button'));
   $('search-results').replaceChildren(...nodes);
   if (restoreFocus) (nodes.find(node => node.dataset.searchMessage === focusId) ?? $('search-query')).focus();
 }
@@ -954,20 +954,20 @@ function renderMembersPane(room) {
   const signature = JSON.stringify(['members', key(room.scope), room.scope.members, [...live], permissions]);
   if (signature === state.ui.pane) return;
   state.ui.pane = signature;
-  setText($('details-title'), '座次与权限');
+  setText($('details-title'), t('seat.title'));
   const member = state.session.member, speaking = authorized('send', room), head = el('div', 'my-seat-head'), copy = el('div');
-  copy.append(el('strong', '', member.name), el('span', '', `${kindLabel(member)} · 你`));
-  head.append(tile(member), copy, el('span', speaking ? 'standing' : 'standing is-readonly', speaking ? '出席' : '列席（只读）'));
-  const names = { read: '查看消息', send: '发言', cancel: '取消调研' }, list = el('dl', 'perm-list');
+  copy.append(el('strong', '', member.name), el('span', '', t('member.selfKind', { kind: kindLabel(member) })));
+  head.append(tile(member), copy, el('span', speaking ? 'standing' : 'standing is-readonly', t(speaking ? 'seat.present' : 'seat.readOnly')));
+  const names = { read: t('permission.read'), send: t('permission.send'), cancel: t('permission.cancel') }, list = el('dl', 'perm-list');
   for (const [name, grant] of permissions) {
-    list.append(el('dt', '', names[name]), el('dd', grant.allowed ? 'perm-on' : 'perm-off', grant.allowed ? `可用 · 至 ${clock(grant.until)}` : lapse(grant)));
+    list.append(el('dt', '', names[name]), el('dd', grant.allowed ? 'perm-on' : 'perm-off', grant.allowed ? t('permission.availableUntil', { time: clock(grant.until) }) : lapse(grant)));
   }
   $('my-seat').replaceChildren(head, list);
   $('members').replaceChildren(...room.scope.members.map(person => {
     const row = el('li'), name = el('span', 'member-name');
-    name.append(el('strong', '', person.name), el('span', '', isMe(person.id) ? `${kindLabel(person)} · 你` : kindLabel(person)));
+    name.append(el('strong', '', person.name), el('span', '', isMe(person.id) ? t('member.selfKind', { kind: kindLabel(person) }) : kindLabel(person)));
     row.append(tile(person), name);
-    if (live.has(person.id)) { const working = el('span', 'member-state is-live'); working.append(el('span', 'live-dot'), '调研中'); row.append(working); }
+    if (live.has(person.id)) { const working = el('span', 'member-state is-live'); working.append(el('span', 'live-dot'), t('member.researching')); row.append(working); }
     return row;
   }));
 }
@@ -979,14 +979,14 @@ function renderThreadPane(room, messageId) {
   const signature = JSON.stringify(['discussion', messageId, messages, runs, authorized('send', room)]);
   if (signature === state.ui.pane) return;
   state.ui.pane = signature;
-  setText($('details-title'), '讨论详情');
-  const nodes = [el('p', 'thread-intro', '这条消息的回复、相关调研与结果。')];
-  if (!messages.length) nodes.push(el('p', 'pane-note', '这条消息已不在当前记录中。'));
+  setText($('details-title'), t('discussion.title'));
+  const nodes = [el('p', 'thread-intro', t('discussion.intro'))];
+  if (!messages.length) nodes.push(el('p', 'pane-note', t('discussion.unavailable')));
   for (const message of messages) {
     nodes.push(threadMessage(room, message, ctx));
     for (const run of runs.filter(r => r.sourceMessageId === message.id)) nodes.push(threadRun(room, run, ctx));
   }
-  nodes.push(el('p', 'pane-note', '回复沿用当前会话的阅读与发言权限。引用内容随原消息更新。'));
+  nodes.push(el('p', 'pane-note', t('discussion.help')));
   $('details-thread').replaceChildren(...nodes);
 }
 
@@ -997,7 +997,7 @@ function threadMessage(room, message, ctx) {
   if (message.result) item.append(el('span', 'thread-synthetic', t('result.synthetic')));
   if (message.replyToMessageId) item.append(replyQuote(room, message, ctx));
   item.append(el('p', 'thread-text', messageText(message)));
-  if (!message.retracted && !message.invalidated && authorized('send', room)) item.append(button('回复消息', () => chooseReply(room, message), 'text-button'));
+  if (!message.retracted && !message.invalidated && authorized('send', room)) item.append(button(t('message.reply'), () => chooseReply(room, message), 'text-button'));
   if (message.result) {
     const list = el('ol', 'thread-sources');
     message.result.sources.forEach((source, index) => {
