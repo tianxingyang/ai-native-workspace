@@ -1,0 +1,24 @@
+{
+  "version": "vit121-v1",
+  "syntheticOnly": true,
+  "seed": 121,
+  "repeats": 3,
+  "snapshots": ["synthetic-fixture-v1"],
+  "modes": ["personal", "collaboration"],
+  "arms": ["A", "B", "C", "D"],
+  "controls": {
+    "reasoning": "fixed-synthetic",
+    "temperature": 0,
+    "runtime": "offline-fixture-v1",
+    "context": "fresh-per-run; same task, grants, sources and tools across arms",
+    "tools": ["fixture.read", "fixture.check", "fixture.reply", "fixture.claim", "fixture.handoff"],
+    "members": {"personal": 1, "collaboration": 3},
+    "budget": {"inputTokens": 16000, "outputTokens": 4000, "reasoningTokens": 4000, "calls": 8, "toolCalls": 16, "wallMs": 120000, "costMicros": 100000},
+    "budgetScope": "whole episode including all members, retries, routing, coordination and failed calls"
+  },
+  "prompts": {
+    "common": "Complete the supplied task using only its authorized fixture resources. Role and WorkMode never grant authority. Preserve source/goal versions, receipts and audience. Return the deliverable to the source thread; remain silent when no action is warranted. Report uncertainty and blocked actions honestly.",
+    "role": "You are the team's {role}.",
+    "workflow": "Identify the deliverable and acceptance criteria; inspect authorized evidence; separate facts from assumptions; perform the domain procedure: {procedure}; verify the result and cite evidence IDs; report limitations. For collaboration, split complementary work only when useful, preserve source and goal versions in handoffs, reconcile receipts, and stop duplicate or circular work."
+  }
+}
