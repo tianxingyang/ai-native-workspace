@@ -60,7 +60,7 @@ test('connection and editor labels use resources while message content remains u
     await page.getByLabel('资源消息输入', { exact: true }).fill(original);
     await page.getByRole('button', { name: '资源发送', exact: true }).click();
     await expect(page.locator('.message-text')).toHaveText(original);
-    await page.getByRole('button', { name: '编辑消息', exact: true }).click();
+    await page.getByRole('button', { name: translated.messages['editor.editTitle'], exact: true }).click();
     await expect(page.locator('#change-title')).toHaveText('资源编辑标题');
     await page.getByLabel('资源正文', { exact: true }).fill('修改后的用户正文');
     await page.getByRole('button', { name: '资源保存', exact: true }).click();

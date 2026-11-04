@@ -83,7 +83,7 @@ for (const width of [320, 390]) test(`edit receipt resources preserve read-only 
     if (blocked) { grant.actions = ['read']; return route.abort('failed'); }
     await route.continue();
   });
-  await page.getByRole('button', { name: '编辑消息', exact: true }).click();
+  await page.getByRole('button', { name: translated.messages['editor.editTitle'], exact: true }).click();
   await page.locator('#change-text').fill('编辑之后的正文'); await page.locator('#change-save').click();
   await expect(page.locator('#change-error')).toHaveText(translated.messages['editor.missingReceipt']);
   await expect(page.locator('#change-save')).toHaveText(translated.messages['editor.check']);
