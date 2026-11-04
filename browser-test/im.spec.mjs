@@ -34,6 +34,74 @@ async function send(page, text) {
   await expect(page.locator('.message-text').filter({ hasText: text })).toHaveCount(1);
 }
 
+test('unread positions survive reconnect and another client advances the same member', async ({ page, context }) => {
+  const scope = { conversationId: '研发讨论', threadId: '插件协议' };
+  const seed = id => demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, id, id).message);
+  const first = seed('first-unread');
+  await connect(page);
+  const room = page.locator('.room').filter({ hasText: '研发讨论' });
+  await expect(room.locator('.room-badge')).toHaveText('1');
+  await room.click();
+  await expect.poll(() => demo.engine.state.readPosition('demo-owner', scope)).toBe(first.id);
+  await page.getByRole('button', { name: '产品讨论 日常交流' }).click();
+  const second = seed('second-unread');
+  await expect(room.locator('.room-badge')).toHaveText('1');
+  await connect(page); await expect(room.locator('.room-badge')).toHaveText('1');
+  const device = await context.newPage();
+  try {
+    await connect(device);
+    await device.locator('.room').filter({ hasText: '研发讨论' }).click();
+    await expect.poll(() => demo.engine.state.readPosition('demo-owner', scope)).toBe(second.id);
+    await expect(room.locator('.room-badge')).toBeHidden();
+  } finally { await device.close(); }
+});
+
+test('failed read-position delivery retries its fixed target after switching rooms', async ({ page }) => {
+  const scope = { conversationId: '研发讨论', threadId: '插件协议' };
+  const seed = id => demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, id, id).message);
+  const seen = seed('seen-before-network-failure');
+  let blocked = true, attempts = 0;
+  await page.route(url => url.pathname === '/read-position', async route => {
+    attempts++;
+    if (blocked) return route.abort('failed');
+    await route.continue();
+  });
+  await connect(page);
+  const room = page.locator('.room').filter({ hasText: '研发讨论' });
+  await room.click(); await expect.poll(() => attempts).toBeGreaterThan(0);
+  await page.getByRole('button', { name: '产品讨论 日常交流' }).click();
+  seed('unseen-background-message'); blocked = false;
+  await expect.poll(() => demo.engine.state.readPosition('demo-owner', scope)).toBe(seen.id);
+  await expect(room.locator('.room-badge')).toHaveText('1');
+});
+
+test('read acknowledgement loss is reconciled and hidden or scrolled-back views do not advance', async ({ page }) => {
+  const scope = { conversationId: '产品讨论', threadId: '日常交流' };
+  const seed = id => demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, id, id).message);
+  for (let i = 0; i < 30; i++) seed(`read-history-${i}`);
+  let lost = false;
+  await page.route(url => url.pathname === '/read-position', async route => {
+    if (lost) return route.continue();
+    lost = true; await forward(route); await route.abort('failed');
+  });
+  await connect(page);
+  const original = [...demo.engine.state.messages.values()].at(-1);
+  await expect.poll(() => demo.engine.state.readPosition('demo-owner', scope)).toBe(original.id);
+  await page.locator('#timeline').evaluate(node => { node.scrollTop = 0; });
+  const unseen = seed('arrived-while-reading-history');
+  await expect(page.locator('.message-text').filter({ hasText: unseen.text })).toHaveCount(1);
+  expect(demo.engine.state.readPosition('demo-owner', scope)).toBe(original.id);
+  await page.getByRole('button', { name: '查看新消息', exact: true }).click();
+  await expect.poll(() => demo.engine.state.readPosition('demo-owner', scope)).toBe(unseen.id);
+  await page.evaluate(() => Object.defineProperty(document, 'hidden', { configurable: true, value: true }));
+  const hidden = seed('arrived-while-hidden');
+  await expect(page.locator('.message-text').filter({ hasText: hidden.text })).toHaveCount(1);
+  expect(demo.engine.state.readPosition('demo-owner', scope)).toBe(unseen.id);
+  await page.evaluate(() => { delete document.hidden; });
+  await expect.poll(() => demo.engine.state.readPosition('demo-owner', scope)).toBe(hidden.id);
+  expect(lost).toBe(true);
+});
+
 test('message search matches literal text only in the current scope and follows changes', async ({ page }) => {
   await connect(page); await send(page, 'Release [draft] <script>literal</script>');
   const source = [...demo.engine.state.messages.values()][0];

@@ -6,6 +6,16 @@ import { requestJson } from '../src/http.js';
 import { fakeExecution, fixtureResult } from '../src/worker/fake.js';
 import type { Run } from '../src/contracts.js';
 import { environment, expectStatus, gate, query, runResult, scope, waitFor } from './helpers.js';
+test('development read-position transport remains scoped and authenticated', async t => {
+  const env = await environment(); t.after(() => env.dispose());
+  const { message } = await env.post('ordinary discussion');
+  const result = await requestJson<{ readThroughMessageId: string }>(env.url, DEV.humanToken, '/read-position', { ...scope, messageId: message.id });
+  assert.equal(result.readThroughMessageId, message.id);
+  const snapshot = await requestJson<{ readThroughMessageId: string }>(env.url, DEV.humanToken, `/messages?${query}`);
+  assert.equal(snapshot.readThroughMessageId, message.id);
+  await expectStatus(requestJson(env.url, DEV.strangerToken, '/read-position', { ...scope, messageId: message.id }), 403, 'scope_denied');
+});
+
 test('a research reply keeps its parent and publishes to the reply source in development transport', async t => {
   const env = await environment(); t.after(() => env.dispose());
   const parent = await env.post('今天讨论插件协议');

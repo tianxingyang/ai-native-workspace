@@ -31,8 +31,9 @@ export class Client {
   async snapshot(scope) {
     const query = new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId });
     const [messages, runs] = await Promise.all([this.request(`/messages?${query}`), this.request(`/runs?${query}`)]);
-    return { messages: messages.messages, runs: runs.runs };
+    return { messages: messages.messages, runs: runs.runs, readThroughMessageId: messages.readThroughMessageId };
   }
+  markRead(scope, messageId) { return this.request('/read-position', { conversationId: scope.conversationId, threadId: scope.threadId, messageId }); }
   send(scope, text, clientEventId, replyToMessageId) { return this.request('/messages', { conversationId: scope.conversationId, threadId: scope.threadId, text, clientEventId, ...(replyToMessageId ? { replyToMessageId } : {}) }); }
   cancel(runId) { return this.request(`/runs/${encodeURIComponent(runId)}/cancel`, {}); }
   change(messageId, kind, expectedRevision, clientEventId, text) {

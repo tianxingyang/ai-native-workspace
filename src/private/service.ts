@@ -17,6 +17,9 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
     // Body reads and idle long polls await I/O: recheck credentials immediately before each operation.
     const commit = <T>(fn: () => T) => engine.commit(() => { state.authenticate(token); return fn(); });
     const guard = (runId: string) => engine.guardTool(actor, stringValue(request.headers['x-coseat-instance'], 'instance', 128), stringValue(request.headers['x-coseat-lease'], 'lease', 128), runId);
+    if (url.pathname === '/read-position' && body) {
+      respond(response, 200, commit(() => state.advanceReadPosition(actor, scopeValue(body), stringValue(body.messageId, 'messageId', 128)))); return;
+    }
     const changeMatch = /^\/messages\/([^/]+)\/(edit|retract)$/.exec(url.pathname);
     if (changeMatch && body) {
       const value = commit(() => engine.changeMessage(actor, changeMatch[1]!, changeMatch[2] as 'edit' | 'retract',
@@ -40,9 +43,10 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
       const runId = url.searchParams.get('runId') ?? undefined;
       const value = commit(() => {
         if (runId) guard(runId);
-        return state.readMessages(actor, scopeValue(Object.fromEntries(url.searchParams)), runId);
+        const scope = scopeValue(Object.fromEntries(url.searchParams));
+        return { messages: state.readMessages(actor, scope, runId), readThroughMessageId: state.readPosition(actor, scope) };
       });
-      respond(response, 200, { messages: value }); return;
+      respond(response, 200, value); return;
     }
     if (url.pathname === '/worker/poll' && body) {
       const instance = stringValue(body.instanceId, 'instance', 128);
