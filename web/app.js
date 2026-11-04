@@ -75,7 +75,7 @@ function applyReadPosition(room, messageId) {
   if (index >= room.messages.findIndex(message => message.id === room.pendingReadMessageId)) room.pendingReadMessageId = undefined;
 }
 function markSeen(room) {
-  if (!room || room !== current() || !authorized('read', room) || document.hidden || $('app').hidden
+  if (!room || room !== current() || !authorized('read', room) || document.hidden || $('app').hidden || $('message-change').open
       || $('app').classList.contains('show-rooms') || (state.pane && paneOverlay.matches)) return;
   const timeline = $('timeline');
   if (timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight >= 90) return;
@@ -1067,7 +1067,7 @@ $('timeline').addEventListener('scroll', () => {
   markSeen(current());
 }, { passive: true });
 document.addEventListener('keydown', event => {
-  if (event.isComposing || !state.client || $('app').hidden) return;
+  if (event.isComposing || !state.client || $('app').hidden || $('message-change').open) return;
   if (event.key === 'Escape' && state.pane) { event.preventDefault(); closePane($('details').contains(document.activeElement)); return; }
   if (state.pane && paneOverlay.matches && event.key === 'Tab') {
     const targets = [...$('details').querySelectorAll('button, a[href], input, select, textarea, [tabindex]')]

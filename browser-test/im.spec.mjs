@@ -198,6 +198,36 @@ test('narrow conversation-list navigation preserves the visible history anchor',
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
+test('an open message editor does not mark incoming background messages as read', async ({ page }) => {
+  await connect(page); await send(page, '编辑期间保留未读');
+  const scope = { conversationId: '产品讨论', threadId: '日常交流' };
+  const original = [...demo.engine.state.messages.values()][0];
+  await expect.poll(() => demo.engine.state.readPosition('demo-owner', scope)).toBe(original.id);
+  await page.getByRole('button', { name: '编辑消息', exact: true }).click();
+  const incoming = demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, '编辑框背后的新消息', 'editor-background').message);
+  await expect(page.locator('.message-text').filter({ hasText: incoming.text })).toHaveCount(1);
+  expect(demo.engine.state.readPosition('demo-owner', scope)).toBe(original.id);
+  await page.getByRole('button', { name: '返回讨论', exact: true }).click();
+  await expect(page.locator('#timeline')).toBeFocused();
+  await expect.poll(() => demo.engine.state.readPosition('demo-owner', scope)).toBe(incoming.id);
+});
+
+for (const width of [1280, 390]) test(`message editor owns keyboard navigation at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
+  await connect(page); await send(page, '对话框快捷键隔离');
+  if (width === 1280) await page.locator('#members-toggle').click();
+  await page.getByRole('button', { name: '编辑消息', exact: true }).click();
+  await page.keyboard.press('Alt+ArrowDown');
+  await expect(page.locator('#room-title')).toHaveText('产品讨论');
+  await expect(page.getByLabel('消息内容', { exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#message-change')).not.toBeVisible();
+  await expect(page.locator('#timeline')).toBeFocused();
+  if (width === 1280) await expect(page.locator('#details')).toBeVisible();
+  await page.keyboard.press('Alt+ArrowDown');
+  await expect(page.locator('#room-title')).toHaveText('研发讨论');
+});
+
 test('unread positions survive reconnect and another client advances the same member', async ({ page, context }) => {
   const scope = { conversationId: '研发讨论', threadId: '插件协议' };
   const seed = id => demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, id, id).message);
