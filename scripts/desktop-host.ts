@@ -11,8 +11,9 @@ export function permittedRequest(path: unknown, body: unknown): path is string {
     || /^\/messages\/[a-zA-Z0-9_-]{1,100}\/(edit|retract)$/.test(path);
   if (path === '/session') return true;
   const url = new URL(path, 'http://127.0.0.1');
-  return url.origin === 'http://127.0.0.1' && ['/messages', '/runs'].includes(url.pathname)
-    && [...url.searchParams.keys()].sort().join(',') === 'conversationId,threadId'
+  const keys = [...url.searchParams.keys()].sort().join(',');
+  return url.origin === 'http://127.0.0.1' && ['/messages', '/runs', '/sync'].includes(url.pathname)
+    && (keys === 'conversationId,threadId' || (url.pathname === '/sync' && keys === 'conversationId,cursor,threadId' && Boolean(url.searchParams.get('cursor'))))
     && Boolean(url.searchParams.get('conversationId')) && Boolean(url.searchParams.get('threadId'));
 }
 
