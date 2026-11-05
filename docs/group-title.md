@@ -1,0 +1,15 @@
+# Group title changes
+
+An authorized member can open **Manage conversation → Rename group** for a dynamically created group. The title is shared metadata visible through the existing authorized session and management views. Configured scopes and direct chats do not offer this operation; direct-chat naming semantics are outside this increment.
+
+`POST /conversations/rename` accepts only `conversationId`, `threadId`, `title`, `expectedTitleRevision`, `expectedMembershipGeneration`, and `clientEventId`. Identity comes from the current credential. Exact-scope `manage_resource` authorization is required, independently of message read permission; Human and Agent members use the same checks. Titles are trimmed, limited to 128 UTF-16 code units, and reject blank values, control characters and malformed Unicode. Rendered titles remain text, not HTML.
+
+Each dynamic conversation starts at title revision 1. A successful change advances only that revision. A stale version returns `409 conversation_title_conflict`; the UI asks the member to reopen and inspect the current title. Membership versions, grants, message IDs, read positions, delivery cursors and worker context are unchanged. Titles are not worker prompt inputs in this implementation, so renaming does not invalidate current runs.
+
+The title, version and retry receipt commit together in SQLite. Current authorization and membership generation are checked before any receipt is returned. An exact retry returns the original minimal `{change, duplicate}` receipt, even if a newer rename has occurred, and never reapplies the old title. Altering scope, parameters or generation under an existing actor/event ID conflicts; creation and renaming share that ID conflict domain. Storage failure rolls back the title and receipt. Existing snapshots without title versions start at 1.
+
+On a lost response the dialog freezes the submitted parameters and offers an exact retry while the connection and management capability remain valid. Confirmation refreshes authoritative session metadata instead of applying the receipt's possibly older title. Retry state remains in memory; closing the dialog or connection ends that local retry attempt, and the member must inspect current state. This is not a persistent client outbox or rename history feature.
+
+Session polling updates visible names and initials without replacing focused room buttons or discarding conversation drafts. The rename modal confines keyboard focus and clears drafts when management authority or membership generation changes. Node and Rust desktop bridges allow only the exact POST route.
+
+Validation covers private HTTP and SQLite concurrency, retry after restart, legacy snapshots, access denial and rejoin fencing, rollback, active worker continuity, Chromium desktop/narrow layouts, lost responses, conflicting edits, manage-only access and focus after revocation.

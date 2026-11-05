@@ -5,7 +5,9 @@ import { actionList } from './authorization.js';
 // Explicit provisioning authority, not inheritance from an arbitrary managed room.
 export const CONVERSATION_ACTIONS: Action[] = ['read', 'send', 'claim', 'request_approval', 'cancel', 'manage_resource'];
 export interface ConversationCreationRule { authorityScope: Scope; allowedActions: Action[]; maxGrantDurationMs: number }
-export interface Conversation extends Scope { kind: 'group' | 'direct'; title: string; memberIds: string[]; createdBy: string; createdAt: number }
+export interface Conversation extends Scope { kind: 'group' | 'direct'; title: string; titleRevision: number; memberIds: string[]; createdBy: string; createdAt: number }
+interface TitleChange extends Scope { title: string; titleRevision: number }
+interface RenameReceipt { fingerprint: string; change: TitleChange }
 export interface InitialGrant { targetMemberId: string; actions: Action[]; expiresAt: number }
 export interface ConversationInput { kind: 'group' | 'direct'; title: string; memberIds: string[]; initialGrants: InitialGrant[]; clientEventId: string }
 export interface GrantSource {
@@ -13,7 +15,7 @@ export interface GrantSource {
   bindings: { action: 'manage_workspace' | 'grant_permissions'; id: string; revision: number; digest: string }[];
 }
 interface IssuedGrant { grant: Grant; source: GrantSource; generation?: string }
-interface SavedConversations { conversations: Conversation[]; grants: IssuedGrant[]; requests: [string, { fingerprint: string; conversationId: string; receipt?: Conversation }][]; authorities?: [string, Scope][] }
+interface SavedConversations { conversations: Conversation[]; grants: IssuedGrant[]; requests: [string, { fingerprint: string; conversationId: string; receipt?: Conversation }][]; authorities?: [string, Scope][]; renameRequests?: [string, RenameReceipt][] }
 export const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value) ?? 'null').digest('hex');
 
 export function creationRuleValue(raw: unknown): ConversationCreationRule {
@@ -47,10 +49,12 @@ export class ConversationRegistry {
   private readonly grants: IssuedGrant[] = [];
   private readonly requests = new Map<string, { fingerprint: string; conversationId: string; receipt?: Conversation }>();
   private readonly authorities = new Map<string, Scope>();
-  snapshot(): SavedConversations { return structuredClone({ conversations: [...this.conversations.values()], grants: this.grants, requests: [...this.requests], authorities: [...this.authorities] }); }
+  private readonly renameRequests = new Map<string, RenameReceipt>();
+  snapshot(): SavedConversations { return structuredClone({ conversations: [...this.conversations.values()], grants: this.grants, requests: [...this.requests], authorities: [...this.authorities], renameRequests: [...this.renameRequests] }); }
   restore(saved?: SavedConversations): void {
-    this.conversations.clear(); this.requests.clear(); this.authorities.clear(); this.grants.length = 0;
-    for (const conversation of structuredClone(saved?.conversations ?? [])) this.conversations.set(conversation.conversationId, conversation);
+    this.conversations.clear(); this.requests.clear(); this.authorities.clear(); this.renameRequests.clear(); this.grants.length = 0;
+    for (const conversation of structuredClone(saved?.conversations ?? [])) this.conversations.set(conversation.conversationId, { ...conversation, titleRevision: conversation.titleRevision ?? 1 });
+    for (const [key, receipt] of structuredClone(saved?.renameRequests ?? [])) this.renameRequests.set(key, receipt);
     this.grants.push(...structuredClone(saved?.grants ?? []));
     for (const [key, value] of structuredClone(saved?.requests ?? [])) this.requests.set(key, { ...value, receipt: value.receipt ?? structuredClone(this.conversations.get(value.conversationId)!) });
     for (const [id, scope] of structuredClone(saved?.authorities ?? [])) this.authorities.set(id, scope);
@@ -80,14 +84,32 @@ export class ConversationRegistry {
       memberId: targetMemberId, actions: [...grant.actions], expiresAt: grant.expiresAt, revoked: false } });
   }
   prior(actorId: string, input: ConversationInput) {
+    requireCondition(!this.renameRequests.has(JSON.stringify([actorId, input.clientEventId])), 409, 'conversation_request_conflict');
     const previous = this.requests.get(JSON.stringify([actorId, input.clientEventId]));
     if (!previous) return undefined;
     requireCondition(previous.fingerprint === digest(input), 409, 'conversation_request_conflict');
     return { conversation: structuredClone(previous.receipt ?? this.conversations.get(previous.conversationId)!), duplicate: true };
   }
+  rename(actorId: string, scope: Scope, title: string, expectedTitleRevision: number, generation: string, clientEventId: string) {
+    const conversation = this.conversations.get(scope.conversationId);
+    requireCondition(conversation?.threadId === scope.threadId && conversation.kind === 'group', 403, 'conversation_rename_unavailable');
+    const key = JSON.stringify([actorId, clientEventId]), fingerprint = digest([scope.conversationId, scope.threadId, title, expectedTitleRevision, generation]);
+    requireCondition(!this.requests.has(key), 409, 'conversation_request_conflict');
+    const prior = this.renameRequests.get(key);
+    if (prior) {
+      requireCondition(prior.fingerprint === fingerprint, 409, 'conversation_request_conflict');
+      return { change: structuredClone(prior.change), duplicate: true };
+    }
+    requireCondition(conversation.titleRevision === expectedTitleRevision, 409, 'conversation_title_conflict');
+    requireCondition(Number.isSafeInteger(conversation.titleRevision + 1), 409, 'conversation_title_conflict');
+    conversation.title = title; conversation.titleRevision++;
+    const change = { conversationId: scope.conversationId, threadId: scope.threadId, title, titleRevision: conversation.titleRevision };
+    this.renameRequests.set(key, { fingerprint, change });
+    return { change: structuredClone(change), duplicate: false };
+  }
   create(actorId: string, input: ConversationInput, source: GrantSource, now: number) {
     requireCondition(this.conversations.size < 500, 507, 'conversation_capacity_reached');
-    const conversation: Conversation = { conversationId: randomUUID(), threadId: 'main', kind: input.kind, title: input.title,
+    const conversation: Conversation = { conversationId: randomUUID(), threadId: 'main', kind: input.kind, title: input.title, titleRevision: 1,
       memberIds: [...input.memberIds], createdBy: actorId, createdAt: now };
     this.conversations.set(conversation.conversationId, conversation);
     this.authorities.set(conversation.conversationId, structuredClone(source.scope));

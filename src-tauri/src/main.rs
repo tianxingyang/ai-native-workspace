@@ -82,6 +82,7 @@ fn permitted(path: &str, body: &Option<Value>) -> bool {
         return path == "/messages"
             || path == "/read-position"
             || path == "/conversations"
+            || path == "/conversations/rename"
             || path == "/memberships/add"
             || path == "/memberships/remove"
             || path == "/memberships/leave"
@@ -347,6 +348,7 @@ mod tests {
         assert!(!permitted("/read-position", &None));
         for route in [
             "/conversations",
+            "/conversations/rename",
             "/memberships/add",
             "/memberships/remove",
             "/memberships/leave",
