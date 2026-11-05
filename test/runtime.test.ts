@@ -101,8 +101,10 @@ test('provider acknowledgment follows initialization and is emitted exactly once
 });
 
 test('cancellation during initialization waits for settlement without application', async t => {
+  const entered = gate();
   const hold = gate();
   const env = await environment(async (_work, _input, _tools, signal, _output, acknowledge) => {
+    entered.release();
     await hold.promise;
     signal.throwIfAborted();
     acknowledge();
@@ -110,6 +112,7 @@ test('cancellation during initialization waits for settlement without applicatio
   t.after(async () => { hold.release(); await env.dispose(); });
   await env.post();
   const run = await waitFor(() => [...env.state.runs.values()].find(r => r.status === 'running'));
+  await entered.promise;
   const cancellation = await requestJson<{ cancellation: { stopped: boolean } }>(env.url, DEV.humanToken, `/runs/${run.id}/cancel`, {});
   assert.equal(cancellation.cancellation.stopped, false);
   hold.release();
@@ -119,8 +122,10 @@ test('cancellation during initialization waits for settlement without applicatio
 });
 
 test('actual application racing cancellation remains visible until execution settles', async t => {
+  const entered = gate();
   const hold = gate();
   const env = await environment(async (_work, _input, _tools, _signal, _output, acknowledge) => {
+    entered.release();
     await hold.promise;
     acknowledge(); // Simulate a provider that applied input as cancellation arrived.
     acknowledge();
@@ -128,6 +133,7 @@ test('actual application racing cancellation remains visible until execution set
   t.after(async () => { hold.release(); await env.dispose(); });
   await env.post();
   const run = await waitFor(() => [...env.state.runs.values()].find(r => r.status === 'running'));
+  await entered.promise;
   await requestJson(env.url, DEV.humanToken, `/runs/${run.id}/cancel`, {});
   hold.release();
   await waitFor(() => run.status === 'stopped' ? run : undefined);
