@@ -17,7 +17,7 @@
     "private:backup": "node dist/scripts/backup.js",
     "demo:private": "npm run build && node dist/scripts/private-demo.js",
     "demo:im": "npm run build && node dist/scripts/web-demo.js",
-    "check:web": "node --check web/app.js && node --check web/client.js && node --check web/pending-store.js && node --check web/attachments.js && node --check web/leave-conversation.js && node --check web/conversation-management.js && node --check web/presentation.js && node --check web/locales/zh-CN.js",
+    "check:web": "node --check web/app.js && node --check web/client.js && node --check web/pending-store.js && node --check web/sync-store.js && node --check web/attachments.js && node --check web/leave-conversation.js && node --check web/conversation-management.js && node --check web/presentation.js && node --check web/locales/zh-CN.js",
     "test:presentation": "node --test web-test/presentation.test.mjs",
     "test:browser": "npm run build && playwright test",
     "desktop:prepare": "npm run build && node scripts/prepare-desktop.mjs",

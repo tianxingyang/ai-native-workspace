@@ -4,6 +4,7 @@ import { conversationManagement } from './conversation-management.js';
 import { attachments } from './attachments.js';
 import { leaveConversation } from './leave-conversation.js';
 import { PendingStore } from './pending-store.js';
+import { SyncStore } from './sync-store.js';
 
 document.documentElement.lang = presentation.locale;
 applyStaticText(document);
@@ -102,11 +103,21 @@ function markSeen(room) {
 }
 function flushReadPosition(room) {
   const messageId = room.pendingReadMessageId, id = key(room.scope), client = state.client;
-  if (!client || !authorized('read', room) || !messageId || state.reads.has(id)) return;
+  if (!client || !room.loaded || !authorized('read', room) || !messageId || state.reads.has(id)) return;
   const attempt = {}; state.reads.set(id, attempt);
-  void client.markRead(room.scope, messageId).then(result => {
+  void (async () => {
+    // An attempted POST always has a durable fixed target first. Storage failure
+    // leaves it in memory for retry instead of falsely promising crash recovery.
+    if (!await persistSnapshot(room)) return;
     const latest = state.rooms.get(id);
-    if (client === state.client && state.reads.get(id) === attempt && latest?.cacheIdentity === room.cacheIdentity && authorized('read', latest)) applyReadPosition(latest, result.readThroughMessageId);
+    if (client !== state.client || state.reads.get(id) !== attempt || latest?.cacheIdentity !== room.cacheIdentity
+        || !authorized('read', latest) || latest.pendingReadMessageId !== messageId) return;
+    const result = await client.markRead(latest.scope, messageId);
+    return result;
+  })().then(result => {
+    if (!result) return;
+    const latest = state.rooms.get(id);
+    if (client === state.client && state.reads.get(id) === attempt && latest?.cacheIdentity === room.cacheIdentity && authorized('read', latest)) { applyReadPosition(latest, result.readThroughMessageId); persistSnapshot(latest); }
   }).catch(error => {
     if (client !== state.client) return;
     if (error instanceof ApiError && error.status === 401) { invalidate(error); return; }
@@ -160,7 +171,7 @@ function expireReadScopes() {
   }
   for (const [id, room] of state.rooms) {
     if (authorized('read', room)) continue;
-    forgetPending(room);
+    forgetRoomStores(room);
     for (const run of room.runs) state.cancels.delete(run.id);
     state.reads.delete(id);
     state.rooms.delete(id);
@@ -185,13 +196,15 @@ function expireReadScopes() {
   state.expiryTimer = setTimeout(expireReadScopes, Math.min(2147483647, Math.max(1, next - serverNow())));
 }
 
-function forgetPending(room) { if (room?.store) { void room.store.forget(room.scope.outboxKey).catch(() => {}); room.store.close(); } }
+function forgetRoomStores(room) {
+  if (room?.syncStore) void room.syncStore.forget(Math.max(deadline('read', room), room.known.read ?? 0, room.scope.outboxExpiresAt ?? 0)).catch(() => {});
+  if (room?.store) { void room.store.forget(room.scope.outboxKey).catch(() => {}); room.store.close(); } }
 function invalidate(error, preservePending = false) {
   const leaveUnconfirmed = leaveDialog.unconfirmed; leaveDialog.close();
   attachmentUI.reset();
   closeMessageChange();
   managementDialog.close();
-  for (const room of state.rooms.values()) { if (preservePending) room.store?.close(); else forgetPending(room); }
+  for (const room of state.rooms.values()) { if (preservePending) room.store?.close(); else forgetRoomStores(room); }
   if (desktop) void desktop.core.invoke('desktop_connected', { connected: false });
   state.client?.close(); state.client = null; state.epoch++; clearTimeout(state.timer); clearTimeout(state.expiryTimer); state.syncing = false;
   state.session = null; state.rooms.clear(); state.cancels.clear(); state.reads.clear(); state.selected = ''; state.lastSync = 0;
@@ -226,7 +239,7 @@ function sessionReceived(session) {
     const id = key(scope), previous = state.rooms.get(id);
     const old = previous?.scope.membershipGeneration === scope.membershipGeneration && previous?.scope.outboxKey === scope.outboxKey ? previous : undefined, known = { ...old?.known };
     if (previous && !old) {
-      forgetPending(previous);
+      forgetRoomStores(previous);
       state.reads.delete(id); for (const run of previous.runs) state.cancels.delete(run.id);
       if (messageChange?.roomId === id) closeMessageChange();
       if (state.selected === id) {
@@ -236,9 +249,9 @@ function sessionReceived(session) {
       }
     }
     for (const [name, until] of Object.entries(scope.permissions)) if (until > 0) known[name] = until;
-    next.set(id, old ? { ...old, scope, known } : { scope, known, store: new PendingStore(serverNow), restoring: true, cacheIdentity: {}, messages: [], runs: [], loaded: false, draft: '', pending: null, signature: '', seen: new Set(), rendered: 0, entering: true });
+    next.set(id, old ? { ...old, scope, known } : { scope, known, store: new PendingStore(serverNow), syncStore: new SyncStore(scope.outboxKey, serverNow), syncIdentity: [session.member.id, scope.conversationId, scope.threadId, scope.membershipGeneration ?? 'initial'], restoring: true, cacheIdentity: {}, messages: [], runs: [], loaded: false, draft: '', pending: null, signature: '', seen: new Set(), rendered: 0, entering: true });
   }
-  for (const [id, room] of state.rooms) if (!next.has(id)) forgetPending(room);
+  for (const [id, room] of state.rooms) if (!next.has(id)) forgetRoomStores(room);
   state.rooms = next;
   for (const [id, room] of next) if (room.restoring && !room.restoreStarted) { room.restoreStarted = true; void restorePending(room, id); }
   updateComposer();
@@ -371,9 +384,18 @@ async function sync() {
     if (selection !== state.selected) { $('message').value = current()?.draft ?? ''; renderMessages(true); }
     // Every authorized room is refreshed so the list can show activity; only the
     // open room's failure decides the connection state.
+    await Promise.all([...state.rooms.values()].map(restoreSnapshot));
+    if (epoch !== state.epoch) return;
     const ids = [...state.rooms.keys()], revision = cancellationRevision;
-    const requests = ids.map(id => { const room = state.rooms.get(id); return { room, generation: room.syncGeneration ?? 0, cursor: room.syncCursor }; });
-    const results = await Promise.allSettled(requests.map(({ room, cursor }) => client.snapshot(room.scope, cursor)));
+    const requests = ids.map(id => { const room = state.rooms.get(id); return { room, generation: room.syncGeneration ?? 0, cursor: room.recoveredSnapshot ? room.recoveredSnapshot.cursor : room.syncCursor }; });
+    const results = await Promise.allSettled(requests.map(async ({ room, cursor }) => {
+      try { return await client.snapshot(room.scope, cursor); }
+      catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 400 || cursor === undefined) throw error;
+        // A corrupt/cross-scope cursor cannot be retried forever or retain a read target.
+        return { ...await client.snapshot(room.scope), discardReadIntent: true };
+      }
+    }));
     if (epoch !== state.epoch) return;
     for (const [index, result] of results.entries()) {
       if (result.status !== 'rejected' || !(result.reason instanceof ApiError)) continue;
@@ -390,7 +412,15 @@ async function sync() {
       const room = state.rooms.get(id), result = results[index];
       const request = requests[index];
       if (room === request.room && authorized('read', room) && (room.syncGeneration ?? 0) === request.generation
-          && room.syncCursor === request.cursor && result.status === 'fulfilled') applySnapshot(room, result.value, id === state.selected);
+          && (room.recoveredSnapshot ? room.recoveredSnapshot.cursor : room.syncCursor) === request.cursor && result.status === 'fulfilled') {
+        const recovered = room.recoveredSnapshot; room.recoveredSnapshot = undefined;
+        if (recovered) {
+          room.messages = recovered.messages; room.runs = recovered.runs; room.syncStreamId = recovered.streamId;
+          room.recoveredReadMessageIds = [...(recovered.pendingReadMessageIds ?? []), room.pendingReadMessageId].filter(Boolean);
+          room.pendingReadMessageId = recovered.pendingReadMessageId;
+        }
+        applySnapshot(room, result.value, id === state.selected);
+      }
     });
     renderRooms(); renderSeats(current()); renderMessages(); renderPane(); renderOutbox(); markSeen(current());
     for (const [id, room] of state.rooms) {
@@ -422,9 +452,43 @@ function setConnection(value) {
   setText(node, t(value === 'ok' ? 'connection.connected' : 'connection.disconnected'));
 }
 
+// Keep disk contents outside renderable room state until a currently authorized
+// snapshot confirms them. A failed/offline handshake never exposes old text.
+async function restoreSnapshot(room) {
+  if (room.syncRestore) return room.syncRestore;
+  room.syncRestore = (async () => {
+    try {
+      const recovered = await room.syncStore.load(room.syncIdentity);
+      const latest = state.rooms.get(key(room.scope));
+      if (latest?.cacheIdentity === room.cacheIdentity && authorized('read', latest)) latest.recoveredSnapshot = recovered;
+    } catch {
+      // Retry transient initialization failures on a later authenticated sync.
+      const latest = state.rooms.get(key(room.scope));
+      if (latest?.cacheIdentity === room.cacheIdentity) latest.syncRestore = undefined;
+    }
+  })();
+  return room.syncRestore;
+}
+function persistSnapshot(room) {
+  if (!room.syncStore || !room.loaded || !room.syncStreamId || !authorized('read', room)) return Promise.resolve(false);
+  return room.syncStore.save({ version: 1, identity: room.syncIdentity, messages: room.messages, runs: room.runs,
+    cursor: room.syncCursor, streamId: room.syncStreamId, pendingReadMessageId: room.pendingReadMessageId }, deadline('read', room),
+    { confirmedMessageId: room.readThroughMessageId, discardReadIntent: room.discardStoredReads }).then(() => true, error => {
+      if (error?.message === 'sync_checkpoint_reset') {
+        const latest = state.rooms.get(key(room.scope));
+        if (latest?.cacheIdentity === room.cacheIdentity) {
+          latest.pendingReadMessageId = undefined; latest.recoveredReadMessageIds = []; latest.recoveredSnapshot = undefined;
+          latest.syncCursor = undefined; latest.syncRestore = undefined; latest.syncGeneration = (latest.syncGeneration ?? 0) + 1;
+          state.reads.delete(key(room.scope));
+        }
+      }
+      return false;
+    });
+}
+
 function invalidateSnapshot(room) {
   room.syncGeneration = (room.syncGeneration ?? 0) + 1;
-  room.syncCursor = undefined;
+  room.syncCursor = undefined; room.recoveredSnapshot = undefined;
 }
 function applySnapshot(room, data, selected) {
   const before = new Map(room.runs.map(run => [run.id, run.status])), firstLoad = !room.loaded;
@@ -437,10 +501,15 @@ function applySnapshot(room, data, selected) {
   const restartedStream = room.syncStreamId && room.syncStreamId !== data.streamId;
   room.messages = data.reset ? data.messages : merge(room.messages, data.messages, data.removedMessageIds);
   room.runs = data.reset ? data.runs : merge(room.runs, data.runs, data.removedRunIds);
-  if (restartedStream || data.cursorAhead) {
+  room.discardStoredReads = Boolean(restartedStream || data.cursorAhead || data.discardReadIntent);
+  if (room.discardStoredReads) {
+    room.recoveredReadMessageIds = [];
     room.seen.clear(); room.readThroughMessageId = undefined; room.pendingReadMessageId = undefined;
     state.reads.delete(key(room.scope));
   }
+  const candidates = new Set([...(room.recoveredReadMessageIds ?? []), room.pendingReadMessageId]);
+  room.pendingReadMessageId = room.messages.findLast(message => candidates.has(message.id) && !message.retracted && !message.invalidated)?.id;
+  room.recoveredReadMessageIds = [];
   const retained = new Set(room.messages.map(message => message.id));
   room.seen = new Set([...room.seen].filter(id => retained.has(id)));
   if (!retained.has(room.readThroughMessageId)) room.readThroughMessageId = undefined;
@@ -460,6 +529,7 @@ function applySnapshot(room, data, selected) {
   for (const run of room.runs) if (SETTLED.has(run.status)) state.cancels.delete(run.id);
   // Retry only a previously visible target, even after switching rooms. Never
   // advance to newer background messages merely because a sync received them.
+  persistSnapshot(room);
   flushReadPosition(room);
   if (!selected || firstLoad) return;
   room.runs.forEach((run, index) => {
@@ -757,6 +827,7 @@ async function cancelRun(id) {
       status: ['completed', 'failed', 'stopped'].includes(run.status) ? run.status : result.status,
       receiptId: result.publishedReceiptId ?? run.receiptId,
       } : run);
+      void persistSnapshot(room);
     }
     state.cancels.delete(id); announce(t('run.cancel.accepted'));
     renderMessages(); renderPane(); renderRooms(); renderSeats(current());
@@ -803,6 +874,7 @@ function acceptMessageChange(change, result) {
   latest.messages = latest.messages.map(m => m.id === result.message.id && m.revision <= result.message.revision ? result.message : m);
   // Hide cached derived output immediately, before the next snapshot.
   latest.messages = latest.messages.map(m => m.origin === 'research' ? { ...m, text: '', result: undefined, invalidated: true } : m);
+  void persistSnapshot(latest);
   closeMessageChange(); renderMessages(); renderPane(); renderRooms();
   announce(t(result.message.revision > result.change.revision ? 'editor.receivedNewer' : 'editor.received'));
   void sync();
@@ -977,6 +1049,7 @@ function acceptPending(id, pending, result) {
   latest.pending = null; latest.draft = ''; latest.replyToMessageId = undefined; latest.seen.add(result.message.id);
   latest.attachment = undefined;
   if (!result.duplicate && !latest.messages.some(m => m.id === result.message.id)) latest.messages.push(result.message);
+  void persistSnapshot(latest);
   if (id === state.selected) {
     $('message').value = ''; renderMessages(!result.duplicate); updateComposer(); renderOutbox();
     if (!result.duplicate && (!state.pane || !paneOverlay.matches)) (authorized('send', latest) ? $('message') : $('timeline')).focus();
