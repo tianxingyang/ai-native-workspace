@@ -114,7 +114,7 @@ test('native transport bridge reload uses the recovered cursor without exposing 
     const response = await fetch(url, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: `Bearer ${demo.ownerToken}`, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     return { status: response.status, value: await response.json() };
   });
-  await page.addInitScript(() => { window.__TAURI__ = { core: { invoke: (command, args = {}) => command === 'desktop_request' ? window.__bridge(args.path, args.body) : Promise.resolve(command === 'desktop_take_notification' ? { kind: 'none' } : null) }, event: { listen: async () => () => {} } }; });
+  await page.addInitScript(() => { window.__TAURI__ = { core: { invoke: (command, args = {}) => command === 'desktop_request' ? window.__bridge(args.path, args.body) : Promise.resolve(command === 'desktop_presentation' ? { locale: 'zh-CN', selection: 'rebuild' } : command === 'desktop_take_notification' ? { kind: 'none' } : null) }, event: { listen: async () => () => {} } }; });
   await page.goto(demo.url); await page.locator('#connect-button').click(); await expect(page.locator('.message-text')).toHaveText('桥接恢复');
   await expect.poll(async () => (await checkpoint(page))?.messages.length).toBe(1);
   await page.reload(); cursors.length = 0; await expect(page.locator('#token')).toBeHidden();

@@ -1,5 +1,6 @@
 import { ApiError, errorText } from './client.js';
 import { text as t } from './presentation.js';
+import { bindText } from './language-ui.js';
 
 /** Creation retries retain the original parent, membership generation, event and title. */
 export function discussionThreads({ current, client, now, authorized, parent, beforeOpen, refresh, enter, invalidate, announce }) {
@@ -22,10 +23,10 @@ export function discussionThreads({ current, client, now, authorized, parent, be
     $('create-thread').hidden = !available;
     $('parent-thread').hidden = !owner || !authorized('read', owner);
     $('thread-toolbar').hidden = $('create-thread').hidden && $('parent-thread').hidden;
-    $('parent-thread').textContent = owner ? t('threads.back', { title: owner.scope.title ?? owner.scope.conversationId }) : '';
+    bindText($('parent-thread'), () => owner ? t('threads.back', { title: owner.scope.title ?? owner.scope.conversationId }) : '');
     if (active && !valid(active)) {
       const pending = Boolean(active.pending); close(true);
-      if (pending) announce(t('threads.unconfirmedEnded'));
+      if (pending) announce(() => t('threads.unconfirmedEnded'));
     }
     if (available) timer = setTimeout(update, Math.min(2147483647, Math.max(1, room.scope.createThreadUntil - now())));
   }
@@ -33,9 +34,9 @@ export function discussionThreads({ current, client, now, authorized, parent, be
     const room = current(), connection = client();
     if (!connection || !canCreate(room)) return;
     beforeOpen(); close(); active = { room, client: connection, busy: false, pending: null };
-    $('thread-create-parent').textContent = t('threads.parent', { title: room.scope.title ?? room.scope.conversationId });
+    bindText($('thread-create-parent'), () => t('threads.parent', { title: room.scope.title ?? room.scope.conversationId }));
     $('thread-create-name').disabled = false; $('thread-create-save').disabled = false;
-    $('thread-create-close').disabled = false; $('thread-create-save').textContent = t('threads.submit');
+    $('thread-create-close').disabled = false; bindText($('thread-create-save'), () => t('threads.submit'));
     dialog.showModal(); $('thread-create-name').focus();
   }
   async function submit() {
@@ -43,12 +44,12 @@ export function discussionThreads({ current, client, now, authorized, parent, be
     if (!operation || operation.busy || !valid(operation)) { update(); return; }
     const title = $('thread-create-name').value.trim();
     if (!operation.pending && (!title || /[\u0000-\u001f\u007f\p{Surrogate}]/u.test(title))) {
-      $('thread-create-status').textContent = t('threads.invalidTitle'); $('thread-create-name').focus(); return;
+      bindText($('thread-create-status'), () => t('threads.invalidTitle')); $('thread-create-name').focus(); return;
     }
     operation.pending ??= { conversationId: operation.room.scope.conversationId, threadId: operation.room.scope.threadId,
       title, expectedMembershipGeneration: operation.room.scope.membershipGeneration, clientEventId: crypto.randomUUID() };
     operation.busy = true; $('thread-create-name').disabled = true; $('thread-create-save').disabled = true;
-    $('thread-create-close').disabled = true; $('thread-create-status').textContent = t('threads.sending');
+    $('thread-create-close').disabled = true; bindText($('thread-create-status'), () => t('threads.sending'));
     try {
       const result = await operation.client.request('/threads', operation.pending);
       if (active !== operation || !valid(operation)) { update(); return; }
@@ -58,16 +59,16 @@ export function discussionThreads({ current, client, now, authorized, parent, be
         update(); return;
       }
       if (!enter(result.thread)) throw new Error('thread_discovery_failed');
-      close(); announce(t('threads.created')); $('room-title').focus({ preventScroll: true });
+      close(); announce(() => t('threads.created')); $('room-title').focus({ preventScroll: true });
     } catch (error) {
       if (active !== operation || !valid(operation)) { update(); return; }
       if (error instanceof ApiError && error.status === 401) { invalidate(error); return; }
       const uncertain = !(error instanceof ApiError) || error.status >= 500;
-      $('thread-create-status').textContent = uncertain ? t('threads.uncertain') : errorText(error);
+      bindText($('thread-create-status'), () => uncertain ? t('threads.uncertain') : errorText(error));
       if (!uncertain) operation.pending = null;
       const ended = error instanceof ApiError && [403, 409].includes(error.status);
       $('thread-create-name').disabled = uncertain || ended; $('thread-create-save').disabled = ended;
-      $('thread-create-save').textContent = t(uncertain ? 'threads.retry' : 'threads.submit');
+      bindText($('thread-create-save'), () => t(uncertain ? 'threads.retry' : 'threads.submit'));
       $('thread-create-status').tabIndex = -1; $('thread-create-status').focus();
       if (ended) void refresh();
     } finally {

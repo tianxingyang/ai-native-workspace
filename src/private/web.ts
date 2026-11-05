@@ -7,6 +7,7 @@ const assets = new Map([
   ['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']],
   ['/client.js', ['client.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']],
   ['/presentation.js', ['presentation.js', 'text/javascript']], ['/locales/zh-CN.js', ['locales/zh-CN.js', 'text/javascript']],
+  ['/language-ui.js', ['language-ui.js', 'text/javascript']], ['/locales/registry.js', ['locales/registry.js', 'text/javascript']],
   ['/conversation-management.js', ['conversation-management.js', 'text/javascript']],
   ['/attachments.js', ['attachments.js', 'text/javascript']],
   ['/leave-conversation.js', ['leave-conversation.js', 'text/javascript']],

@@ -2,6 +2,8 @@
 export default {
   locale: 'zh-CN',
   messages: {
+    'language.label': '界面语言',
+    'language.unavailable': '无法核对桌面语言资源，请重新构建并启动应用。',
     'threads.create': '新建讨论线程',
     'threads.submit': '创建线程',
     'threads.close': '返回讨论',

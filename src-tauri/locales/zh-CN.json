@@ -1,0 +1,8 @@
+{
+  "menu_show": "显示 CoSeat",
+  "menu_quit": "退出并结束本地演示",
+  "window_title": "CoSeat 同席 · 本地模拟版",
+  "notification_title": "CoSeat 同席",
+  "notification_body": "团队讨论有新消息。点击返回会话；仅本地模拟资料。",
+  "short_description": "人与 Agent 同席的本地模拟 IM"
+}

@@ -205,9 +205,9 @@ h1, h2, h3 { text-wrap: balance; }
 .seat.is-live .live-dot { margin: 0 -2px 0 0; }
 .seats-more { font-size: 12px; color: var(--n6); }
 #members-short { display: none; }
-.connection { display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: 12px; color: var(--n6); white-space: nowrap; }
+.connection { display: inline-flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; max-width: 35%; font-size: 12px; color: var(--n6); white-space: normal; overflow-wrap: anywhere; }
 .seats:empty + .connection { margin-left: auto; }
-.connection::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--n5); }
+.connection::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--n5); }
 .connection[data-state=ok]::before { background: var(--accent); }
 .connection[data-state=down] { color: var(--warn-ink); font-weight: 600; }
 .connection[data-state=down]::before { background: var(--live); }
@@ -485,3 +485,7 @@ h1, h2, h3 { text-wrap: balance; }
   .details { width: 100vw; }
   .connect-body { padding: 24px 22px; }
 }
+/* The existing demo has one catalog, so selection stays hidden until reviewed catalogs exist. */
+.language-selection { display: flex; flex-direction: column; gap: .35rem; min-width: 0; max-width: 100%; margin-top: .75rem; font-size: .8rem; }
+.language-selection[hidden] { display: none; }
+.language-selection select { min-width: 0; max-width: 100%; width: 100%; font: inherit; }

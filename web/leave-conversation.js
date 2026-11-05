@@ -1,3 +1,4 @@
+import { bindText } from './language-ui.js';
 import { ApiError, errorText } from './client.js';
 import { text as t } from './presentation.js';
 
@@ -20,7 +21,7 @@ export function leaveConversation({ current, client, authorized, beforeOpen, lef
     $('leave-conversation').hidden = !current()?.scope.canLeave || !authorized('read', current());
     if (active && !valid(active)) {
       const pending = Boolean(active.pending); close(true);
-      if (pending) announce(t('leave.unconfirmedEnded'));
+      if (pending) announce(() => t('leave.unconfirmedEnded'));
     }
   }
   function open() {
@@ -28,7 +29,7 @@ export function leaveConversation({ current, client, authorized, beforeOpen, lef
     if (!room?.scope.canLeave || !connection || !authorized('read', room)) return;
     beforeOpen(); close(); active = { room, client: connection, busy: false, pending: null };
     $('leave-name').textContent = room.scope.title ?? room.scope.conversationId;
-    $('leave-submit').disabled = false; $('leave-close').disabled = false; $('leave-submit').textContent = t('leave.confirm');
+    $('leave-submit').disabled = false; $('leave-close').disabled = false; bindText($('leave-submit'), () => t('leave.confirm'));
     dialog.showModal(); $('leave-close').focus();
   }
   async function submit() {
@@ -36,22 +37,22 @@ export function leaveConversation({ current, client, authorized, beforeOpen, lef
     if (!operation || operation.busy || !valid(operation)) { update(); return; }
     operation.pending ??= { conversationId: operation.room.scope.conversationId, threadId: operation.room.scope.threadId,
       expectedMembershipGeneration: operation.room.scope.membershipGeneration, clientEventId: crypto.randomUUID() };
-    operation.busy = true; $('leave-submit').disabled = true; $('leave-close').disabled = true; $('leave-status').textContent = t('leave.sending');
+    operation.busy = true; $('leave-submit').disabled = true; $('leave-close').disabled = true; bindText($('leave-status'), () => t('leave.sending'));
     try {
       await operation.client.request('/memberships/leave', operation.pending);
       // A confirmed outcome applies even after closing the dialog, but only to
       // the captured connection/cache identity, never a rejoined generation.
       if (active === operation) close();
-      if (left(operation.client, operation.room)) announce(t('leave.done'));
+      if (left(operation.client, operation.room)) announce(() => t('leave.done'));
     } catch (error) {
       if (operation.client !== client()) return;
       if (error instanceof ApiError && error.status === 401) { invalidate(error); return; }
       if (active !== operation) return;
       const uncertain = !(error instanceof ApiError) || error.status >= 500;
-      $('leave-status').textContent = uncertain ? t('leave.uncertain') : errorText(error);
+      bindText($('leave-status'), () => uncertain ? t('leave.uncertain') : errorText(error));
       if (!uncertain) operation.pending = null;
       $('leave-submit').disabled = !uncertain;
-      $('leave-submit').textContent = t(uncertain ? 'leave.retry' : 'leave.confirm');
+      bindText($('leave-submit'), () => t(uncertain ? 'leave.retry' : 'leave.confirm'));
       $('leave-status').tabIndex = -1; $('leave-status').focus();
       if (!uncertain) void refresh();
     } finally {

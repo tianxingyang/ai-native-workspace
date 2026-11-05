@@ -1,3 +1,4 @@
+import { bindText } from './language-ui.js';
 import { ApiError, errorText } from './client.js';
 import { text as t } from './presentation.js';
 
@@ -29,7 +30,7 @@ export function attachments({ current, client, authorized, changed, deny, invali
     $('attach').disabled = !room || !authorized('send', room) || Boolean(room.pending) || loading;
     $('attachment-remove').disabled = !room || Boolean(room.pending) || loading;
     $('attachment-draft').hidden = !file;
-    $('attachment-name').textContent = file ? t('attachment.selected', { name: file.name, bytes: new TextEncoder().encode(file.text).length }) : '';
+    bindText($('attachment-name'), () => file ? t('attachment.selected', { name: file.name, bytes: new TextEncoder().encode(file.text).length }) : '');
     if (preview) {
       const message = room?.messages.find(message => message.id === preview.id);
       if (!sameRoom(preview.room) || client() !== preview.client || !message?.attachment || message.retracted || message.invalidated || message.revision !== preview.revision) close();
@@ -57,25 +58,25 @@ export function attachments({ current, client, authorized, changed, deny, invali
       if (choice !== selection || !sameRoom(room) || connection !== client() || !authorized('send', current()) || current().pending) return;
       current().attachment = { name: file.name, text };
     } catch {
-      if (choice === selection && sameRoom(room) && connection === client()) $('attachment-error').textContent = t('attachment.invalid');
+      if (choice === selection && sameRoom(room) && connection === client()) bindText($('attachment-error'), () => t('attachment.invalid'));
     } finally { if (choice === selection) { loading = false; reading = undefined; changed(); } }
   });
   async function open(room, message) {
     if (!sameRoom(room) || !message.attachment) return;
     close(false);
     const operation = preview = { room, id: message.id, revision: message.revision, client: client() };
-    $('attachment-title').textContent = message.attachment.name; $('attachment-status').textContent = t('attachment.loading');
+    $('attachment-title').textContent = message.attachment.name; bindText($('attachment-status'), () => t('attachment.loading'));
     dialog.showModal(); $('attachment-close').focus();
     try {
       const result = await operation.client.attachment(room.scope, message.id);
       update(); if (preview !== operation) return;
-      $('attachment-content').textContent = result.text; $('attachment-status').textContent = t('attachment.note');
+      $('attachment-content').textContent = result.text; bindText($('attachment-status'), () => t('attachment.note'));
     } catch (error) {
       if (operation.client !== client()) return;
       if (error instanceof ApiError && error.status === 401) { invalidate(error); return; }
       if (error instanceof ApiError && error.status === 403) { deny(operation.client, room); update(); return; }
       update(); if (preview !== operation) return;
-      $('attachment-content').textContent = ''; $('attachment-status').textContent = errorText(error);
+      $('attachment-content').textContent = ''; bindText($('attachment-status'), () => errorText(error));
     }
   }
   $('attachment-close').addEventListener('click', () => close());

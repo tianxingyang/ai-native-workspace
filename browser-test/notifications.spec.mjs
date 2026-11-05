@@ -21,6 +21,7 @@ test.beforeEach(async ({ page }) => {
     window.__TAURI__ = {
       event: { listen: async (_, listener) => { bridge.wake = listener; } },
       core: { invoke: async (command, args) => {
+        if (command === 'desktop_presentation') return { locale: 'zh-CN', selection: 'rebuild' };
         if (command === 'desktop_request') return window.desktopRequest(args);
         if (command === 'desktop_connected') return;
         if (command === 'desktop_present') {
