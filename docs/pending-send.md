@@ -1,6 +1,6 @@
 # Recovering pending sends on the same device
 
-The shared IM interface persists one pending send per conversation in IndexedDB before making the message POST. The encrypted intent contains the original event ID, body, optional reply and text attachment, exact scope and membership generation. A failed storage write prevents that attempt from being sent; there is no plaintext or memory-only fallback. An earlier attempt may still have an unknown outcome.
+The shared IM interface persists one pending send per exact conversation/thread scope in IndexedDB before making the message POST. A parent conversation and its discussion threads have separate slots; this is scope isolation, not a multiple-message queue within one scope. The encrypted intent contains the original event ID, body, optional reply and text attachment, exact scope and membership generation. A failed storage write prevents that attempt from being sent; there is no plaintext or memory-only fallback. An earlier attempt may still have an unknown outcome.
 
 After refreshing the page, reconnect with the same valid credential to the same service and browser profile. Current readable scopes supply the recovery material. A recovered intent first checks the original send receipt. A missing receipt remains unknown; sending again requires an explicit Retry action and current send permission. Accepted messages reconcile to their current edited/retracted server state. Acknowledgement removes only the matching event ID; a failed deletion may cause another harmless receipt check after reload.
 
