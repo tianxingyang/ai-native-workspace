@@ -88,6 +88,29 @@ test('ordinary restart preserves recovery binding and an uncertain successful se
   assert.equal((await env.api('owner', '/messages', legacy)).duplicate, false);
 });
 
+test('an unsent reply attachment keeps its recovery binding across restart and deduplicates after acceptance', async t => {
+  const env = await setup(t), before = findScope(await env.api<Session>('owner', '/session'));
+  const source = await env.api('owner', '/messages', message(before.sendEpoch, 'reply-source'));
+  const body = { ...message(before.sendEpoch, 'unsent-reply'), expectedMembershipGeneration: before.membershipGeneration,
+    replyToMessageId: source.message.id, attachment: { name: 'restart.md', text: 'restart attachment content' } };
+  const receiptPath = `/messages/receipt?${new URLSearchParams({ ...scope, clientEventId: body.clientEventId })}`;
+  await env.restart();
+  const after = findScope(await env.api<Session>('owner', '/session'));
+  assert.equal(after.outboxKey, before.outboxKey); assert.equal(after.sendEpoch, before.sendEpoch);
+  assert.equal(after.membershipGeneration, before.membershipGeneration);
+  assert.equal((await env.api('owner', receiptPath)).message, null);
+  assert.equal(env.engine.state.messages.size, 1);
+  const sent = await env.api('owner', '/messages', body);
+  assert.equal(sent.duplicate, false); assert.equal(sent.message.replyToMessageId, source.message.id);
+  await env.restart();
+  const receipt = await env.api('owner', receiptPath), retry = await env.api('owner', '/messages', body);
+  assert.equal(receipt.message.id, sent.message.id); assert.equal(retry.message.id, sent.message.id);
+  assert.equal(retry.duplicate, true); assert.equal(env.engine.state.messages.size, 2);
+  assert.equal(retry.message.text, body.text); assert.equal(retry.message.replyToMessageId, body.replyToMessageId);
+  const attachment = await env.api('owner', `/attachments?${new URLSearchParams({ ...scope, messageId: sent.message.id, expectedMembershipGeneration: before.membershipGeneration })}`);
+  assert.equal(attachment.attachment.name, body.attachment.name); assert.equal(attachment.text, body.attachment.text);
+});
+
 test('restored backup rotates recovery binding and refuses old-epoch sends before deduplication', async t => {
   const env = await setup(t), before = findScope(await env.api<Session>('owner', '/session'));
   const body = message(before.sendEpoch); await env.api('owner', '/messages', body);
