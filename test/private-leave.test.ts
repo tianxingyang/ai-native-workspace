@@ -10,11 +10,12 @@ import type { Conversation, ConversationInput } from '../src/control/conversatio
 import { defaultPolicy } from '../src/control/authorization.js';
 import { fixtureSources } from '../src/dev-fixture.js';
 import { fixtureResult } from '../src/worker/fake.js';
+import { LocalRuntime, type Execute } from '../src/worker/runtime.js';
 import { PrivateEngine } from '../src/private/engine.js';
 import { SnapshotStore } from '../src/private/store.js';
 import { privateService } from '../src/private/service.js';
 import { close, listen, requestJson } from '../src/http.js';
-import { expectStatus } from './helpers.js';
+import { expectStatus, waitFor } from './helpers.js';
 
 const authority = { conversationId: 'leave-authority', threadId: 'provisioning' };
 const other = { conversationId: 'outside', threadId: 'main' };
@@ -44,6 +45,7 @@ async function setup(t: { after(fn: () => Promise<void>): void }) {
       { targetMemberId: 'worker', actions: ['read', 'send', 'claim', 'request_approval'], expiresAt: Date.now() + 240000 }] });
   t.after(async () => { await close(service); store.close(); assert.ok(directory.startsWith(join(tmpdir(), 'coseat-leave-'))); await rm(directory, { recursive: true, force: true }); });
   return { config, api, input, get engine() { return engine; }, get store() { return store; },
+    runtime: (execute: Execute, toolHeaders: Record<string, string>) => new LocalRuntime({ provider: 'leave-integration', version: '0', memberId: 'worker', controlUrl: url, memberToken: tokens.worker!, execute, toolHeaders }),
     create: (body = input()) => api<{ conversation: Conversation }>('manager', '/conversations', body),
     async restart() { await close(service); store.close(); store = new SnapshotStore(path); engine = new PrivateEngine(store, config); service = privateService(engine); url = await listen(service); },
   };
@@ -182,4 +184,25 @@ test('failed leave persistence restores membership, context, receipt and the hel
   await env.restart();
   assert.equal((await env.api('worker', '/memberships/leave', request)).duplicate, true);
   assert.equal(env.engine.state.runs.get(delivery.runId)!.status, 'unknown');
+});
+
+for (const departing of ['reader', 'worker']) test(`runtime preflight refuses admitted work after ${departing} leaves the conversation`, async t => {
+  const env = await setup(t), { conversation } = await env.create();
+  const text = '请调研一下退出与启动前校验';
+  await env.api('reader', '/messages', { ...scoped(conversation), text, clientEventId: 'preflight-source' });
+  const delivery = await env.api('worker', '/worker/poll', { instanceId: 'preflight-device' });
+  assert.equal(delivery.command, 'execute');
+  let executions = 0;
+  const runtime = env.runtime(async () => { executions++; }, { 'x-coseat-instance': 'preflight-device', 'x-coseat-lease': delivery.leaseId });
+  try {
+    const { sessionId } = await runtime.createSession(delivery.work);
+    await env.api(departing, '/memberships/leave', leave(conversation));
+    await runtime.submitInput(sessionId, { id: 'preflight-input', text, contextRevision: delivery.work.contextRevision });
+    await waitFor(() => runtime.status(sessionId).status === 'failed' ? true : undefined);
+    assert.equal(executions, 0);
+    const events = runtime.events(sessionId, 0);
+    assert.equal(events.some(event => event.kind === 'input_applied'), false);
+    assert.equal(events.find(event => event.kind === 'failed')?.data.code, 'lease_not_executable');
+    assert.equal([...env.engine.state.messages.values()].some(message => message.origin === 'research'), false);
+  } finally { await runtime.close(); }
 });
