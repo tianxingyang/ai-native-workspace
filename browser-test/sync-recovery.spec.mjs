@@ -185,7 +185,7 @@ test('ordinary child threads recover their own cursor and observed reading targe
   const child = await createChild(scope, '持久恢复线程');
   create(scope, '父会话消息', 'parent-only'); const seen = create(child, '线程内已看', 'child-seen');
   await page.route('**/read-position', route => route.abort('failed')); await connect(page);
-  await page.getByRole('button', { name: '持久恢复线程 讨论线程 · 产品讨论', exact: true }).click();
+  await page.getByRole('button', { name: /^持久恢复线程 讨论线程 · 产品讨论/ }).click();
   await expect(page.locator('.message-text')).toHaveText(seen.text);
   await expect.poll(async () => (await checkpoint(page, child))?.pendingReadMessageId).toBe(seen.id);
   const saved = await checkpoint(page, child); await page.reload(); create(child, '线程内尚未看', 'child-unseen');
@@ -196,11 +196,12 @@ test('ordinary child threads recover their own cursor and observed reading targe
   expect(cursors[0]).toBe(saved.cursor); await expect(page.locator('#messages')).not.toContainText('线程内');
   expect(demo.engine.state.readPosition('demo-owner', scope)).not.toBe(seen.id);
 });
-test('revoking a parent evicts the encrypted child checkpoint despite stale discovery', async ({ page }) => {
+test('parent-only denial evicts the encrypted child checkpoint even when child sync is offline', async ({ page }) => {
   const child = await createChild(scope, '撤权恢复线程'); create(child, '撤权后不可恢复', 'child-denied');
   await connect(page); await expect.poll(async () => (await checkpoint(page, child))?.messages.length).toBe(1);
   const session = await requestJson(demo.url, demo.ownerToken, '/session');
   const target = session.scopes.find(item => item.threadId === child.threadId);
+  await page.route(url => url.pathname === '/sync' && url.searchParams.get('threadId') === child.threadId, route => route.abort('failed'));
   await page.route('**/session', route => route.fulfill({ json: session }));
   demo.engine.state.config.grants.find(grant => grant.memberId === 'demo-owner' && grant.conversationId === scope.conversationId).revoked = true;
   await expect(page.locator('#rooms')).not.toContainText('撤权恢复线程');
@@ -221,7 +222,7 @@ test('parent membership replacement cannot replay a child checkpoint from the pr
     initialGrants: [{ targetMemberId: 'demo-owner', actions: ['read', 'send'], expiresAt }, { targetMemberId: 'demo-researcher', actions: ['read', 'send', 'manage_resource'], expiresAt }] })).conversation;
   const child = await createChild(group, '换代子线程'); const seen = create(child, '旧代际已看', 'old-child-seen');
   await page.route('**/read-position', route => route.abort('failed')); await connect(page);
-  await page.getByRole('button', { name: '换代子线程 讨论线程 · 换代父会话', exact: true }).click();
+  await page.getByRole('button', { name: /^换代子线程 讨论线程 · 换代父会话/ }).click();
   await expect.poll(async () => (await checkpoint(page, child))?.pendingReadMessageId).toBe(seen.id);
   const before = (await requestJson(demo.url, demo.ownerToken, '/session')).scopes.find(item => item.threadId === child.threadId);
   await page.reload(); demo.engine.commit(() => {
@@ -235,4 +236,28 @@ test('parent membership replacement cannot replay a child checkpoint from the pr
   expect(demo.engine.state.readPosition('demo-owner', child)).toBeNull();
   await expect.poll(async () => (await checkpoint(page, child))?.messages.length).toBe(1);
   expect((await checkpoint(page, child)).pendingReadMessageIds).toEqual([]);
+});
+
+test('confirmed parent leave clears a child checkpoint and content while all subsequent sync is offline', async ({ page }) => {
+  const config = demo.engine.state.config;
+  config.policy = defaultPolicy(); config.policy.disabledActions = config.policy.disabledActions.filter(action => action !== 'grant_permissions');
+  config.conversationCreation = { authorityScope: scope, allowedActions: ['read', 'send', 'manage_resource'], maxGrantDurationMs: 180000 };
+  config.grants.find(grant => grant.memberId === 'demo-owner' && grant.conversationId === scope.conversationId).actions.push('manage_workspace', 'grant_permissions');
+  const expiresAt = Date.now() + 120000;
+  const group = (await requestJson(demo.url, demo.ownerToken, '/conversations', { kind: 'group', title: '退出父会话', memberIds: ['demo-owner', 'demo-researcher'], clientEventId: 'leave-parent',
+    initialGrants: ['demo-owner', 'demo-researcher'].map(targetMemberId => ({ targetMemberId, actions: ['read', 'send'], expiresAt })) })).conversation;
+  const child = await createChild(group, '退出子线程'); create(child, '退出后必须清除', 'leave-child');
+  await connect(page); await page.getByRole('button', { name: /^退出子线程 讨论线程 · 退出父会话/ }).click();
+  await expect(page.locator('.message-text')).toHaveText('退出后必须清除');
+  await expect.poll(async () => (await checkpoint(page, child))?.messages.length).toBe(1);
+  const session = await requestJson(demo.url, demo.ownerToken, '/session'), target = session.scopes.find(item => item.threadId === child.threadId);
+  await page.locator('#parent-thread').click(); await expect(page.locator('#room-title')).toHaveText('退出父会话');
+  await page.route(url => ['/session', '/sync'].includes(url.pathname), route => route.abort('failed'));
+  await page.locator('#members-toggle').click(); await page.locator('#leave-conversation').click(); await page.locator('#leave-submit').click();
+  await expect(page.locator('#leave-dialog')).not.toBeVisible(); await expect(page.locator('#rooms')).not.toContainText('退出子线程');
+  await expect(page.locator('#app')).not.toContainText('退出后必须清除');
+  await expect.poll(() => page.evaluate(async ({ target, memberId }) => {
+    const { SyncStore } = await import('/sync-store.js'), store = new SyncStore(target.outboxKey);
+    try { return await store.load([memberId, target.conversationId, target.threadId, target.membershipGeneration]); } finally { store.close(); }
+  }, { target, memberId: session.member.id })).toBeNull();
 });

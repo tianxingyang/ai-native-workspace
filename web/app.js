@@ -68,7 +68,23 @@ function action(text, id, fn, className = 'text-button', glyph) {
 function setText(node, text) { if (node.textContent !== text) node.textContent = text; }
 function current() { return state.rooms.get(state.selected); }
 function serverNow() { return Date.now() + state.offset; }
-function deadline(action, room = current()) { return Math.min(room?.scope.permissions[action] ?? 0, room?.scope.outboxExpiresAt ?? Infinity); }
+function deadline(action, room = current()) {
+  if (!room) return 0;
+  let until = Infinity; const visited = new Set();
+  while (room) {
+    const id = key(room.scope);
+    if (visited.has(id)) return 0;
+    visited.add(id);
+    until = Math.min(until, room.scope.permissions[action] ?? 0, room.scope.outboxExpiresAt ?? Infinity);
+    if (!room.scope.parent) return until;
+    // A known parent denial/leave must immediately fence descendants even when
+    // their own request is offline or their cached deadline has not elapsed.
+    const parent = state.rooms.get(key(room.scope.parent));
+    if (!parent || (parent.scope.membershipGeneration ?? 'initial') !== (room.scope.membershipGeneration ?? 'initial')) return 0;
+    room = parent;
+  }
+  return 0;
+}
 function authorized(action, room = current()) { return deadline(action, room) > serverNow(); }
 // A lapsed grant is reported as 0. The last deadline seen in this connection lets
 // the UI say "expired at 14:32" or "withdrawn" instead of "never granted".
