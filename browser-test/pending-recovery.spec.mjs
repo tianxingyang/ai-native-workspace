@@ -176,3 +176,65 @@ test('send loss during a held save exposes receipt checking immediately even whe
   await expect(page.locator('#outbox [data-action=check-receipt]')).toBeVisible(); await expect(page.locator('#outbox [data-action=retry-send]')).toHaveCount(0);
   expect(requests).toBe(0); expect(await stored(page)).toHaveLength(1);
 });
+
+test('reload before the durable save commits sends nothing and does not promise draft recovery', async ({ page }) => {
+  let requests = 0; await page.route('**/messages', route => { requests++; return route.continue(); });
+  await connect(page); await expect(page.locator('#message')).toBeEnabled();
+  await page.evaluate(() => {
+    window.encryptArrived = false;
+    crypto.subtle.encrypt = async () => { window.encryptArrived = true; return new Promise(() => {}); };
+  });
+  await page.locator('#message').fill('保存提交前中断'); await page.locator('#send').click();
+  await expect.poll(() => page.evaluate(() => window.encryptArrived)).toBe(true);
+  expect(await stored(page)).toHaveLength(0); expect(requests).toBe(0);
+  await page.reload(); await connect(page, demo.ownerToken, false);
+  await expect(page.locator('#message')).toBeEnabled(); await expect(page.locator('#message')).toHaveValue('');
+  await expect(page.locator('#outbox')).toBeEmpty(); expect(requests).toBe(0);
+  expect([...demo.engine.state.messages.values()].some(message => message.text === '保存提交前中断')).toBe(false);
+});
+
+test('reload after durable commit but before POST recovers the original id and waits for explicit retry', async ({ page }) => {
+  const bodies = []; await page.route('**/messages', route => { bodies.push(route.request().postDataJSON()); return route.continue(); });
+  await connect(page); await expect(page.locator('#message')).toBeEnabled();
+  await page.evaluate(async () => {
+    const { PendingStore } = await import('/pending-store.js'), save = PendingStore.prototype.save;
+    window.saveCommitted = false;
+    PendingStore.prototype.save = async function (...args) {
+      await save.apply(this, args); window.saveCommitted = true; await new Promise(() => {});
+    };
+  });
+  await page.locator('#message').fill('提交后请求前中断'); await page.locator('#send').click();
+  await expect.poll(() => page.evaluate(() => window.saveCommitted)).toBe(true);
+  const [record] = await stored(page); expect(record).toBeTruthy(); expect(bodies).toHaveLength(0);
+  await page.reload(); await connect(page, demo.ownerToken, false);
+  await expect(page.locator('#outbox [data-action=retry-send]')).toBeEnabled();
+  await expect(page.locator('#message')).toHaveValue('提交后请求前中断'); expect(bodies).toHaveLength(0);
+  await page.locator('#outbox [data-action=check-receipt]').click();
+  await expect(page.locator('#outbox [data-action=check-receipt]')).toBeEnabled(); expect(bodies).toHaveLength(0);
+  await page.locator('#outbox [data-action=retry-send]').click(); await expect(page.locator('#outbox')).toBeEmpty();
+  expect(bodies).toHaveLength(1); expect(bodies[0].clientEventId).toBe(record.id);
+  expect([...demo.engine.state.messages.values()].filter(message => message.text === '提交后请求前中断')).toHaveLength(1);
+  await expect.poll(async () => (await stored(page)).length).toBe(0);
+});
+
+test('accepted reply attachment survives failed local acknowledgement cleanup without a second message', async ({ page }) => {
+  const source = (await requestJson(demo.url, demo.ownerToken, '/messages', { conversationId: scope.conversationId, threadId: scope.threadId, text: '持久回执来源', clientEventId: 'ack-source' })).message;
+  const bodies = []; await page.route('**/messages', route => { bodies.push(route.request().postDataJSON()); return route.continue(); });
+  await connect(page); await page.locator(`[data-action="reply-${source.id}"]`).click();
+  await page.evaluate(async () => {
+    const { PendingStore } = await import('/pending-store.js');
+    PendingStore.prototype.remove = async () => { throw new Error('pending_storage_unavailable'); };
+  });
+  await page.locator('#attachment-file').setInputFiles({ name: 'receipt.md', mimeType: 'text/markdown', buffer: Buffer.from('回执附件内容') });
+  await page.locator('#message').fill('回执清理失败仍只发送一次'); await page.locator('#send').click();
+  await expect(page.locator('#message')).toHaveValue(''); await expect(page.locator('#outbox')).toBeEmpty();
+  const [record] = await stored(page); expect(record.id).toBe(bodies[0].clientEventId);
+  const sent = [...demo.engine.state.messages.values()].find(message => message.text === bodies[0].text);
+  expect(sent.replyToMessageId).toBe(source.id);
+  await page.reload(); await connect(page, demo.ownerToken, false);
+  await expect(page.locator('#message')).toBeEnabled(); await expect(page.locator('#outbox')).toBeEmpty();
+  await expect.poll(async () => (await stored(page)).length).toBe(0); expect(bodies).toHaveLength(1);
+  expect([...demo.engine.state.messages.values()].filter(message => message.text === bodies[0].text)).toHaveLength(1);
+  const attachment = await requestJson(demo.url, demo.ownerToken, `/attachments?${new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId, messageId: sent.id, expectedMembershipGeneration: bodies[0].expectedMembershipGeneration })}`);
+  expect(attachment.attachment.name).toBe('receipt.md'); expect(attachment.text).toBe('回执附件内容');
+});

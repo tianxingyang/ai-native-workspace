@@ -11,7 +11,7 @@ import { scope } from './helpers.js';
 function setup() {
   let now = Date.now();
   const state = new ControlState({ members: structuredClone(members), grants: developmentGrants(), tokens: {}, memberships: { alex: [scope], sam: [scope], guest: [scope] }, researchMemberId: 'sam', sources: fixtureSources, policy: defaultPolicy() }, () => now);
-  return { state, advance: (ms: number) => { now += ms; } };
+  return { state, now: () => now, advance: (ms: number) => { now += ms; } };
 }
 function source(state: ControlState) { return state.createMessage('alex', scope, 'research', 'source').message; }
 
@@ -116,9 +116,9 @@ test('authorization treats human and agent members equally; memberships and admi
 });
 
 test('explicit deny overrides bound allows regardless of order and controls UI hints', () => {
-  const { state, advance } = setup();
+  const { state, now, advance } = setup();
   const allow = state.config.grants[0]!;
-  const deny: Grant = { ...allow, id: 'deny-send', actions: ['send'], effect: 'deny', expiresAt: Date.now() + 1000 };
+  const deny: Grant = { ...allow, id: 'deny-send', actions: ['send'], effect: 'deny', expiresAt: now() + 1000 };
   for (const grants of [[allow, deny], [deny, allow]]) {
     state.config.grants = grants;
     assert.throws(() => state.authorize('alex', 'send', scope, allow), /scope_denied/);
