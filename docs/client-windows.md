@@ -53,8 +53,10 @@ cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
 ## 原生展示资源
 
-`src-tauri/src/presentation.rs` 的 `DEMO_ZH_CN` 集中保留现有演示的托盘菜单、tooltip、窗口标题及通知标题/正文。窗口构造器在读取配置后显式应用资源标题；配置中的同值标题保留为回退，并由测试检查一致性。菜单事件标识、窗口导航边界、退出清理和通知协议不随文案变化。
+`src-tauri/locales/zh-CN.json` 集中保留现有演示的托盘菜单、窗口标题、通知标题/正文及安装包简述；tooltip 复用窗口标题。Rust 构建从这份资源确定性生成 `src-tauri/src/presentation.rs` 使用的 `DEMO_ZH_CN` 常量，输出只进入 Cargo 的构建目录，不在运行时加载语言文件。窗口构造器在读取配置后显式应用资源标题；`tauri.conf.json` 中的窗口标题和安装包简述是给 Tauri CLI 使用的派生副本。菜单事件标识、窗口导航边界、退出清理和通知协议不随文案变化。
+
+修改原生文案时编辑 JSON 资源，再执行 `npm run desktop:resources` 同步配置中的两个字段。`npm run check:desktop-resources` 只检查、不写文件；`npm run build`（因此也包括测试与桌面准备）和 Rust 构建都会拒绝过期的配置。同步工具按 `main` 标签查找唯一窗口，不依赖窗口排列；不改变产品名、版本、标识符、权限、NSIS 或其他配置值。`npm run test:desktop-resources` 覆盖漂移检测、无写入检查、幂等生成及其他配置保留。
 
 通知资源只进入 XML 的文字节点，特殊字符先转义；测试通过 Windows XML 解析器检查中文、引号、尖括号及字面实体往返后仍为原文本，不能增加通知节点。该测试不调用系统通知显示接口。Rust 编译和单测不代表真实托盘、系统通知卡片或安装版已经验收。
 
-这是当前演示的编译期资源抽离，不选择产品默认语言，不增加运行时切换。安装包简述及 NSIS 语言配置仍由 `tauri.conf.json` 维护，未建立打包资源生成流程；首批语言、默认语言和后续安装体验需另行确定。
+这是当前演示的编译期资源抽离，保留现有演示文字，不选择产品默认语言，不增加运行时切换。NSIS 仍保留 `SimpChinese`、`English` 及关闭语言选择器的原配置；首批语言、默认语言和后续安装体验需另行确定。资源检查与生成不会运行安装程序。

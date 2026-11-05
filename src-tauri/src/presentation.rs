@@ -9,26 +9,39 @@ pub struct DemoPresentation {
     pub notification_body: &'static str,
 }
 
-pub const DEMO_ZH_CN: DemoPresentation = DemoPresentation {
-    menu_show: "显示 CoSeat",
-    menu_quit: "退出并结束本地演示",
-    tray_tooltip: "CoSeat 同席 · 本地模拟版",
-    window_title: "CoSeat 同席 · 本地模拟版",
-    notification_title: "CoSeat 同席",
-    notification_body: "团队讨论有新消息。点击返回会话；仅本地模拟资料。",
-};
+// Generated at compile time from locales/zh-CN.json; never load external language files.
+include!(concat!(env!("OUT_DIR"), "/demo_presentation.rs"));
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn configuration_fallback_matches_the_demo_window_title() {
+    fn compiled_resources_and_configuration_match_the_demo_catalog() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../locales/zh-CN.json")).unwrap();
+        for (actual, key) in [
+            (DEMO_ZH_CN.menu_show, "menu_show"),
+            (DEMO_ZH_CN.menu_quit, "menu_quit"),
+            (DEMO_ZH_CN.tray_tooltip, "window_title"),
+            (DEMO_ZH_CN.window_title, "window_title"),
+            (DEMO_ZH_CN.notification_title, "notification_title"),
+            (DEMO_ZH_CN.notification_body, "notification_body"),
+        ] {
+            assert_eq!(actual, catalog[key].as_str().unwrap());
+        }
+        let main = config["app"]["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|window| window["label"] == "main")
+            .unwrap();
+        assert_eq!(main["title"], DEMO_ZH_CN.window_title);
         assert_eq!(
-            config["app"]["windows"][0]["title"],
-            DEMO_ZH_CN.window_title
+            config["bundle"]["shortDescription"],
+            catalog["short_description"]
         );
     }
 }
