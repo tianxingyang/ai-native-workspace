@@ -10,6 +10,7 @@ const assets = new Map([
   ['/conversation-management.js', ['conversation-management.js', 'text/javascript']],
   ['/attachments.js', ['attachments.js', 'text/javascript']],
   ['/leave-conversation.js', ['leave-conversation.js', 'text/javascript']],
+  ['/sync-store.js', ['sync-store.js', 'text/javascript']],
   ['/pending-store.js', ['pending-store.js', 'text/javascript']],
   ['/threads.js', ['threads.js', 'text/javascript']],
 ]);

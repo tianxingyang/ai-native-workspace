@@ -2,7 +2,7 @@
 
 ## Scope and evidence boundary
 
-This acceptance builds on PR #32, merged as `fd260832783e32e22556bd00c531198c5da1053b`, and integrates PR #33 at main `e619bf02ae1b2a5030ac8af21377b110ab733cd8`. It covers **one committed, unconfirmed send per exact conversation/thread scope** in the same origin/browser profile, reauthenticated with the same still-authorized credential. Parent and sibling discussion scopes have independent slots; this does not add a multiple-message queue within one scope. Explicit retry uses the original ID, text, reply and text attachment. Receipt lookup never automatically resends a missing message.
+This acceptance builds on PR #32, merged as `fd260832783e32e22556bd00c531198c5da1053b`, and integrates PR #33 and PR #34 at main `8fe96969e7e69b83abfa76fa286c308c90b84e2b`. It covers **one committed, unconfirmed send per exact conversation/thread scope** in the same origin/browser profile, reauthenticated with the same still-authorized credential. Parent and sibling discussion scopes have independent slots; this does not add a multiple-message queue within one scope. Explicit retry uses the original ID, text, reply and text attachment. Receipt lookup never automatically resends a missing message.
 
 The guarantee begins when IndexedDB commits the encrypted intent. Closing or crashing before that point can lose the unsaved composer contents, but cannot transmit that attempt. Clearing browser data, losing the profile or losing authorization can make an intent unrecoverable. This is not a guarantee to deliver every click on Send regardless of storage or permissions.
 
@@ -46,7 +46,7 @@ Logout is local UI cleanup, not cross-tab credential revocation. Cleanup may fai
 
 - VIT-101 / VIT-104: whether the first release needs multiple offline messages in one conversation remains **undecided**. This acceptance neither requires nor approves that expansion. The present single-pending-send flow is the only scope assessed here.
 - VIT-124: validate the final integrated commit in the installed Windows WebView with a persistent service identity/profile: interrupt before and after IndexedDB commit, reload, restart the installed app, reauthenticate, check receipt and explicitly retry. Confirm accepted replies/attachments do not duplicate. Record the tested installer version, service version, WebView runtime and any missing scenarios there. No installed-WebView result is claimed here.
-- VIT-125 / PR #33 is included in the integration baseline above. This branch adds only recovery tests/documentation and the existing test-clock correction relative to that baseline. VIT-127 / VIT-128 and any later main changes require regression on their exact combined commit; this branch's result cannot certify future combined code.
+- VIT-125 / PR #33 and VIT-127 / PR #34 are included in the integration baseline above. This branch adds only recovery tests/documentation relative to that baseline; main already contains the equivalent test-clock correction. Crypto fault injection is scoped to the pending-send database so the separate sync checkpoint store continues normally. VIT-128 and any later main changes require regression on their exact combined commit; this branch's result cannot certify future combined code.
 - Unsubmitted drafts, background delivery, cross-device outbox, persisted credentials, multi-message queues, editing/retraction recovery and read/sync cursor persistence are outside this acceptance.
 
 ## Reproduce

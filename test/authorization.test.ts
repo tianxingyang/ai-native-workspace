@@ -116,7 +116,7 @@ test('authorization treats human and agent members equally; memberships and admi
 });
 
 test('explicit deny overrides bound allows regardless of order and controls UI hints', () => {
-  const { state, now, advance } = setup();
+  const { state, advance, now } = setup();
   const allow = state.config.grants[0]!;
   const deny: Grant = { ...allow, id: 'deny-send', actions: ['send'], effect: 'deny', expiresAt: now() + 1000 };
   for (const grants of [[allow, deny], [deny, allow]]) {

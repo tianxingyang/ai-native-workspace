@@ -98,7 +98,7 @@ test('logout during encryption fences a late save and sends no HTTP request', as
   let sent = 0; await page.route('**/messages', route => { sent++; return route.continue(); });
   await connect(page); await expect(page.locator('#message')).toBeEnabled();
   await page.evaluate(() => { const original = crypto.subtle.encrypt.bind(crypto.subtle); window.encryptArrived = false;
-    crypto.subtle.encrypt = async (...args) => { window.encryptArrived = true; await new Promise(resolve => { window.releaseEncrypt = resolve; }); return original(...args); }; });
+    crypto.subtle.encrypt = async (...args) => { if (new TextDecoder().decode(args[0].additionalData).includes('coseat-pending-v1')) { window.encryptArrived = true; await new Promise(resolve => { window.releaseEncrypt = resolve; }); } return original(...args); }; });
   await page.locator('#message').fill('迟到加密不可复活'); await page.locator('#send').click(); await expect.poll(() => page.evaluate(() => window.encryptArrived)).toBe(true);
   await page.locator('#logout').click(); await page.evaluate(() => window.releaseEncrypt());
   await expect(page.locator('#connect')).toBeVisible(); await expect.poll(async () => (await stored(page)).length).toBe(0); expect(sent).toBe(0);
@@ -115,7 +115,7 @@ test('a delayed decrypt cannot restore a pending message into a closed connectio
   await page.route('**/messages', route => route.abort('failed')); await connect(page); await pending(page, '解密迟到不显示');
   await page.reload();
   await page.evaluate(() => { const original = crypto.subtle.decrypt.bind(crypto.subtle); window.decryptArrived = false;
-    crypto.subtle.decrypt = async (...args) => { window.decryptArrived = true; await new Promise(resolve => { window.releaseDecrypt = resolve; }); return original(...args); }; });
+    crypto.subtle.decrypt = async (...args) => { if (new TextDecoder().decode(args[0].additionalData).includes('coseat-pending-v1')) { window.decryptArrived = true; await new Promise(resolve => { window.releaseDecrypt = resolve; }); } return original(...args); }; });
   await connect(page, demo.ownerToken, false); await expect.poll(() => page.evaluate(() => window.decryptArrived)).toBe(true);
   await page.locator('#logout').click(); await page.evaluate(() => window.releaseDecrypt());
   await expect(page.locator('#connect')).toBeVisible(); await expect(page.locator('#message')).toHaveValue('');
@@ -167,7 +167,7 @@ test('send loss during a held save exposes receipt checking immediately even whe
   let requests = 0; await page.route('**/messages', route => { requests++; return route.continue(); });
   await connect(page); await expect(page.locator('#message')).toBeEnabled();
   await page.evaluate(() => { const original = crypto.subtle.encrypt.bind(crypto.subtle); window.encryptArrived = false;
-    crypto.subtle.encrypt = async (...args) => { window.encryptArrived = true; await new Promise(resolve => { window.releaseEncrypt = resolve; }); return original(...args); }; });
+    crypto.subtle.encrypt = async (...args) => { if (new TextDecoder().decode(args[0].additionalData).includes('coseat-pending-v1')) { window.encryptArrived = true; await new Promise(resolve => { window.releaseEncrypt = resolve; }); } return original(...args); }; });
   await page.locator('#message').fill('保存期间失去发言权'); await page.locator('#send').click(); await expect.poll(() => page.evaluate(() => window.encryptArrived)).toBe(true);
   demo.engine.state.config.grants.push({ conversationId: scope.conversationId, threadId: scope.threadId, memberId: 'demo-owner', id: 'held-save-deny', revision: 1, actions: ['send'], effect: 'deny', revoked: false, expiresAt: demo.expiresAt });
   await expect(page.locator('#composer')).toHaveClass(/is-readonly/);
@@ -181,8 +181,14 @@ test('reload before the durable save commits sends nothing and does not promise 
   let requests = 0; await page.route('**/messages', route => { requests++; return route.continue(); });
   await connect(page); await expect(page.locator('#message')).toBeEnabled();
   await page.evaluate(() => {
+    const encrypt = crypto.subtle.encrypt.bind(crypto.subtle);
     window.encryptArrived = false;
-    crypto.subtle.encrypt = async () => { window.encryptArrived = true; return new Promise(() => {}); };
+    crypto.subtle.encrypt = async (...args) => {
+      if (new TextDecoder().decode(args[0].additionalData).includes('coseat-pending-v1')) {
+        window.encryptArrived = true; return new Promise(() => {});
+      }
+      return encrypt(...args);
+    };
   });
   await page.locator('#message').fill('保存提交前中断'); await page.locator('#send').click();
   await expect.poll(() => page.evaluate(() => window.encryptArrived)).toBe(true);
