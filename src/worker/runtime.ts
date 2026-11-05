@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { ApiError, PROTOCOL_VERSION, requireCondition, terminal, validateWork, type CheckpointRef, type RuntimeCapabilities, type RuntimeEvent, type RuntimeInput, type RuntimeProvider, type RunStatus, type WorkPackage } from '../contracts.js';
+import { ApiError, PROTOCOL_VERSION, requireCondition, terminal, type CheckpointRef, type RuntimeCapabilities, type RuntimeEvent, type RuntimeInput, type RuntimeProvider, type RunStatus, type WorkPackage } from '../contracts.js';
 import { CoSeatTools } from './coseat-tools.js';
+import { ContextCompiler, frozenSnapshot, validateWorkerWork } from './context-compiler.js';
 
 /** Providers acknowledge only when the input has actually entered their execution context. */
 export type Execute = (work: WorkPackage, input: RuntimeInput, tools: CoSeatTools, signal: AbortSignal, output: (data: Record<string, unknown>) => void, onInputApplied: () => void) => Promise<void>;
@@ -11,12 +12,13 @@ interface Session {
 /** Shared protocol lifecycle; harness-specific execution remains a small function. */
 export class LocalRuntime implements RuntimeProvider {
   private readonly sessions = new Map<string, Session>();
+  private readonly compiler = new ContextCompiler();
   constructor(private readonly config: { provider: string; version: string; memberId: string; controlUrl: string; memberToken: string; execute: Execute; toolHeaders?: Record<string, string> }) {}
   capabilities(): RuntimeCapabilities {
     return { protocol: PROTOCOL_VERSION, provider: this.config.provider, providerVersion: this.config.version, appendInput: false, pause: false, resume: false, checkpoint: false, cancellation: 'cooperative' };
   }
   async createSession(work: WorkPackage) {
-    validateWork(work);
+    work = this.compiler.bind(work);
     requireCondition(work.memberId === this.config.memberId, 403, 'worker_member_mismatch');
     const prior = [...this.sessions.values()].find(s => s.work.runId === work.runId);
     if (prior) {
@@ -24,7 +26,7 @@ export class LocalRuntime implements RuntimeProvider {
       return { sessionId: prior.id };
     }
     const id = randomUUID();
-    this.sessions.set(id, { id, work: structuredClone(work), status: 'queued', events: [], abort: new AbortController(), cancelRequested: false });
+    this.sessions.set(id, { id, work, status: 'queued', events: [], abort: new AbortController(), cancelRequested: false });
     return { sessionId: id };
   }
   private session(id: string): Session {
@@ -42,7 +44,8 @@ export class LocalRuntime implements RuntimeProvider {
     }
     requireCondition(s.status === 'queued' && !s.input, 409, 'append_input_not_supported');
     requireCondition(input.contextRevision === s.work.contextRevision, 409, 'context_revision_changed');
-    s.input = structuredClone(input);
+    input = frozenSnapshot(input);
+    s.input = input;
     this.emit(s, 'input_received', { inputId: input.id, contextRevision: s.work.contextRevision });
     // The RPC acknowledges receipt; only the provider can acknowledge application.
     s.completion = new Promise<void>(resolve => setImmediate(resolve)).then(async () => {
@@ -61,7 +64,13 @@ export class LocalRuntime implements RuntimeProvider {
       const timer = setTimeout(() => { budgetExpired = true; s.abort.abort(new Error('runtime_budget_exceeded')); }, s.work.budget.maxDurationMs);
       const tools = new CoSeatTools(this.config.controlUrl, this.config.memberToken, s.work, s.abort.signal, value => this.emit(s, 'approval_requested', value), this.config.toolHeaders);
       try {
-        await this.config.execute(s.work, input, tools, s.abort.signal, value => this.emit(s, 'output', value), onInputApplied);
+        const context = this.compiler.compile(s.work, input, s.abort.signal);
+        // Confirm live control authority and exact bindings before any provider
+        // starts. This budgeted call does not acknowledge input application.
+        await tools.claimTask();
+        s.abort.signal.throwIfAborted();
+        validateWorkerWork(context.work);
+        await this.config.execute(context.work, context.input, tools, s.abort.signal, value => this.emit(s, 'output', value), onInputApplied);
         requireCondition(Boolean(tools.receiptId), 409, 'no_publication_receipt');
         if (!s.cancelRequested && !budgetExpired) {
           s.status = 'completed'; this.emit(s, 'status', { receiptId: tools.receiptId, tools: tools.calls });
