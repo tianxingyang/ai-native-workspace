@@ -270,6 +270,8 @@ function renderRooms() {
 }
 
 function updateRoomItem(item, room) {
+  setText(item.querySelector('.room-name'), roomName(room.scope));
+  setText(item.querySelector('.tile'), initial(roomName(room.scope)));
   const selected = item.dataset.room === state.selected, last = room.messages.at(-1);
   const live = room.runs.find(run => LIVE.has(run.status)), fresh = selected ? 0 : unseen(room);
   const text = live ? t('room.researching', { name: memberIn(room, live.memberId).name }) : last ? t('room.latestMessage', { name: memberIn(room, last.authorId).name, text: firstLine(last.text) }) : room.loaded ? t('room.noMessages') : '';

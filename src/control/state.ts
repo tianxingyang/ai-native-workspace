@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { PROTOCOL_VERSION, objectValue, requireCondition, resultValue, terminal, type Action, type AuthorizationPolicy, type Grant, type Member, type Message, type ResearchResult, type Run, type RuntimeEvent, type Scope, type Source, type WorkPackage } from '../contracts.js';
+import { PROTOCOL_VERSION, objectValue, requireCondition, resultValue, stringValue, terminal, type Action, type AuthorizationPolicy, type Grant, type Member, type Message, type ResearchResult, type Run, type RuntimeEvent, type Scope, type Source, type WorkPackage } from '../contracts.js';
 import { decideParticipation } from '../participation.js';
 import { actionList, decideAuthorization, policyDigest, type AuthorizationDecision } from './authorization.js';
 import type { MessageChange } from '../contracts.js';
@@ -114,7 +114,7 @@ export class ControlState {
   private staticGrants(): Grant[] { return this.config.grants.filter(g => g.effect === 'deny' || this.memberships.generation(g.memberId, g) === 'initial'); }
   conversationMetadata(scope: Scope) {
     const conversation = this.conversations.metadata(scope);
-    return conversation ? { title: conversation.title, kind: conversation.kind } : undefined;
+    return conversation ? { title: conversation.title, kind: conversation.kind, titleRevision: conversation.titleRevision } : undefined;
   }
   private creationAuthority(actorId: string, issuing: boolean) {
     requireCondition(this.config.conversationCreation, 403, 'conversation_creation_disabled');
@@ -182,9 +182,17 @@ export class ControlState {
     this.authorize(actorId, 'manage_resource', scope);
     const members = this.config.members.filter(member => this.memberScopes(member.id).some(s => s.conversationId === scope.conversationId && s.threadId === scope.threadId));
     const conversation = this.conversations.metadata(scope), authority = this.conversations.authority(scope);
-    return { ...scope, ...this.conversationMetadata(scope), revision: this.memberships.revision(scope), members,
+    return { ...scope, ...this.conversationMetadata(scope), revision: this.memberships.revision(scope), members, canRename: conversation?.kind === 'group',
       canAdd: Boolean(authority && this.config.conversationCreation && digest(authority) === digest(this.config.conversationCreation.authorityScope)),
       ...(conversation?.kind === 'direct' ? { pair: conversation.memberIds } : {}) };
+  }
+  renameConversation(actorId: string, scope: Scope, rawTitle: unknown, expectedTitleRevision: unknown, generation: string, clientEventId: string) {
+    this.authorize(actorId, 'manage_resource', scope);
+    this.requireMembershipGeneration(actorId, scope, generation);
+    const input = stringValue(rawTitle, 'conversation_title', 128), title = input.trim();
+    requireCondition(title.length > 0 && !/[\u0000-\u001f\u007f\p{Surrogate}]/u.test(input), 400, 'invalid_conversation_title');
+    requireCondition(Number.isSafeInteger(expectedTitleRevision) && Number(expectedTitleRevision) > 0, 400, 'invalid_title_revision');
+    return this.conversations.rename(actorId, scope, title, Number(expectedTitleRevision), generation, clientEventId);
   }
   addScopeMember(actorId: string, targetMemberId: string, scope: Scope, expectedRevision: number, clientEventId: string, rawGrant?: unknown) {
     this.authorize(actorId, 'manage_resource', scope);

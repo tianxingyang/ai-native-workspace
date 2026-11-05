@@ -34,6 +34,12 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
       const value = commit(() => state.createConversation(actor, body));
       respond(response, value.duplicate ? 200 : 201, value); return;
     }
+    if (url.pathname === '/conversations/rename' && body) {
+      requireCondition(Object.keys(body).every(key => ['conversationId', 'threadId', 'title', 'expectedTitleRevision', 'expectedMembershipGeneration', 'clientEventId'].includes(key)), 400, 'invalid_rename_request');
+      const value = commit(() => state.renameConversation(actor, scopeValue(body), body.title, body.expectedTitleRevision,
+        stringValue(body.expectedMembershipGeneration, 'membership_generation', 128), stringValue(body.clientEventId, 'client_event_id', 128)));
+      respond(response, 200, value); return;
+    }
     if (url.pathname === '/memberships' && request.method === 'GET') {
       const scope = scopeValue(Object.fromEntries(url.searchParams));
       respond(response, 200, commit(() => state.membershipRoster(actor, scope))); return;

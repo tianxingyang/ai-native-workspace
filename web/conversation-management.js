@@ -12,7 +12,14 @@ export function conversationManagement({ client, session, now, refresh, invalida
   const dialog = $('conversation-management'), fields = $('management-fields'), save = $('management-save'), status = $('management-status');
   let active = null, expiryTimer;
   const current = operation => active === operation && client() === operation.client && dialog.open;
-  function close() { clearTimeout(expiryTimer); active = null; dialog.close(); fields.replaceChildren(); status.textContent = ''; }
+  function close() {
+    const rename = active?.mode === 'rename';
+    clearTimeout(expiryTimer); active = null; dialog.close(); fields.replaceChildren(); status.textContent = '';
+    if (rename) {
+      const target = ['manage-conversation', 'create-conversation', 'room-title', 'connect-button', 'token'].map($).find(element => element && !element.disabled && element.getClientRects().length);
+      target?.focus();
+    }
+  }
   function field(label, control) { const wrapper = node('label', t(label)); wrapper.append(control); fields.append(wrapper); return control; }
   function actions(allowed, parent) {
     const list = node('div'); list.className = 'management-options'; parent.append(list);
@@ -44,14 +51,14 @@ export function conversationManagement({ client, session, now, refresh, invalida
     const operation = { mode, client: client(), scope: selected ?? session()?.management?.scopes[0], creationVersion: session()?.management?.creationVersion, pending: null, busy: true };
     if (!operation.client || !authorized(operation)) return;
     active = operation; fields.disabled = true; save.disabled = true; save.hidden = false;
-    $('management-title').textContent = t(mode === 'create' ? 'management.create' : 'management.manage');
+    $('management-title').textContent = t(`management.${mode}`);
     status.textContent = t('management.loading'); dialog.showModal(); $('management-title').focus();
     try {
-      const options = await operation.client.conversationOptions().catch(error => {
+      const options = mode === 'rename' ? null : await operation.client.conversationOptions().catch(error => {
         if (mode === 'manage' && error instanceof ApiError && error.status === 403) return null;
         throw error;
       });
-      const roster = mode === 'manage' ? await operation.client.memberships(operation.scope) : null;
+      const roster = mode !== 'create' ? await operation.client.memberships(operation.scope) : null;
       if (!current(operation)) return;
       operation.directoryUntil = options?.until ?? 0; operation.issueUntil = options?.allowedActions.length ? options.expiresAt : 0;
       const nextExpiry = Math.min(...[operation.directoryUntil, operation.issueUntil, operation.scope?.until].filter(until => until > 0));
@@ -80,11 +87,24 @@ export function conversationManagement({ client, session, now, refresh, invalida
             initialGrants: chosen.flatMap(c => { const selected = c.granted.filter(input => input.checked).map(input => input.value);
               return selected.length ? [{ targetMemberId: c.member.id, actions: selected, expiresAt: new Date(until.value).getTime() }] : []; }), clientEventId: crypto.randomUUID() } };
         };
+      } else if (mode === 'rename') {
+        if (!roster.canRename) { close(); return; }
+        const title = node('input'); title.id = 'rename-title'; title.maxLength = 128; title.required = true; title.value = roster.title;
+        field('management.title', title); fields.append(node('p', t('management.renameHelp')));
+        operation.payload = () => {
+          if (!title.value.trim() || /[\u0000-\u001f\u007f\p{Surrogate}]/u.test(title.value)) throw new Error(t('management.invalidTitle'));
+          return { route: '/conversations/rename', body: { conversationId: operation.scope.conversationId, threadId: operation.scope.threadId,
+            title: title.value, expectedTitleRevision: roster.titleRevision, expectedMembershipGeneration: operation.scope.membershipGeneration, clientEventId: crypto.randomUUID() } };
+        };
       } else {
         const scopes = node('select'); scopes.id = 'management-scope';
         for (const scope of session().management.scopes) { const item = option(JSON.stringify([scope.conversationId, scope.threadId]), scope.title ?? scope.conversationId); item.selected = same(scope, operation.scope); scopes.append(item); }
         field('management.scope', scopes);
         scopes.addEventListener('change', () => { const scope = session().management.scopes.find(s => JSON.stringify([s.conversationId, s.threadId]) === scopes.value); void open('manage', scope); });
+        if (roster.canRename) {
+          const rename = node('button', t('management.rename')); rename.type = 'button'; rename.id = 'rename-conversation';
+          rename.addEventListener('click', () => void open('rename', operation.scope)); fields.append(rename);
+        }
         for (const member of roster.members) {
           const remove = node('button', t('management.remove', { name: member.name })); remove.type = 'button'; remove.className = 'quiet';
           remove.addEventListener('click', () => submit({ route: '/memberships/remove', body: { conversationId: operation.scope.conversationId, threadId: operation.scope.threadId,
@@ -131,7 +151,7 @@ export function conversationManagement({ client, session, now, refresh, invalida
       if (error instanceof ApiError && error.status === 401) { invalidate(error); return; }
       // Unknown outcomes retain the exact request and freeze its editable inputs.
       const uncertain = !(error instanceof ApiError) || error.status >= 500;
-      status.textContent = uncertain ? t('management.uncertain') : errorText(error);
+      status.textContent = uncertain ? t('management.uncertain') : error?.code === 'conversation_title_conflict' ? t('management.titleConflict') : errorText(error);
       if (!uncertain) { operation.pending = null; fields.disabled = false; }
       if (error instanceof ApiError && [403, 409].includes(error.status)) { fields.disabled = true; save.disabled = true; void refresh(); }
       else { save.disabled = false; save.textContent = t(uncertain ? 'management.retry' : 'management.save'); }
@@ -141,6 +161,14 @@ export function conversationManagement({ client, session, now, refresh, invalida
   $('management-form').addEventListener('submit', event => { event.preventDefault(); void submit(); });
   $('management-close').addEventListener('click', () => { if (!active?.busy) close(); });
   dialog.addEventListener('cancel', event => { event.preventDefault(); if (!active?.busy) close(); });
+  dialog.addEventListener('keydown', event => {
+    if (event.key !== 'Tab') return;
+    const targets = [...dialog.querySelectorAll('button,input,select,[tabindex]')].filter(element => !element.matches(':disabled') && element.tabIndex >= 0 && element.getClientRects().length);
+    if (!targets.length) { event.preventDefault(); return; }
+    const first = targets[0], last = targets.at(-1);
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
   $('create-conversation').addEventListener('click', () => void open('create'));
   $('manage-conversation').addEventListener('click', () => void open('manage'));
   return { close, update };

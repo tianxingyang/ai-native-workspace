@@ -24,7 +24,7 @@ test('desktop route boundary excludes URLs, authority changes, arbitrary command
   assert.equal(permittedRequest('/read-position', {}), true);
   assert.equal(permittedRequest('/read-position', undefined), false);
   assert.equal(permittedRequest('/read-position?conversationId=a&threadId=b', {}), false);
-  for (const path of ['/conversations', '/memberships/add', '/memberships/remove', '/memberships/leave']) {
+  for (const path of ['/conversations', '/conversations/rename', '/memberships/add', '/memberships/remove', '/memberships/leave']) {
     assert.equal(permittedRequest(path, {}), true); assert.equal(permittedRequest(path, undefined), false);
     assert.equal(permittedRequest(`${path}?admin=true`, {}), false);
   }
@@ -92,6 +92,7 @@ test('native sidecar performs real authorized HTTP, rejects unshared scope, dedu
   assert.equal((await request(`/attachments?${query}&messageId=${sent.value.message.id}&expectedMembershipGeneration=initial`)).value.text, body.attachment.text);
   assert.equal((await request('/conversations/options')).status, 403);
   assert.equal((await request('/conversations', { kind: 'group' })).status, 403);
+  assert.equal((await request('/conversations/rename', { conversationId: scope.conversationId, threadId: scope.threadId, title: 'Unauthorized rename', expectedTitleRevision: 1, expectedMembershipGeneration: 'initial', clientEventId: 'desktop-rename' })).status, 403);
   assert.equal((await request(`/memberships?${query}`)).status, 403);
   const leave = await request('/memberships/leave', { conversationId: scope.conversationId, threadId: scope.threadId, expectedMembershipGeneration: 'initial', clientEventId: 'static-leave' });
   assert.equal(leave.status, 403); assert.equal(leave.value.error, 'conversation_leave_unavailable');
