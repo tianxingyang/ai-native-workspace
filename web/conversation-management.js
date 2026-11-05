@@ -16,7 +16,9 @@ export function conversationManagement({ client, session, now, refresh, invalida
     const rename = active?.mode === 'rename';
     clearTimeout(expiryTimer); active = null; dialog.close(); fields.replaceChildren(); status.textContent = '';
     if (rename) {
-      const target = ['manage-conversation', 'create-conversation', 'room-title', 'connect-button', 'token'].map($).find(element => element && !element.disabled && element.getClientRects().length);
+      const candidates = [$('manage-conversation'), $('create-conversation'), $('room-title'),
+        document.querySelector('#rooms button[aria-current="true"]'), document.querySelector('#rooms button'), $('connect-button'), $('token')];
+      const target = candidates.find(element => element && !element.disabled && element.getClientRects().length);
       target?.focus();
     }
   }

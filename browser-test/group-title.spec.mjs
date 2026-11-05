@@ -113,15 +113,19 @@ test('blank title cannot submit and cancel clears the draft', async ({ page }) =
   expect(demo.engine.state.conversationMetadata(scope).titleRevision).toBe(1);
 });
 
-test('revoking management closes and clears the rename draft with focus on a usable control', async ({ page }) => {
+for (const width of [1280, 390]) test(`revoking management closes and clears the rename draft with usable focus at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
   const config = demo.engine.state.config;
   // Keep independent read/management grants after removing creation authority.
   config.grants.push({ conversationId: scope.conversationId, threadId: scope.threadId, id: 'independent-access', memberId: 'demo-owner', actions: ['read', 'send', 'manage_resource'], revision: 1, expiresAt: demo.expiresAt, revoked: false });
   for (const grant of config.grants.filter(g => g.id !== 'independent-access' && g.memberId === 'demo-owner')) grant.actions = ['read', 'send'];
-  await connect(page); await openRename(page); await page.locator('#rename-title').fill('被撤权的草稿');
+  await connect(page);
+  if (width < 720) await page.locator('#back').click();
+  await openRename(page); await page.locator('#rename-title').fill('被撤权的草稿');
   config.grants.find(g => g.id === 'independent-access').actions = ['read', 'send'];
   await expect(page.locator('#conversation-management')).not.toBeVisible(); await expect(page.locator('#rename-title')).toHaveCount(0);
-  await expect(page.locator('#manage-conversation')).toBeHidden(); await expect(page.locator('#room-title')).toBeFocused();
+  await expect(page.locator('#manage-conversation')).toBeHidden();
+  await expect(page.locator(width < 720 ? '#rooms button[aria-current="true"]' : '#room-title')).toBeFocused();
   expect(demo.engine.state.conversationMetadata(scope).titleRevision).toBe(1);
 });
 
