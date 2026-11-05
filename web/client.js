@@ -7,7 +7,7 @@ export class ApiError extends Error {
 }
 export function messageBody(scope, text, clientEventId, replyToMessageId, attachment) {
   return { conversationId: scope.conversationId, threadId: scope.threadId, text, clientEventId,
-    expectedMembershipGeneration: scope.membershipGeneration ?? 'initial', ...(replyToMessageId ? { replyToMessageId } : {}), ...(attachment ? { attachment } : {}) };
+    expectedMembershipGeneration: scope.membershipGeneration ?? 'initial', ...(scope.sendEpoch ? { expectedSendEpoch: scope.sendEpoch } : {}), ...(replyToMessageId ? { replyToMessageId } : {}), ...(attachment ? { attachment } : {}) };
 }
 export class Client {
   #token;

@@ -10,6 +10,7 @@ const assets = new Map([
   ['/conversation-management.js', ['conversation-management.js', 'text/javascript']],
   ['/attachments.js', ['attachments.js', 'text/javascript']],
   ['/leave-conversation.js', ['leave-conversation.js', 'text/javascript']],
+  ['/pending-store.js', ['pending-store.js', 'text/javascript']],
 ]);
 const contents = new Map<string, Buffer>();
 
@@ -34,7 +35,7 @@ export function serveWeb(request: IncomingMessage, response: ServerResponse, url
 }
 
 const same = (a: Scope, b: Scope) => a.conversationId === b.conversationId && a.threadId === b.threadId;
-export function clientSession(state: ControlState, actor: string) {
+export function clientSession(state: ControlState, actor: string, token?: string) {
   const now = Date.now();
   const scopes = state.memberScopes(actor).filter((s, i, all) => all.findIndex(a => same(a, s)) === i)
     .flatMap(scope => {
@@ -44,7 +45,8 @@ export function clientSession(state: ControlState, actor: string) {
       const permissions = Object.fromEntries((['read', 'send', 'cancel'] as Action[]).map(action =>
         [action, state.authorization(actor, action, scope).grant?.expiresAt ?? 0]));
       const members = state.config.members.filter(m => state.memberScopes(m.id).some(s => same(s, scope)));
-      return [{ ...scope, ...state.conversationMetadata(scope), canLeave: Boolean(state.conversationMetadata(scope)), membershipGeneration: state.membershipGeneration(actor, scope), permissions, members }];
+      return [{ ...scope, ...state.conversationMetadata(scope), canLeave: Boolean(state.conversationMetadata(scope)), membershipGeneration: state.membershipGeneration(actor, scope), permissions, members,
+        ...(token ? { outboxKey: state.pendingStorageKey(actor, scope, token), sendEpoch: state.sendEpoch(), outboxExpiresAt: Math.min(permissions.read!, state.config.credentialExpiresAt![actor]!) } : {}) }];
     });
   const management = state.managementCapabilities(actor);
   requireCondition(scopes.length > 0 || management.createUntil > now || management.scopes.length > 0, 403, 'no_readable_scope');
