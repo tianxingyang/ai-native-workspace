@@ -88,9 +88,11 @@ test('real SDK prompt preflight rejection never reports input application', asyn
 });
 
 test('pi cancellation while the model factory initializes never applies input', async t => {
+  const entered = gate();
   const hold = gate();
   let modelCalls = () => -1;
   const env = await environment(piExecution(async () => {
+    entered.release();
     await hold.promise;
     const config = await fixturePiModel()();
     modelCalls = config.callCount!;
@@ -99,6 +101,7 @@ test('pi cancellation while the model factory initializes never applies input', 
   t.after(async () => { hold.release(); await env.dispose(); });
   await env.post();
   const run = await waitFor(() => [...env.state.runs.values()].find(r => r.status === 'running'));
+  await entered.promise;
   const result = await requestJson<{ cancellation: { stopped: boolean } }>(env.url, DEV.humanToken, `/runs/${run.id}/cancel`, {});
   assert.equal(result.cancellation.stopped, false);
   hold.release();
