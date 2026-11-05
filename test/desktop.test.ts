@@ -24,10 +24,11 @@ test('desktop route boundary excludes URLs, authority changes, arbitrary command
   assert.equal(permittedRequest('/read-position', {}), true);
   assert.equal(permittedRequest('/read-position', undefined), false);
   assert.equal(permittedRequest('/read-position?conversationId=a&threadId=b', {}), false);
-  for (const path of ['/conversations', '/conversations/rename', '/memberships/add', '/memberships/remove', '/memberships/leave']) {
+  for (const path of ['/threads', '/conversations', '/conversations/rename', '/memberships/add', '/memberships/remove', '/memberships/leave']) {
     assert.equal(permittedRequest(path, {}), true); assert.equal(permittedRequest(path, undefined), false);
     assert.equal(permittedRequest(`${path}?admin=true`, {}), false);
   }
+  for (const path of ['/threads/create', '/threads/', '/threads#fragment', '/threads?conversationId=a&threadId=b', '/threads/../messages']) assert.equal(permittedRequest(path, {}), false);
   assert.equal(permittedRequest('/conversations/options', undefined), true);
   assert.equal(permittedRequest('/conversations/options', {}), false);
   assert.equal(permittedRequest('/conversations/options?scope=all', undefined), false);
@@ -111,6 +112,18 @@ test('native sidecar performs real authorized HTTP, rejects unshared scope, dedu
   assert.equal((await request('/messages/receipt?conversationId=unshared&threadId=private&clientEventId=desktop-retry-001')).status, 403);
   assert.equal((await request('/messages/change-receipt?conversationId=unshared&threadId=private&clientEventId=desktop-edit-receipt')).status, 403);
   assert.equal((await request('/read-position', { conversationId: 'unshared', threadId: 'private', messageId: sent.value.message.id })).status, 403);
+  const threadRequest = { conversationId: scope.conversationId, threadId: scope.threadId, title: '桌面讨论线程', expectedMembershipGeneration: scope.membershipGeneration, clientEventId: 'desktop-thread' };
+  const createdThread = await request('/threads', threadRequest); assert.equal(createdThread.status, 201);
+  const thread = createdThread.value.thread;
+  assert.equal((await request('/threads', threadRequest)).value.thread.threadId, thread.threadId);
+  assert.equal((await request('/threads', { ...threadRequest, conversationId: 'unshared', clientEventId: 'forbidden-thread' })).status, 403);
+  assert.equal((await request('/threads?admin=true', threadRequest)).status, 503);
+  const threadBody = { conversationId: thread.conversationId, threadId: thread.threadId, text: '线程内消息', expectedMembershipGeneration: scope.membershipGeneration, clientEventId: 'desktop-thread-message' };
+  assert.equal((await request('/messages', threadBody)).status, 201);
+  const threadPath = `/messages?${new URLSearchParams({ conversationId: thread.conversationId, threadId: thread.threadId })}`;
+  assert.deepEqual((await request(threadPath)).value.messages.map((message: { text: string }) => message.text), ['线程内消息']);
+  assert.equal((await request(`/messages?${query}`)).value.messages.some((message: { text: string }) => message.text === '线程内消息'), false);
+  assert.ok((await request('/session')).value.scopes.some((item: { threadId: string }) => item.threadId === thread.threadId));
   await request('/messages', { ...body, text: '请调研一下桌面通知。', clientEventId: 'desktop-notice-001' });
   const deadline = setTimeout(() => observed({ error: 'notification_timeout' }), 12000);
   const notice = await incoming; clearTimeout(deadline);

@@ -5,6 +5,7 @@ import { attachments } from './attachments.js';
 import { leaveConversation } from './leave-conversation.js';
 import { PendingStore } from './pending-store.js';
 import { SyncStore } from './sync-store.js';
+import { discussionThreads } from './threads.js';
 
 document.documentElement.lang = presentation.locale;
 applyStaticText(document);
@@ -34,6 +35,24 @@ let cancellationRevision = 0;
 let messageChange = null;
 const managementDialog = conversationManagement({ client: () => state.client, session: () => state.session, now: serverNow,
   refresh: sync, invalidate, beforeOpen: () => closePane(false), announce });
+const threadDialog = discussionThreads({ current, client: () => state.client, now: serverNow, authorized,
+  parent: room => room?.scope.parent ? state.rooms.get(key(room.scope.parent)) : undefined,
+  beforeOpen: () => closePane(false), refresh: refreshThreads, enter: enterThread, invalidate, announce });
+function refreshThreads() {
+  // Supersede any older discovery before looking up a newly created thread.
+  state.epoch++; state.syncing = false; clearTimeout(state.timer);
+  return sync();
+}
+function enterThread(scope) {
+  const room = state.rooms.get(key(scope));
+  if (!room || !authorized('read', room)) return false;
+  threadDialog.close(); void selectRoom(key(scope));
+  $('room-title').focus({ preventScroll: true }); return true;
+}
+function threadLabel(scope) {
+  const parent = scope.parent && state.rooms.get(key(scope.parent));
+  return scope.parent ? t('threads.inParent', { title: parent ? roomName(parent.scope) : scope.parent.conversationId }) : scope.threadId;
+}
 function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
 function button(text, fn, className = 'quiet') { const node = el('button', className, text); node.type = 'button'; node.addEventListener('click', fn); return node; }
 function icon(name, className = 'icon') {
@@ -92,7 +111,7 @@ function applyReadPosition(room, messageId) {
   if (index >= room.messages.findIndex(message => message.id === room.pendingReadMessageId)) room.pendingReadMessageId = undefined;
 }
 function markSeen(room) {
-  if (!room || room !== current() || !authorized('read', room) || document.hidden || $('app').hidden || $('message-change').open || $('conversation-management').open || attachmentUI.opened || leaveDialog.opened
+  if (!room || room !== current() || !authorized('read', room) || document.hidden || $('app').hidden || $('message-change').open || $('conversation-management').open || attachmentUI.opened || leaveDialog.opened || threadDialog.opened
       || $('app').classList.contains('show-rooms') || (state.pane && paneOverlay.matches)) return;
   const timeline = $('timeline');
   if (timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight >= 90) return;
@@ -134,6 +153,7 @@ function renderManagement() {
   $('management-empty').hidden = state.rooms.size > 0;
   $('app').classList.toggle('management-empty', state.rooms.size === 0);
   managementDialog.update();
+  threadDialog.update();
 }
 
 function denyReadScope(client, room) {
@@ -204,10 +224,12 @@ function invalidate(error, preservePending = false) {
   attachmentUI.reset();
   closeMessageChange();
   managementDialog.close();
+  threadDialog.close();
   for (const room of state.rooms.values()) { if (preservePending) room.store?.close(); else forgetRoomStores(room); }
   if (desktop) void desktop.core.invoke('desktop_connected', { connected: false });
   state.client?.close(); state.client = null; state.epoch++; clearTimeout(state.timer); clearTimeout(state.expiryTimer); state.syncing = false;
   state.session = null; state.rooms.clear(); state.cancels.clear(); state.reads.clear(); state.selected = ''; state.lastSync = 0;
+  threadDialog.update();
   state.pane = null; state.paneReturn = null;
   for (const name of Object.keys(state.ui)) state.ui[name] = '';
   $('app').hidden = true; $('connect').hidden = false; $('token').value = ''; $('message').value = '';
@@ -294,11 +316,14 @@ function renderRooms() {
     // Rebuild only when the list itself changes so a focused room survives polling.
     state.ui.nav = signature;
     const children = [];
-    for (const [id, room] of state.rooms) {
-      const item = button('', () => selectRoom(id), 'room');
+    const ordered = [...state.rooms].filter(([, room]) => !room.scope.parent).flatMap(entry => [entry,
+      ...[...state.rooms].filter(([, room]) => room.scope.parent && key(room.scope.parent) === entry[0])]);
+    for (const entry of state.rooms) if (!ordered.some(([id]) => id === entry[0])) ordered.push(entry);
+    for (const [id, room] of ordered) {
+      const item = button('', () => selectRoom(id), room.scope.parent ? 'room child-thread' : 'room');
       item.dataset.room = id; item.setAttribute('aria-current', String(id === state.selected));
       const top = el('span', 'room-top'), bottom = el('span', 'room-bottom'), copy = el('span', 'room-copy');
-      top.append(el('strong', 'room-name', roomName(room.scope)), el('span', 'room-thread', room.scope.threadId), el('span', 'room-time'));
+      top.append(el('strong', 'room-name', roomName(room.scope)), el('span', 'room-thread', threadLabel(room.scope)), el('span', 'room-time'));
       bottom.append(el('span', 'room-preview'), el('span', 'room-badge'));
       copy.append(top, bottom);
       const roomTile = el('span', 'tile', initial(roomName(room.scope))); roomTile.setAttribute('aria-hidden', 'true');
@@ -311,6 +336,7 @@ function renderRooms() {
 
 function updateRoomItem(item, room) {
   setText(item.querySelector('.room-name'), roomName(room.scope));
+  setText(item.querySelector('.room-thread'), threadLabel(room.scope));
   setText(item.querySelector('.tile'), initial(roomName(room.scope)));
   const selected = item.dataset.room === state.selected, last = room.messages.at(-1);
   const live = room.runs.find(run => LIVE.has(run.status)), fresh = selected ? 0 : unseen(room);
@@ -323,7 +349,7 @@ function updateRoomItem(item, room) {
   setText(item.querySelector('.room-time'), last ? roomTime(last.createdAt) : '');
   const badge = item.querySelector('.room-badge'); setText(badge, fresh ? String(fresh) : ''); badge.hidden = !fresh;
   item.classList.toggle('is-live', Boolean(live)); item.classList.toggle('has-new', fresh > 0);
-  const label = [`${roomName(room.scope)} ${room.scope.threadId}`, live && t('room.researchActive'), fresh && t('room.unread', { count: fresh })].filter(Boolean).join(t('list.separator'));
+  const label = [`${roomName(room.scope)} ${threadLabel(room.scope)}`, live && t('room.researchActive'), fresh && t('room.unread', { count: fresh })].filter(Boolean).join(t('list.separator'));
   if (item.getAttribute('aria-label') !== label) item.setAttribute('aria-label', label);
 }
 
@@ -331,11 +357,12 @@ function renderHeader() {
   const room = current(); if (!room) return;
   const { threadId, members } = room.scope;
   setText($('room-title'), roomName(room.scope));
-  setText($('thread-title'), t('room.threadMembers', { thread: threadId, count: members.length }));
+  setText($('thread-title'), t('room.threadMembers', { thread: threadLabel(room.scope), count: members.length }));
   setText($('room-tile'), initial(roomName(room.scope)));
   setText($('members-count'), t('room.members', { count: members.length }));
   setText($('members-short'), String(members.length));
-  setText($('scope-note'), t('room.scopeNote', { conversation: roomName(room.scope), thread: threadId }));
+  setText($('scope-note'), room.scope.parent ? t('threads.scopeNote') : t('room.scopeNote', { conversation: roomName(room.scope), thread: threadId }));
+  threadDialog.update();
   renderSeats(room); updateComposer();
 }
 
@@ -1322,7 +1349,7 @@ $('timeline').addEventListener('scroll', () => {
   markSeen(current());
 }, { passive: true });
 document.addEventListener('keydown', event => {
-  if (event.isComposing || !state.client || $('app').hidden || $('message-change').open || $('conversation-management').open || attachmentUI.opened || leaveDialog.opened) return;
+  if (event.isComposing || !state.client || $('app').hidden || $('message-change').open || $('conversation-management').open || attachmentUI.opened || leaveDialog.opened || threadDialog.opened) return;
   if (event.key === 'Escape' && state.pane) { event.preventDefault(); closePane($('details').contains(document.activeElement)); return; }
   if (state.pane && paneOverlay.matches && event.key === 'Tab') {
     const targets = [...$('details').querySelectorAll('button, a[href], input, select, textarea, [tabindex]')]

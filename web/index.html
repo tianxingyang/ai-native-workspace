@@ -74,6 +74,7 @@
       <button id="members-toggle" class="quiet members-toggle" type="button" aria-expanded="false" aria-controls="details"><svg class="icon" aria-hidden="true"><use href="#i-users"/></svg><span id="members-count" data-i18n="member.unknown">成员</span><span id="members-short" aria-hidden="true"></span></button>
     </header>
     <div id="sync-error" class="banner warn" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span id="sync-error-text"></span><button id="reconnect" type="button" data-i18n="shell.reconnect">立即重连</button></div>
+    <div id="thread-toolbar" class="thread-toolbar" hidden><button id="parent-thread" class="quiet" type="button" hidden></button><button id="create-thread" class="quiet" type="button" hidden data-i18n="threads.create">新建讨论线程</button></div>
     <div class="timeline-wrap">
       <section id="timeline" class="timeline" aria-label="消息记录" data-i18n-aria-label="shell.history" tabindex="0"><div id="messages"></div></section>
       <button id="new-messages" class="new-messages" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-down"/></svg><span data-i18n="shell.newMessages">查看新消息</span></button>
@@ -136,6 +137,7 @@
     <div class="change-actions"><button id="management-close" type="button" class="quiet" data-i18n="management.close">关闭</button><button id="management-save" type="submit" class="primary" data-i18n="management.save">确认提交</button></div>
   </form>
 </dialog>
+<dialog id="thread-create" aria-labelledby="thread-create-heading"><form id="thread-create-form"><h2 id="thread-create-heading" data-i18n="threads.create">新建讨论线程</h2><p id="thread-create-parent"></p><p class="muted" data-i18n="threads.help">线程沿用所属会话当前的授权；不会创建私有成员或新的权限。</p><label for="thread-create-name" data-i18n="threads.title">线程名称</label><input id="thread-create-name" required maxlength="128" autocomplete="off"><p id="thread-create-status" role="status"></p><div class="change-actions"><button id="thread-create-close" class="quiet" type="button" data-i18n="threads.close">返回讨论</button><button id="thread-create-save" class="primary" type="submit" data-i18n="threads.submit">创建线程</button></div></form></dialog>
 <dialog id="attachment-view" aria-labelledby="attachment-title"><h2 id="attachment-title"></h2><p id="attachment-status" role="status"></p><pre id="attachment-content" tabindex="0"></pre><button id="attachment-close" class="quiet" type="button" data-i18n="attachment.close">关闭附件</button></dialog>
 <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
 <dialog id="leave-dialog" aria-labelledby="leave-title"><h2 id="leave-title" data-i18n="leave.open">退出会话</h2><p id="leave-name"></p><p data-i18n="leave.help">退出后将无法查看此会话的消息和附件，相关旧运行会失效。重新加入需要其他管理员操作并重新授权；不会自动转让管理权限或删除会话。</p><p id="leave-status" role="status"></p><div class="change-actions"><button id="leave-close" type="button" class="quiet" data-i18n="leave.stay">留在会话</button><button id="leave-submit" type="button" class="primary" data-i18n="leave.confirm">确认退出</button></div></dialog>

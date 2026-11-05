@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { startWebDemo } from '../dist/scripts/web-demo.js';
 import { requestJson } from '../dist/src/http.js';
+import { defaultPolicy } from '../dist/src/control/authorization.js';
 let demo;
 const scope = { conversationId: '产品讨论', threadId: '日常交流' };
 const other = { conversationId: '研发讨论', threadId: '插件协议' };
@@ -172,4 +173,66 @@ test('storage initialization retry replays a saved background target without rea
   expect(demo.engine.state.readPosition('demo-owner', other)).toBeNull();
   await page.evaluate(() => { indexedDB.open = window.originalOpen; window.dispatchEvent(new Event('online')); });
   await expect.poll(() => demo.engine.state.readPosition('demo-owner', other)).toBe(seen.id);
+});
+
+async function createChild(parent, title) {
+  const session = await requestJson(demo.url, demo.ownerToken, '/session');
+  const membership = session.scopes.find(item => item.conversationId === parent.conversationId && item.threadId === parent.threadId);
+  return (await requestJson(demo.url, demo.ownerToken, '/threads', { conversationId: parent.conversationId, threadId: parent.threadId,
+    title, clientEventId: `create-${title}`, expectedMembershipGeneration: membership.membershipGeneration })).thread;
+}
+test('ordinary child threads recover their own cursor and observed reading target independently of the parent', async ({ page }) => {
+  const child = await createChild(scope, '持久恢复线程');
+  create(scope, '父会话消息', 'parent-only'); const seen = create(child, '线程内已看', 'child-seen');
+  await page.route('**/read-position', route => route.abort('failed')); await connect(page);
+  await page.getByRole('button', { name: '持久恢复线程 讨论线程 · 产品讨论', exact: true }).click();
+  await expect(page.locator('.message-text')).toHaveText(seen.text);
+  await expect.poll(async () => (await checkpoint(page, child))?.pendingReadMessageId).toBe(seen.id);
+  const saved = await checkpoint(page, child); await page.reload(); create(child, '线程内尚未看', 'child-unseen');
+  await page.unroute('**/read-position'); const cursors = [];
+  await page.route(url => url.pathname === '/sync' && url.searchParams.get('threadId') === child.threadId,
+    async route => { cursors.push(new URL(route.request().url()).searchParams.get('cursor')); await route.continue(); });
+  await connect(page, false); await expect.poll(() => demo.engine.state.readPosition('demo-owner', child)).toBe(seen.id);
+  expect(cursors[0]).toBe(saved.cursor); await expect(page.locator('#messages')).not.toContainText('线程内');
+  expect(demo.engine.state.readPosition('demo-owner', scope)).not.toBe(seen.id);
+});
+test('revoking a parent evicts the encrypted child checkpoint despite stale discovery', async ({ page }) => {
+  const child = await createChild(scope, '撤权恢复线程'); create(child, '撤权后不可恢复', 'child-denied');
+  await connect(page); await expect.poll(async () => (await checkpoint(page, child))?.messages.length).toBe(1);
+  const session = await requestJson(demo.url, demo.ownerToken, '/session');
+  const target = session.scopes.find(item => item.threadId === child.threadId);
+  await page.route('**/session', route => route.fulfill({ json: session }));
+  demo.engine.state.config.grants.find(grant => grant.memberId === 'demo-owner' && grant.conversationId === scope.conversationId).revoked = true;
+  await expect(page.locator('#rooms')).not.toContainText('撤权恢复线程');
+  await expect.poll(() => page.evaluate(async ({ target, memberId }) => {
+    const { SyncStore } = await import('/sync-store.js'), store = new SyncStore(target.outboxKey);
+    try { return await store.load([memberId, target.conversationId, target.threadId, target.membershipGeneration]); }
+    finally { store.close(); }
+  }, { target, memberId: session.member.id })).toBeNull();
+  await expect(page.locator('#app')).not.toContainText('撤权后不可恢复');
+});
+test('parent membership replacement cannot replay a child checkpoint from the previous generation', async ({ page }) => {
+  const config = demo.engine.state.config;
+  config.policy = defaultPolicy(); config.policy.disabledActions = config.policy.disabledActions.filter(action => action !== 'grant_permissions');
+  config.conversationCreation = { authorityScope: scope, allowedActions: ['read', 'send', 'manage_resource'], maxGrantDurationMs: 180000 };
+  for (const grant of config.grants.filter(grant => grant.conversationId === scope.conversationId)) grant.actions.push('manage_workspace', 'grant_permissions');
+  const expiresAt = Date.now() + 120000;
+  const group = (await requestJson(demo.url, demo.ownerToken, '/conversations', { kind: 'group', title: '换代父会话', memberIds: ['demo-owner', 'demo-researcher'], clientEventId: 'generation-parent',
+    initialGrants: [{ targetMemberId: 'demo-owner', actions: ['read', 'send'], expiresAt }, { targetMemberId: 'demo-researcher', actions: ['read', 'send', 'manage_resource'], expiresAt }] })).conversation;
+  const child = await createChild(group, '换代子线程'); const seen = create(child, '旧代际已看', 'old-child-seen');
+  await page.route('**/read-position', route => route.abort('failed')); await connect(page);
+  await page.getByRole('button', { name: '换代子线程 讨论线程 · 换代父会话', exact: true }).click();
+  await expect.poll(async () => (await checkpoint(page, child))?.pendingReadMessageId).toBe(seen.id);
+  const before = (await requestJson(demo.url, demo.ownerToken, '/session')).scopes.find(item => item.threadId === child.threadId);
+  await page.reload(); demo.engine.commit(() => {
+    const revision = demo.engine.state.membershipRoster('demo-researcher', group).revision;
+    demo.engine.removeScopeMember('demo-researcher', 'demo-owner', group, revision, 'child-remove');
+    demo.engine.addScopeMember('demo-researcher', 'demo-owner', group, revision + 1, 'child-rejoin', { actions: ['read', 'send'], expiresAt });
+  });
+  const after = (await requestJson(demo.url, demo.ownerToken, '/session')).scopes.find(item => item.threadId === child.threadId);
+  expect(after.outboxKey).not.toBe(before.outboxKey); expect(after.membershipGeneration).not.toBe(before.membershipGeneration);
+  await page.unroute('**/read-position'); await connect(page, false); await expect(page.locator('#connection-status')).toHaveText('已连接');
+  expect(demo.engine.state.readPosition('demo-owner', child)).toBeNull();
+  await expect.poll(async () => (await checkpoint(page, child))?.messages.length).toBe(1);
+  expect((await checkpoint(page, child)).pendingReadMessageIds).toEqual([]);
 });
