@@ -3,6 +3,7 @@ import { presentation, text as t, applyStaticText } from './presentation.js';
 import { conversationManagement } from './conversation-management.js';
 import { attachments } from './attachments.js';
 import { leaveConversation } from './leave-conversation.js';
+import { PendingStore } from './pending-store.js';
 
 document.documentElement.lang = presentation.locale;
 applyStaticText(document);
@@ -47,7 +48,7 @@ function action(text, id, fn, className = 'text-button', glyph) {
 function setText(node, text) { if (node.textContent !== text) node.textContent = text; }
 function current() { return state.rooms.get(state.selected); }
 function serverNow() { return Date.now() + state.offset; }
-function deadline(action, room = current()) { return room?.scope.permissions[action] ?? 0; }
+function deadline(action, room = current()) { return Math.min(room?.scope.permissions[action] ?? 0, room?.scope.outboxExpiresAt ?? Infinity); }
 function authorized(action, room = current()) { return deadline(action, room) > serverNow(); }
 // A lapsed grant is reported as 0. The last deadline seen in this connection lets
 // the UI say "expired at 14:32" or "withdrawn" instead of "never granted".
@@ -159,6 +160,7 @@ function expireReadScopes() {
   }
   for (const [id, room] of state.rooms) {
     if (authorized('read', room)) continue;
+    forgetPending(room);
     for (const run of room.runs) state.cancels.delete(run.id);
     state.reads.delete(id);
     state.rooms.delete(id);
@@ -183,11 +185,13 @@ function expireReadScopes() {
   state.expiryTimer = setTimeout(expireReadScopes, Math.min(2147483647, Math.max(1, next - serverNow())));
 }
 
-function invalidate(error) {
+function forgetPending(room) { if (room?.store) { void room.store.forget(room.scope.outboxKey).catch(() => {}); room.store.close(); } }
+function invalidate(error, preservePending = false) {
   const leaveUnconfirmed = leaveDialog.unconfirmed; leaveDialog.close();
   attachmentUI.reset();
   closeMessageChange();
   managementDialog.close();
+  for (const room of state.rooms.values()) { if (preservePending) room.store?.close(); else forgetPending(room); }
   if (desktop) void desktop.core.invoke('desktop_connected', { connected: false });
   state.client?.close(); state.client = null; state.epoch++; clearTimeout(state.timer); clearTimeout(state.expiryTimer); state.syncing = false;
   state.session = null; state.rooms.clear(); state.cancels.clear(); state.reads.clear(); state.selected = ''; state.lastSync = 0;
@@ -220,8 +224,9 @@ function sessionReceived(session) {
   const next = new Map();
   for (const scope of session.scopes) {
     const id = key(scope), previous = state.rooms.get(id);
-    const old = previous?.scope.membershipGeneration === scope.membershipGeneration ? previous : undefined, known = { ...old?.known };
+    const old = previous?.scope.membershipGeneration === scope.membershipGeneration && previous?.scope.outboxKey === scope.outboxKey ? previous : undefined, known = { ...old?.known };
     if (previous && !old) {
+      forgetPending(previous);
       state.reads.delete(id); for (const run of previous.runs) state.cancels.delete(run.id);
       if (messageChange?.roomId === id) closeMessageChange();
       if (state.selected === id) {
@@ -231,15 +236,37 @@ function sessionReceived(session) {
       }
     }
     for (const [name, until] of Object.entries(scope.permissions)) if (until > 0) known[name] = until;
-    next.set(id, old ? { ...old, scope, known } : { scope, known, cacheIdentity: {}, messages: [], runs: [], loaded: false, draft: '', pending: null, signature: '', seen: new Set(), rendered: 0, entering: true });
+    next.set(id, old ? { ...old, scope, known } : { scope, known, store: new PendingStore(serverNow), restoring: true, cacheIdentity: {}, messages: [], runs: [], loaded: false, draft: '', pending: null, signature: '', seen: new Set(), rendered: 0, entering: true });
   }
+  for (const [id, room] of state.rooms) if (!next.has(id)) forgetPending(room);
   state.rooms = next;
+  for (const [id, room] of next) if (room.restoring && !room.restoreStarted) { room.restoreStarted = true; void restorePending(room, id); }
   updateComposer();
   if (!next.has(state.selected)) { state.selected = next.keys().next().value ?? ''; if (current()) current().entering = true; state.pane = null; renderPane(); }
   renderIdentity();
   setText($('room-count'), t('room.count', { count: session.scopes.length }));
   renderRooms(); renderHeader();
   expireReadScopes();
+}
+
+async function restorePending(room, id) {
+  const client = state.client;
+  try {
+    const saved = await room.store.load(room.scope.outboxKey), latest = state.rooms.get(id);
+    if (client !== state.client || latest?.cacheIdentity !== room.cacheIdentity || !authorized('read', latest)) return;
+    if (saved && saved.conversationId === room.scope.conversationId && saved.threadId === room.scope.threadId && saved.membershipGeneration === room.scope.membershipGeneration) {
+      latest.pending = { ...saved, status: 'failed', error: t('send.recovered'), recovered: true };
+      latest.draft = saved.text; latest.replyToMessageId = saved.replyToMessageId; latest.attachment = saved.attachment;
+      if (id === state.selected) $('message').value = saved.text;
+      void reconcilePending(latest, id);
+    } else if (saved) await room.store.remove(room.scope.outboxKey, saved.id);
+  } catch { /* Sending will report a storage failure; never silently send without saving. */ }
+  finally {
+    const latest = state.rooms.get(id);
+    if (client === state.client && latest?.cacheIdentity === room.cacheIdentity) {
+      latest.restoring = false; if (id === state.selected) { updateComposer(); renderOutbox(); }
+    }
+  }
 }
 
 function renderIdentity() {
@@ -839,10 +866,10 @@ function updateComposer() {
   leaveDialog.update();
   const room = current(); if (!room || !state.session) return;
   const allowed = authorized('send');
-  $('message').disabled = !allowed || Boolean(room.pending);
+  $('message').disabled = !allowed || Boolean(room.pending) || room.restoring;
   const parent = room.messages.find(m => m.id === room.replyToMessageId);
   const replyUnavailable = Boolean(room.replyToMessageId && (!parent || parent.retracted || parent.invalidated));
-  $('send').disabled = !allowed || Boolean(room.pending) || attachmentUI.loading || !$('message').value.trim() || replyUnavailable;
+  $('send').disabled = !allowed || Boolean(room.pending) || room.restoring || attachmentUI.loading || !$('message').value.trim() || replyUnavailable;
   const preview = $('reply-preview'), replySignature = JSON.stringify([state.selected, room.replyToMessageId, parent, Boolean(room.pending)]);
   if (preview.dataset.signature !== replySignature) {
     preview.dataset.signature = replySignature; preview.hidden = !room.replyToMessageId; preview.replaceChildren();
@@ -912,9 +939,7 @@ function renderOutbox() {
     }
     actions.append(el('p', 'muted', t('send.receiptHelp')));
     if (pending.replyRejected) {
-      const cancel = button(t('send.cancelReply'), () => {
-        const room = current(); room.pending = null; room.replyToMessageId = undefined; updateComposer(); renderOutbox(); $('message').focus();
-      }, 'outline-button');
+      const cancel = button(t('send.cancelReply'), () => void cancelPendingReply(current(), state.selected), 'outline-button');
       cancel.dataset.action = 'cancel-reply'; cancel.disabled = Boolean(pending.checking); actions.append(cancel);
     }
     node.append(actions);
@@ -926,9 +951,28 @@ function renderOutbox() {
   }
 }
 
+async function cancelPendingReply(room, id) {
+  const pending = room?.pending, client = state.client;
+  if (!pending?.replyRejected || pending.checking || !client) return;
+  pending.checking = true; renderOutbox();
+  try {
+    await room.store.remove(room.scope.outboxKey, pending.id);
+    const latest = state.rooms.get(id);
+    if (client !== state.client || latest?.cacheIdentity !== room.cacheIdentity || latest.pending !== pending) return;
+    latest.pending = null; latest.replyToMessageId = undefined;
+    if (id === state.selected) { updateComposer(); renderOutbox(); $('message').focus(); }
+  } catch {
+    pending.error = t('send.storageDeleteFailed');
+  } finally {
+    pending.checking = false;
+    if (client === state.client && state.rooms.get(id)?.pending === pending && id === state.selected) renderOutbox();
+  }
+}
+
 function acceptPending(id, pending, result) {
   const latest = state.rooms.get(id);
   if (!latest || latest.pending !== pending || !authorized('read', latest)) return false;
+  void latest.store.remove(latest.scope.outboxKey, pending.id).catch(() => {});
   invalidateSnapshot(latest);
   latest.pending = null; latest.draft = ''; latest.replyToMessageId = undefined; latest.seen.add(result.message.id);
   latest.attachment = undefined;
@@ -971,6 +1015,12 @@ async function sendPending(room, id) {
   if (!latest || !authorized('send', latest)) return;
   pending.status = 'sending'; if (id === state.selected) { updateComposer(); renderOutbox(); }
   try {
+    await room.store.save(room.scope.outboxKey, { id: pending.id, text: pending.text, conversationId: room.scope.conversationId, threadId: room.scope.threadId,
+      membershipGeneration: room.scope.membershipGeneration, ...(pending.replyToMessageId ? { replyToMessageId: pending.replyToMessageId } : {}), ...(pending.attachment ? { attachment: pending.attachment } : {}) },
+    Math.min(room.scope.outboxExpiresAt, deadline('read', room)));
+    const currentRoom = state.rooms.get(id);
+    if (client !== state.client || currentRoom?.cacheIdentity !== room.cacheIdentity || currentRoom.pending !== pending || !authorized('read', currentRoom)) return;
+    if (!authorized('send', currentRoom)) { pending.status = 'failed'; pending.error = t('send.recovered'); return; }
     const result = await client.send(room.scope, pending.text, pending.id, pending.replyToMessageId, pending.attachment);
     if (client !== state.client) return;
     acceptPending(id, pending, result);
@@ -979,7 +1029,7 @@ async function sendPending(room, id) {
     if (client !== state.client) return;
     if (error instanceof ApiError && error.status === 401) { invalidate(error); return; }
     pending.replyRejected = error instanceof ApiError && error.code === 'reply_source_unavailable';
-    pending.status = 'failed'; pending.error = pending.replyRejected ? t('send.replyRejected') : errorText(error); announce(pending.error);
+    pending.status = 'failed'; pending.error = error?.message?.startsWith('pending_storage_') ? t('send.storageFailed') : pending.replyRejected ? t('send.replyRejected') : errorText(error); announce(pending.error);
     if (error instanceof ApiError && error.status === 403) await sync();
   }
   if (client === state.client && id === state.selected) { updateComposer(); renderOutbox(); }
@@ -1217,7 +1267,7 @@ document.addEventListener('keydown', event => {
 window.addEventListener('online', () => void sync());
 window.addEventListener('focus', expireReadScopes);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) expireReadScopes(); });
-window.addEventListener('pagehide', () => invalidate());
+window.addEventListener('pagehide', () => invalidate(undefined, true));
 window.addEventListener('beforeunload', event => { if ([...state.rooms.values()].some(room => room.pending)) { event.preventDefault(); event.returnValue = ''; } });
 if (desktop) {
   $('token').required = false; $('token').hidden = true;

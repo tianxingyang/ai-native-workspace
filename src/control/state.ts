@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { PROTOCOL_VERSION, objectValue, requireCondition, resultValue, stringValue, terminal, type Action, type AuthorizationPolicy, type Grant, type Member, type Message, type ResearchResult, type Run, type RuntimeEvent, type Scope, type Source, type WorkPackage } from '../contracts.js';
 import { decideParticipation } from '../participation.js';
 import { actionList, decideAuthorization, policyDigest, type AuthorizationDecision } from './authorization.js';
@@ -17,6 +17,7 @@ export interface ControlConfig {
   conversationCreation?: ConversationCreationRule;
 }
 export class ControlState {
+  private storageEpoch = randomUUID();
   private readonly delivery = new DeliveryJournal();
   private readonly memberships = new MembershipRegistry();
   private readonly conversations = new ConversationRegistry();
@@ -37,12 +38,13 @@ export class ControlState {
   constructor(readonly config: ControlConfig, private readonly now = Date.now) {}
 
   snapshot() {
-    return structuredClone({ messages: [...this.messages], attachments: [...this.attachments], runs: [...this.runs], approvals: [...this.approvals],
+    return structuredClone({ storageEpoch: this.storageEpoch, messages: [...this.messages], attachments: [...this.attachments], runs: [...this.runs], approvals: [...this.approvals],
       decisions: this.decisions, audit: this.audit.slice(-1000), messageKeys: [...this.messageKeys],
       claims: [...this.claims], resultKeys: [...this.resultKeys], toolCalls: [...this.toolCalls],
       changes: [...this.changes], changeKeys: [...this.changeKeys], contextRevisions: [...this.contextRevisions], readPositions: [...this.readPositions], delivery: this.delivery.snapshot(), memberships: this.memberships.snapshot(), conversations: this.conversations.snapshot() });
   }
   restore(data: ReturnType<ControlState['snapshot']>): void {
+    this.storageEpoch = data.storageEpoch ?? this.storageEpoch;
     const restoreMap = <K, V>(map: Map<K, V>, entries: [K, V][]) => { map.clear(); for (const [key, value] of entries) map.set(key, value); };
     restoreMap(this.messages, data.messages); restoreMap(this.runs, data.runs); restoreMap(this.approvals, data.approvals);
     restoreMap(this.attachments, data.attachments ?? []);
@@ -254,9 +256,10 @@ export class ControlState {
   visible(actorId: string, scope: Scope): boolean {
     try { this.authorize(actorId, 'read', scope); return true; } catch { return false; }
   }
-  createMessage(actorId: string, scope: Scope, text: string, clientEventId: string, replyToMessageId?: string, expectedMembershipGeneration?: unknown, attachment?: unknown): { message: Message; duplicate: boolean } {
+  createMessage(actorId: string, scope: Scope, text: string, clientEventId: string, replyToMessageId?: string, expectedMembershipGeneration?: unknown, attachment?: unknown, expectedSendEpoch?: unknown): { message: Message; duplicate: boolean } {
     this.authorize(actorId, 'send', scope);
     this.requireMembershipGeneration(actorId, scope, expectedMembershipGeneration);
+    requireCondition(expectedSendEpoch === undefined || expectedSendEpoch === this.storageEpoch, 409, 'send_epoch_conflict');
     if (replyToMessageId !== undefined) this.authorize(actorId, 'read', scope);
     const key = JSON.stringify([actorId, clientEventId]);
     // Preserve existing no-reply keys across upgrades; a reply is part of its identity.
@@ -306,7 +309,13 @@ export class ControlState {
     this.authorize(actorId, 'read', scope);
     return this.readPositions.get(JSON.stringify([actorId, scope.conversationId, scope.threadId])) ?? null;
   }
-  resetDelivery(): void { this.delivery.restore(); }
+  resetDelivery(): void { this.delivery.restore(); this.storageEpoch = randomUUID(); }
+  sendEpoch(): string { return this.storageEpoch; }
+  pendingStorageKey(actor: string, scope: Scope, token: string): string {
+    // Domain-separated encryption material, never a server authorization credential.
+    return createHmac('sha256', token).update(JSON.stringify(['coseat-pending-v1', this.storageEpoch, actor,
+      scope.conversationId, scope.threadId, this.membershipGeneration(actor, scope)])).digest('hex');
+  }
   syncScope(actorId: string, scope: Scope, cursor?: string) {
     const messages = this.readMessages(actorId, scope);
     const runs = [...this.runs.values()].filter(r => r.work.route.conversationId === scope.conversationId && r.work.route.threadId === scope.threadId).map(r => this.presentRun(r));
