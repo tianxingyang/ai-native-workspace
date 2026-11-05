@@ -74,7 +74,7 @@ impl Registry {
                 .ok_or_else(|| format!("Missing desktop catalog: {locale}"))?;
             for (key, value) in catalog {
                 if !RESOURCE_KEYS.contains(&key.as_str())
-                    || !value.as_str().is_some_and(|s| !s.trim().is_empty())
+                    || value.as_str().is_none_or(|s| s.trim().is_empty())
                 {
                     return Err(format!("Invalid desktop resource: {locale}.{key}"));
                 }

@@ -144,7 +144,29 @@ test('switching while reading history neither marks unread messages read nor res
   await page.locator('#logout').click();
   await select(page, 'zh-CN'); await select(page, 'synthetic');
   await expect(page.locator('#messages')).toBeEmpty(); await expect(page.locator('#rooms')).toBeEmpty();
+  for (const id of ['thread-title', 'members-count', 'scope-note', 'send-label', 'send-help', 'announcement', 'change-save']) await expect(page.locator(`#${id}`)).toBeEmpty();
   await expect(page.locator('body')).not.toContainText('历史原文'); await expect(page.locator('body')).not.toContainText('未读原文');
+});
+
+test('language selection cannot repopulate fixed scope or editor slots after reading access ends', async ({ page }) => {
+  const config = demo.engine.state.config, authority = { conversationId: '产品讨论', threadId: '日常交流' };
+  config.policy = defaultPolicy(); config.policy.disabledActions = config.policy.disabledActions.filter(action => action !== 'grant_permissions');
+  config.conversationCreation = { authorityScope: authority, allowedActions: ['read', 'send', 'manage_resource'], maxGrantDurationMs: 180000 };
+  config.grants.find(grant => grant.memberId === 'demo-owner' && grant.conversationId === authority.conversationId).actions.push('manage_workspace', 'grant_permissions');
+  await resources(page); await connect(page);
+  await page.locator('#message').fill('待清理的编辑正文'); await page.locator('#send').click();
+  await page.locator('[data-action^="edit-"]').click();
+  await expect(page.locator('#change-text')).toHaveValue('待清理的编辑正文');
+  await select(page, 'synthetic');
+  await page.locator('#change-close').click();
+  await select(page, 'zh-CN');
+  await expect(page.locator('#change-save')).toBeEmpty();
+  for (const grant of config.grants.filter(grant => grant.memberId === 'demo-owner')) grant.actions = grant.conversationId === authority.conversationId ? ['manage_workspace', 'grant_permissions'] : [];
+  await expect(page.locator('#management-empty')).toBeVisible();
+  await select(page, 'synthetic'); await select(page, 'zh-CN');
+  for (const id of ['messages', 'thread-title', 'members-count', 'scope-note', 'send-label', 'send-help', 'announcement', 'change-save']) await expect(page.locator(`#${id}`)).toBeEmpty();
+  await expect(page.locator('#change-text')).toHaveValue('');
+  await expect(page.locator('body')).not.toContainText('待清理的编辑正文');
 });
 
 test('localized day labels cannot merge timestamp-based message groups', async ({ page }) => {
@@ -163,4 +185,57 @@ test('localized day labels cannot merge timestamp-based message groups', async (
   await select(page, 'synthetic');
   await expect(dividers).toHaveCount(2); await expect(dividers).toHaveText(['Synthetic same display label', 'Synthetic same display label']);
   expect(await page.locator('.message time').evaluateAll(nodes => nodes.map(node => node.dateTime))).toEqual(times);
+});
+
+for (const width of [320, 390]) test(`thread creation and parent navigation retain scoped drafts across language selection at ${width}px`, async ({ page }) => {
+  await resources(page); await page.setViewportSize({ width, height: 900 }); await connect(page);
+  await page.locator('#message').fill('父会话未发送草稿');
+  await page.locator('#create-thread').click(); await page.locator('#thread-create-name').fill('设计 <原始标题>');
+  await page.locator('#thread-create-name').evaluate(node => { node.focus(); node.setSelectionRange(1, 4); });
+  const submissions = [];
+  page.on('request', request => { if (request.method() === 'POST') submissions.push(request); });
+  await select(page, 'synthetic');
+  await expect(page.locator('#thread-create-name')).toHaveValue('设计 <原始标题>'); await expect(page.locator('#thread-create-name')).toBeFocused();
+  expect(await page.locator('#thread-create-name').evaluate(node => [node.selectionStart, node.selectionEnd])).toEqual([1, 4]);
+  await expect(page.locator('#thread-create-parent')).toHaveText(synthetic.messages['threads.parent'].replace('{title}', '产品讨论'));
+  await expect(page.locator('#thread-create-save')).toHaveText(synthetic.messages['threads.submit']);
+  expect(submissions).toHaveLength(0);
+  await page.locator('#thread-create-save').click(); await expect(page.locator('#thread-create')).not.toBeVisible();
+  await expect(page.locator('#room-title')).toHaveText('设计 <原始标题>'); await expect(page.locator('#room-title')).toBeFocused();
+  await page.locator('#message').fill('线程未发送草稿');
+  await page.locator('#parent-thread').focus(); await select(page, 'zh-CN');
+  await expect(page.locator('#parent-thread')).toBeFocused(); await expect(page.locator('#parent-thread')).toHaveText('返回所属会话：产品讨论');
+  await select(page, 'synthetic');
+  await expect(page.locator('#parent-thread')).toHaveText(synthetic.messages['threads.back'].replace('{title}', '产品讨论'));
+  await expect(page.locator('#scope-note')).toHaveText(synthetic.messages['threads.scopeNote']);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.locator('#parent-thread').click(); await expect(page.locator('#message')).toHaveValue('父会话未发送草稿');
+  await page.locator('#back').click();
+  const child = page.locator('#rooms .child-thread');
+  await expect(child).toHaveAttribute('aria-label', `设计 <原始标题> ${synthetic.messages['threads.inParent'].replace('{title}', '产品讨论')}`);
+  await child.click(); await expect(page.locator('#message')).toHaveValue('线程未发送草稿');
+  expect(submissions.filter(request => new URL(request.url()).pathname === '/threads')).toHaveLength(1);
+});
+
+test('language selection preserves an uncertain thread request and cannot restore it after revocation', async ({ page }) => {
+  await resources(page); await connect(page);
+  const bodies = []; let drop = true;
+  await page.route('**/threads', async route => {
+    bodies.push(route.request().postDataJSON());
+    if (drop) { drop = false; await route.fetch(); await route.abort('failed'); } else await route.continue();
+  });
+  await page.locator('#create-thread').click(); await page.locator('#thread-create-name').fill('请求参数不变');
+  await page.locator('#thread-create-save').click(); await expect(page.locator('#thread-create-status')).toHaveText(catalog.messages['threads.uncertain']);
+  await page.locator('#thread-create-save').focus(); await select(page, 'synthetic');
+  await expect(page.locator('#thread-create-save')).toBeFocused(); await expect(page.locator('#thread-create-save')).toHaveText(synthetic.messages['threads.retry']);
+  await expect(page.locator('#thread-create-status')).toHaveText(synthetic.messages['threads.uncertain']);
+  await expect(page.locator('#thread-create-name')).toBeDisabled(); expect(bodies).toHaveLength(1);
+  await page.locator('#thread-create-save').click(); await expect(page.locator('#room-title')).toHaveText('请求参数不变');
+  expect(bodies).toHaveLength(2); expect(bodies[1]).toEqual(bodies[0]);
+  expect(demo.engine.state.snapshot().threads.threads).toHaveLength(1);
+  demo.engine.state.config.grants.find(grant => grant.memberId === 'demo-owner' && grant.conversationId === '产品讨论').revoked = true;
+  await expect(page.locator('#room-title')).toHaveText('研发讨论'); await expect(page.locator('#rooms')).not.toContainText('请求参数不变');
+  await select(page, 'zh-CN'); await select(page, 'synthetic');
+  await expect(page.locator('#rooms')).not.toContainText('请求参数不变'); await expect(page.locator('#thread-create-parent')).toBeEmpty();
+  await expect(page.locator('#parent-thread')).toBeHidden(); expect(bodies).toHaveLength(2);
 });

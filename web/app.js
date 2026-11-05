@@ -5,6 +5,7 @@ import { conversationManagement } from './conversation-management.js';
 import { attachments } from './attachments.js';
 import { leaveConversation } from './leave-conversation.js';
 import { PendingStore } from './pending-store.js';
+import { discussionThreads } from './threads.js';
 
 document.documentElement.lang = presentation.locale;
 applyStaticText(document);
@@ -50,6 +51,24 @@ let cancellationRevision = 0;
 let messageChange = null;
 const managementDialog = conversationManagement({ client: () => state.client, session: () => state.session, now: serverNow,
   refresh: sync, invalidate, beforeOpen: () => closePane(false), announce });
+const threadDialog = discussionThreads({ current, client: () => state.client, now: serverNow, authorized,
+  parent: room => room?.scope.parent ? state.rooms.get(key(room.scope.parent)) : undefined,
+  beforeOpen: () => closePane(false), refresh: refreshThreads, enter: enterThread, invalidate, announce });
+function refreshThreads() {
+  // Supersede any older discovery before looking up a newly created thread.
+  state.epoch++; state.syncing = false; clearTimeout(state.timer);
+  return sync();
+}
+function enterThread(scope) {
+  const room = state.rooms.get(key(scope));
+  if (!room || !authorized('read', room)) return false;
+  threadDialog.close(); void selectRoom(key(scope));
+  $('room-title').focus({ preventScroll: true }); return true;
+}
+function threadLabel(scope) {
+  const parent = scope.parent && state.rooms.get(key(scope.parent));
+  return scope.parent ? t('threads.inParent', { title: parent ? roomName(parent.scope) : scope.parent.conversationId }) : scope.threadId;
+}
 function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) bindText(node, text); return node; }
 function button(text, fn, className = 'quiet') { const node = el('button', className, text); node.type = 'button'; node.addEventListener('click', fn); return node; }
 function icon(name, className = 'icon') {
@@ -109,7 +128,7 @@ function applyReadPosition(room, messageId) {
 }
 function markSeen(room) {
   if (changingLanguage) return;
-  if (!room || room !== current() || !authorized('read', room) || document.hidden || $('app').hidden || $('message-change').open || $('conversation-management').open || attachmentUI.opened || leaveDialog.opened
+  if (!room || room !== current() || !authorized('read', room) || document.hidden || $('app').hidden || $('message-change').open || $('conversation-management').open || attachmentUI.opened || leaveDialog.opened || threadDialog.opened
       || $('app').classList.contains('show-rooms') || (state.pane && paneOverlay.matches)) return;
   const timeline = $('timeline');
   if (timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight >= 90) return;
@@ -141,6 +160,7 @@ function renderManagement() {
   $('management-empty').hidden = state.rooms.size > 0;
   $('app').classList.toggle('management-empty', state.rooms.size === 0);
   managementDialog.update();
+  threadDialog.update();
 }
 
 function denyReadScope(client, room) {
@@ -191,6 +211,7 @@ function expireReadScopes() {
     announce(() => t('room.readExpired'));
   } else renderRooms();
   if (!state.rooms.size) {
+    clearRoomPresentation();
     state.selected = ''; state.pane = null; state.paneReturn = null; renderPane();
     for (const id of ['messages', 'outbox', 'reply-preview', 'seats', 'seat', 'members', 'my-seat', 'details-thread', 'search-results', 'search-count']) $(id).replaceChildren();
     $('message').value = ''; $('search-query').value = '';
@@ -204,15 +225,23 @@ function expireReadScopes() {
 }
 
 function forgetPending(room) { if (room?.store) { void room.store.forget(room.scope.outboxKey).catch(() => {}); room.store.close(); } }
+function clearRoomPresentation() {
+  // Fixed DOM slots remain connected while the app is hidden. Remove their
+  // bindings too, so a later language selection cannot retain old scope data.
+  for (const id of ['room-title', 'thread-title', 'room-tile', 'members-count', 'members-short', 'scope-note', 'send-label', 'send-help', 'announcement']) $(id).replaceChildren();
+}
 function invalidate(error, preservePending = false) {
   const leaveUnconfirmed = leaveDialog.unconfirmed; leaveDialog.close();
   attachmentUI.reset();
   closeMessageChange();
   managementDialog.close();
+  threadDialog.close();
   for (const room of state.rooms.values()) { if (preservePending) room.store?.close(); else forgetPending(room); }
   if (desktop) void desktop.core.invoke('desktop_connected', { connected: false });
   state.client?.close(); state.client = null; state.epoch++; clearTimeout(state.timer); clearTimeout(state.expiryTimer); state.syncing = false;
   state.session = null; state.rooms.clear(); state.cancels.clear(); state.reads.clear(); state.selected = ''; state.lastSync = 0;
+  clearRoomPresentation();
+  threadDialog.update();
   state.pane = null; state.paneReturn = null;
   for (const name of Object.keys(state.ui)) state.ui[name] = '';
   $('app').hidden = true; $('connect').hidden = false; $('token').value = ''; $('message').value = '';
@@ -262,7 +291,7 @@ function sessionReceived(session) {
   updateComposer();
   if (!next.has(state.selected)) { state.selected = next.keys().next().value ?? ''; if (current()) current().entering = true; state.pane = null; renderPane(); }
   renderIdentity();
-  setText($('room-count'), () => t('room.count', { count: session.scopes.length }));
+  setText($('room-count'), () => t('room.count', { count: state.rooms.size }));
   renderRooms(); renderHeader();
   expireReadScopes();
 }
@@ -299,11 +328,14 @@ function renderRooms() {
     // Rebuild only when the list itself changes so a focused room survives polling.
     state.ui.nav = signature;
     const children = [];
-    for (const [id, room] of state.rooms) {
-      const item = button('', () => selectRoom(id), 'room');
+    const ordered = [...state.rooms].filter(([, room]) => !room.scope.parent).flatMap(entry => [entry,
+      ...[...state.rooms].filter(([, room]) => room.scope.parent && key(room.scope.parent) === entry[0])]);
+    for (const entry of state.rooms) if (!ordered.some(([id]) => id === entry[0])) ordered.push(entry);
+    for (const [id, room] of ordered) {
+      const item = button('', () => selectRoom(id), room.scope.parent ? 'room child-thread' : 'room');
       item.dataset.room = id; item.setAttribute('aria-current', String(id === state.selected));
       const top = el('span', 'room-top'), bottom = el('span', 'room-bottom'), copy = el('span', 'room-copy');
-      top.append(el('strong', 'room-name', roomName(room.scope)), el('span', 'room-thread', room.scope.threadId), el('span', 'room-time'));
+      top.append(el('strong', 'room-name', roomName(room.scope)), el('span', 'room-thread', threadLabel(room.scope)), el('span', 'room-time'));
       bottom.append(el('span', 'room-preview'), el('span', 'room-badge'));
       copy.append(top, bottom);
       const roomTile = el('span', 'tile', initial(roomName(room.scope))); roomTile.setAttribute('aria-hidden', 'true');
@@ -316,6 +348,7 @@ function renderRooms() {
 
 function updateRoomItem(item, room) {
   setText(item.querySelector('.room-name'), roomName(room.scope));
+  setText(item.querySelector('.room-thread'), threadLabel(room.scope));
   setText(item.querySelector('.tile'), initial(roomName(room.scope)));
   const selected = item.dataset.room === state.selected, last = room.messages.at(-1);
   const live = room.runs.find(run => LIVE.has(run.status)), fresh = selected ? 0 : unseen(room);
@@ -328,19 +361,23 @@ function updateRoomItem(item, room) {
   setText(item.querySelector('.room-time'), last ? roomTime(last.createdAt) : '');
   const badge = item.querySelector('.room-badge'); setText(badge, fresh ? String(fresh) : ''); badge.hidden = !fresh;
   item.classList.toggle('is-live', Boolean(live)); item.classList.toggle('has-new', fresh > 0);
-  const label = [`${roomName(room.scope)} ${room.scope.threadId}`, live && t('room.researchActive'), fresh && t('room.unread', { count: fresh })].filter(Boolean).join(t('list.separator'));
+  const label = [`${roomName(room.scope)} ${threadLabel(room.scope)}`, live && t('room.researchActive'), fresh && t('room.unread', { count: fresh })].filter(Boolean).join(t('list.separator'));
   if (item.getAttribute('aria-label') !== label) item.setAttribute('aria-label', label);
 }
 
 function renderHeader() {
   const room = current(); if (!room) return;
-  const { threadId, members } = room.scope;
+  const { threadId } = room.scope, count = room.scope.members.length;
+  const conversation = roomName(room.scope), isThread = Boolean(room.scope.parent);
+  const parent = isThread && state.rooms.get(key(room.scope.parent));
+  const parentTitle = isThread ? parent ? roomName(parent.scope) : room.scope.parent.conversationId : '';
   setText($('room-title'), roomName(room.scope));
-  setText($('thread-title'), () => t('room.threadMembers', { thread: threadId, count: members.length }));
+  setText($('thread-title'), () => t('room.threadMembers', { thread: isThread ? t('threads.inParent', { title: parentTitle }) : threadId, count }));
   setText($('room-tile'), initial(roomName(room.scope)));
-  setText($('members-count'), () => t('room.members', { count: members.length }));
-  setText($('members-short'), String(members.length));
-  setText($('scope-note'), () => t('room.scopeNote', { conversation: roomName(room.scope), thread: threadId }));
+  setText($('members-count'), () => t('room.members', { count }));
+  setText($('members-short'), String(count));
+  setText($('scope-note'), () => isThread ? t('threads.scopeNote') : t('room.scopeNote', { conversation, thread: threadId }));
+  threadDialog.update();
   renderSeats(room); updateComposer();
 }
 
@@ -482,8 +519,9 @@ function applySnapshot(room, data, selected) {
   if (!selected || firstLoad) return;
   room.runs.forEach((run, index) => {
     const previous = before.get(run.id);
-    if (previous === undefined) announce(() => t('run.announce.claimed', { name: memberIn(room, run.memberId).name, number: index + 1 }));
-    else if (previous !== run.status && !LIVE.has(run.status)) announce(() => t('run.announce.status', { number: index + 1, status: runLabel(run.status) }));
+    const name = memberIn(room, run.memberId).name, status = run.status;
+    if (previous === undefined) announce(() => t('run.announce.claimed', { name, number: index + 1 }));
+    else if (previous !== status && !LIVE.has(status)) announce(() => t('run.announce.status', { number: index + 1, status: runLabel(status) }));
   });
 }
 
@@ -791,6 +829,7 @@ function closeMessageChange() {
   const wasOpen = $('message-change').open;
   messageChange = null;
   $('message-change').close(); $('change-text').value = ''; $('change-error').textContent = '';
+  $('change-save').replaceChildren();
   // The invoking edit button may have disappeared after send loss or retraction.
   if (wasOpen && !$('app').hidden) $('timeline').focus({ preventScroll: true });
 }
@@ -810,7 +849,8 @@ function updateMessageChange() {
   const change = messageChange; if (!change || change.sending) return;
   const allowed = authorized('send', state.rooms.get(change.roomId)), submitted = change.submittedText !== undefined;
   $('change-save').disabled = change.conflict || (!submitted && !allowed);
-  bindText($('change-save'), () => t(submitted ? (allowed && !change.targetRetracted ? 'editor.retry' : 'editor.check') : change.kind === 'edit' ? 'editor.save' : 'editor.retract'));
+  const saveKey = submitted ? (allowed && !change.targetRetracted ? 'editor.retry' : 'editor.check') : change.kind === 'edit' ? 'editor.save' : 'editor.retract';
+  bindText($('change-save'), () => t(saveKey));
   if (allowed && !change.targetRetracted) change.autoChecked = false;
 }
 function acceptMessageChange(change, result) {
@@ -822,7 +862,8 @@ function acceptMessageChange(change, result) {
   // Hide cached derived output immediately, before the next snapshot.
   latest.messages = latest.messages.map(m => m.origin === 'research' ? { ...m, text: '', result: undefined, invalidated: true } : m);
   closeMessageChange(); renderMessages(); renderPane(); renderRooms();
-  announce(() => t(result.message.revision > result.change.revision ? 'editor.receivedNewer' : 'editor.received'));
+  const receiptKey = result.message.revision > result.change.revision ? 'editor.receivedNewer' : 'editor.received';
+  announce(() => t(receiptKey));
   void sync();
 }
 async function submitMessageChange(receiptOnly = false) {
@@ -874,8 +915,7 @@ $('change-form').addEventListener('submit', event => { event.preventDefault(); v
 function lapse(grant) {
   return grant.reason === 'expired' ? t('permission.expired', { time: clock(grant.until) }) : t(grant.reason === 'withdrawn' ? 'permission.withdrawn' : 'permission.none');
 }
-function readOnlyReason(room) {
-  const send = permission('send', room);
+function readOnlyReason(send) {
   return send.reason === 'none' ? t('permission.readOnlyNone') : t('permission.readOnlyLapsed', { reason: lapse(send) });
 }
 
@@ -898,11 +938,12 @@ function updateComposer() {
       cancel.disabled = Boolean(room.pending); preview.append(copy, cancel);
     }
   }
-  setText($('send-label'), () => t(room.pending?.status === 'sending' ? 'composer.sending' : 'composer.send'));
+  const sending = room.pending?.status === 'sending', send = permission('send', room);
+  setText($('send-label'), () => t(sending ? 'composer.sending' : 'composer.send'));
   $('composer').classList.toggle('is-readonly', !allowed);
   // The input folds away when speaking ends; keep keyboard focus somewhere visible.
   if (!allowed && document.activeElement === $('message')) $('timeline').focus();
-  setText($('send-help'), () => allowed ? t('composer.keyboardHint') : readOnlyReason(room));
+  setText($('send-help'), () => allowed ? t('composer.keyboardHint') : readOnlyReason(send));
   const placeholder = allowed ? t('composer.threadPlaceholder', { thread: room.scope.threadId }) : t('composer.readOnlyPlaceholder');
   if ($('message').placeholder !== placeholder) $('message').placeholder = placeholder;
   renderSeatCard(room, allowed); renderExpiry(room, allowed);
@@ -1001,7 +1042,8 @@ function acceptPending(id, pending, result) {
     $('message').value = ''; renderMessages(!result.duplicate); updateComposer(); renderOutbox();
     if (!result.duplicate && (!state.pane || !paneOverlay.matches)) (authorized('send', latest) ? $('message') : $('timeline')).focus();
   }
-  renderRooms(); announce(() => t(result.duplicate ? 'send.duplicateConfirmed' : 'send.delivered'));
+  const deliveryKey = result.duplicate ? 'send.duplicateConfirmed' : 'send.delivered';
+  renderRooms(); announce(() => t(deliveryKey));
   return true;
 }
 async function reconcilePending(room, id) {
@@ -1053,7 +1095,9 @@ async function sendPending(room, id) {
     if (client !== state.client) return;
     if (error instanceof ApiError && error.status === 401) { invalidate(error); return; }
     pending.replyRejected = error instanceof ApiError && error.code === 'reply_source_unavailable';
-    pending.status = 'failed'; setPendingError(pending, () => error?.message?.startsWith('pending_storage_') ? t('send.storageFailed') : pending.replyRejected ? t('send.replyRejected') : errorText(error)); announce(() => pending.errorRender?.() ?? pending.error);
+    const storageFailed = error?.message?.startsWith('pending_storage_'), replyRejected = pending.replyRejected;
+    const renderError = () => storageFailed ? t('send.storageFailed') : replyRejected ? t('send.replyRejected') : errorText(error);
+    pending.status = 'failed'; setPendingError(pending, renderError); announce(renderError);
     if (error instanceof ApiError && error.status === 403) await sync();
   }
   if (client === state.client && id === state.selected) { updateComposer(); renderOutbox(); }
@@ -1106,7 +1150,8 @@ function renderSearchPane(room, focusId) {
   const restoreFocus = $('search-results').contains(document.activeElement);
   focusId ??= document.activeElement?.dataset.searchMessage;
   state.ui.pane = signature; setText($('details-title'), () => t('search.title'));
-  setText($('search-count'), () => !query ? t('search.prompt') : matches.length ? t('search.count', { total: matches.length, shown: shown.length }) : t('search.empty'));
+  const total = matches.length, shownCount = shown.length;
+  setText($('search-count'), () => !query ? t('search.prompt') : total ? t('search.count', { total, shown: shownCount }) : t('search.empty'));
   const nodes = shown.map(message => {
     const row = button('', () => {
       const latest = current();
@@ -1270,7 +1315,7 @@ $('timeline').addEventListener('scroll', () => {
   markSeen(current());
 }, { passive: true });
 document.addEventListener('keydown', event => {
-  if (event.isComposing || !state.client || $('app').hidden || $('message-change').open || $('conversation-management').open || attachmentUI.opened || leaveDialog.opened) return;
+  if (event.isComposing || !state.client || $('app').hidden || $('message-change').open || $('conversation-management').open || attachmentUI.opened || leaveDialog.opened || threadDialog.opened) return;
   if (event.key === 'Escape' && state.pane) { event.preventDefault(); closePane($('details').contains(document.activeElement)); return; }
   if (state.pane && paneOverlay.matches && event.key === 'Tab') {
     const targets = [...$('details').querySelectorAll('button, a[href], input, select, textarea, [tabindex]')]

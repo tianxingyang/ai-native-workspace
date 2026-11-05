@@ -81,6 +81,7 @@ fn permitted(path: &str, body: &Option<Value>) -> bool {
     if body.is_some() {
         return path == "/messages"
             || path == "/read-position"
+            || path == "/threads"
             || path == "/conversations"
             || path == "/conversations/rename"
             || path == "/memberships/add"
@@ -343,6 +344,10 @@ mod tests {
             "/runs/a%2f/cancel",
             "/messages/a%2f/edit",
             "/messages/../retract",
+            "/threads/create",
+            "/threads/",
+            "/threads#fragment",
+            "/threads/../messages",
         ] {
             assert!(!permitted(path, &Some(json!({}))));
         }
@@ -353,6 +358,7 @@ mod tests {
         ));
         assert!(!permitted("/read-position", &None));
         for route in [
+            "/threads",
             "/conversations",
             "/conversations/rename",
             "/memberships/add",

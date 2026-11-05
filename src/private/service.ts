@@ -34,6 +34,10 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
       const value = commit(() => state.createConversation(actor, body));
       respond(response, value.duplicate ? 200 : 201, value); return;
     }
+    if (url.pathname === '/threads' && body) {
+      const value = commit(() => state.createThread(actor, body));
+      respond(response, value.duplicate ? 200 : 201, value); return;
+    }
     if (url.pathname === '/conversations/rename' && body) {
       requireCondition(Object.keys(body).every(key => ['conversationId', 'threadId', 'title', 'expectedTitleRevision', 'expectedMembershipGeneration', 'clientEventId'].includes(key)), 400, 'invalid_rename_request');
       const value = commit(() => state.renameConversation(actor, scopeValue(body), body.title, body.expectedTitleRevision,
