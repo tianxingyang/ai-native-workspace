@@ -2,6 +2,15 @@
 export default {
   locale: 'zh-CN',
   messages: {
+    'attachment.attach': '添加文本附件',
+    'attachment.remove': '移除附件',
+    'attachment.close': '关闭附件',
+    'attachment.open': '查看 {name} · {bytes} 字节',
+    'attachment.selected': '{name} · {bytes} 字节（随消息发送）',
+    'attachment.invalid': '请选择不超过 8 KiB 的 UTF-8 .txt 或 .md 文本文件；不支持空文件、控制字符或路径名称。',
+    'attachment.requestTooLarge': '消息和附件合计过大，请缩短消息或移除附件。',
+    'attachment.loading': '正在核对权限并读取附件…',
+    'attachment.note': '纯文本预览。附件沿用当前讨论的阅读权限；本演示的 Agent 尚不读取附件正文。',
     'management.create': '新建会话',
     'management.manage': '管理成员',
     'management.close': '关闭',

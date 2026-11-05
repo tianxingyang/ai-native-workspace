@@ -101,7 +101,10 @@ fn permitted(path: &str, body: &Option<Value>) -> bool {
                             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
                 });
     }
-    if let Some(query) = path.strip_prefix("/memberships?") {
+    if let Some(query) = path
+        .strip_prefix("/memberships?")
+        .or_else(|| path.strip_prefix("/attachments?"))
+    {
         let mut keys = Vec::new();
         for part in query.split('&') {
             let Some((key, value)) = part.split_once('=') else {
@@ -113,7 +116,16 @@ fn permitted(path: &str, body: &Option<Value>) -> bool {
             keys.push(key);
         }
         keys.sort_unstable();
-        return keys == ["conversationId", "threadId"];
+        return if path.starts_with("/attachments?") {
+            keys == [
+                "conversationId",
+                "expectedMembershipGeneration",
+                "messageId",
+                "threadId",
+            ]
+        } else {
+            keys == ["conversationId", "threadId"]
+        };
     }
     path == "/session"
         || path == "/conversations/options"
@@ -341,6 +353,16 @@ mod tests {
         assert!(!permitted("/conversations/options", &Some(json!({}))));
         assert!(!permitted("/conversations/options?scope=all", &None));
         assert!(permitted("/memberships?conversationId=a&threadId=b", &None));
+        let attachment_path = "/attachments?conversationId=a&threadId=b&messageId=m&expectedMembershipGeneration=initial";
+        assert!(permitted(attachment_path, &None));
+        assert!(!permitted(attachment_path, &Some(json!({}))));
+        for suffix in ["&runId=r", "&messageId=duplicate", "#fragment"] {
+            assert!(!permitted(&format!("{attachment_path}{suffix}"), &None));
+        }
+        assert!(!permitted(
+            "/attachments?conversationId=a&threadId=b&messageId=m",
+            &None
+        ));
         for query in [
             "conversationId=a",
             "conversationId=a&threadId=",

@@ -1,6 +1,7 @@
-import { Client, ApiError, errorText } from './client.js';
+import { Client, ApiError, errorText, messageBody } from './client.js';
 import { presentation, text as t, applyStaticText } from './presentation.js';
 import { conversationManagement } from './conversation-management.js';
+import { attachments } from './attachments.js';
 
 document.documentElement.lang = presentation.locale;
 applyStaticText(document);
@@ -18,6 +19,7 @@ const state = {
 };
 const labels = Object.fromEntries(['queued', 'running', 'cancel_requested', 'completed', 'failed', 'stopped', 'unknown'].map(status => [status, t(`run.${status}`)]));
 const LIVE = new Set(['queued', 'running', 'cancel_requested']);
+const attachmentUI = attachments({ current, client: () => state.client, authorized, changed: updateComposer, deny: denyReadScope, invalidate });
 const SETTLED = new Set(['cancel_requested', 'completed', 'failed', 'stopped']);
 const GROUP_WINDOW = 5 * 60 * 1000;
 const EXPIRY_NOTICE = 5 * 60 * 1000;
@@ -86,7 +88,7 @@ function applyReadPosition(room, messageId) {
   if (index >= room.messages.findIndex(message => message.id === room.pendingReadMessageId)) room.pendingReadMessageId = undefined;
 }
 function markSeen(room) {
-  if (!room || room !== current() || !authorized('read', room) || document.hidden || $('app').hidden || $('message-change').open || $('conversation-management').open
+  if (!room || room !== current() || !authorized('read', room) || document.hidden || $('app').hidden || $('message-change').open || $('conversation-management').open || attachmentUI.opened
       || $('app').classList.contains('show-rooms') || (state.pane && paneOverlay.matches)) return;
   const timeline = $('timeline');
   if (timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight >= 90) return;
@@ -159,12 +161,14 @@ function expireReadScopes() {
     $('message').value = ''; $('search-query').value = '';
   }
   renderManagement();
+  attachmentUI.update();
   const next = Math.min(...[...state.rooms.values()].map(room => deadline('read', room)),
     ...[state.session?.management?.createUntil ?? 0, state.session?.management?.issueUntil ?? 0, ...(state.session?.management?.scopes ?? []).map(scope => scope.until)].filter(until => until > serverNow()));
   state.expiryTimer = setTimeout(expireReadScopes, Math.min(2147483647, Math.max(1, next - serverNow())));
 }
 
 function invalidate(error) {
+  attachmentUI.reset();
   closeMessageChange();
   managementDialog.close();
   if (desktop) void desktop.core.invoke('desktop_connected', { connected: false });
@@ -213,6 +217,7 @@ function sessionReceived(session) {
     next.set(id, old ? { ...old, scope, known } : { scope, known, cacheIdentity: {}, messages: [], runs: [], loaded: false, draft: '', pending: null, signature: '', seen: new Set(), rendered: 0, entering: true });
   }
   state.rooms = next;
+  updateComposer();
   if (!next.has(state.selected)) { state.selected = next.keys().next().value ?? ''; if (current()) current().entering = true; state.pane = null; renderPane(); }
   renderIdentity();
   setText($('room-count'), t('room.count', { count: session.scopes.length }));
@@ -296,6 +301,7 @@ function renderSeats(room) {
 function selectRoom(id) {
   if (!state.rooms.has(id)) return;
   if (!authorized('read', state.rooms.get(id))) { expireReadScopes(); return; }
+  attachmentUI.reset();
   const old = current(); if (old && !old.pending) old.draft = $('message').value;
   if (old?.loaded) { const position = rememberScroll(); if (position) old.scrollPosition = position; }
   state.selected = id; state.epoch++; state.syncing = false;
@@ -486,6 +492,7 @@ function scrollToMessage(id, offset = 0) {
   return true;
 }
 function renderMessages(force = false) {
+  attachmentUI.update();
   const room = current(); if (!room) return;
   const entering = room.entering && room.loaded && $('timeline').getClientRects().length > 0;
   if (entering) room.unreadBoundaryId = unreadMessages(room)[0]?.id;
@@ -541,6 +548,7 @@ function renderMessage(room, message, previous, ctx, expanded) {
   if (message.result) body.append(...resultHead(room, message, ctx));
   if (message.replyToMessageId) body.append(replyQuote(room, message, ctx));
   body.append(el('p', 'message-text', messageText(message)));
+  if (message.attachment && !message.retracted && !message.invalidated) body.append(action(t('attachment.open', message.attachment), `attachment-${message.id}`, () => attachmentUI.open(room, message), 'attachment-link'));
   if (message.changedAt && !message.retracted) body.append(el('span', 'kind', t('message.edited')));
   if (message.result) body.append(sourcesNode(message, expanded));
   const actions = el('div', 'message-actions');
@@ -808,12 +816,13 @@ function readOnlyReason(room) {
 }
 
 function updateComposer() {
+  attachmentUI.update();
   const room = current(); if (!room || !state.session) return;
   const allowed = authorized('send');
   $('message').disabled = !allowed || Boolean(room.pending);
   const parent = room.messages.find(m => m.id === room.replyToMessageId);
   const replyUnavailable = Boolean(room.replyToMessageId && (!parent || parent.retracted || parent.invalidated));
-  $('send').disabled = !allowed || Boolean(room.pending) || !$('message').value.trim() || replyUnavailable;
+  $('send').disabled = !allowed || Boolean(room.pending) || attachmentUI.loading || !$('message').value.trim() || replyUnavailable;
   const preview = $('reply-preview'), replySignature = JSON.stringify([state.selected, room.replyToMessageId, parent, Boolean(room.pending)]);
   if (preview.dataset.signature !== replySignature) {
     preview.dataset.signature = replySignature; preview.hidden = !room.replyToMessageId; preview.replaceChildren();
@@ -902,6 +911,7 @@ function acceptPending(id, pending, result) {
   if (!latest || latest.pending !== pending || !authorized('read', latest)) return false;
   invalidateSnapshot(latest);
   latest.pending = null; latest.draft = ''; latest.replyToMessageId = undefined; latest.seen.add(result.message.id);
+  latest.attachment = undefined;
   if (!result.duplicate && !latest.messages.some(m => m.id === result.message.id)) latest.messages.push(result.message);
   if (id === state.selected) {
     $('message').value = ''; renderMessages(!result.duplicate); updateComposer(); renderOutbox();
@@ -941,7 +951,7 @@ async function sendPending(room, id) {
   if (!latest || !authorized('send', latest)) return;
   pending.status = 'sending'; if (id === state.selected) { updateComposer(); renderOutbox(); }
   try {
-    const result = await client.send(room.scope, pending.text, pending.id, pending.replyToMessageId);
+    const result = await client.send(room.scope, pending.text, pending.id, pending.replyToMessageId, pending.attachment);
     if (client !== state.client) return;
     acceptPending(id, pending, result);
     await sync();
@@ -1125,7 +1135,11 @@ $('connect-form').addEventListener('submit', async event => {
 $('composer').addEventListener('submit', event => {
   event.preventDefault(); const room = current(), text = $('message').value.trim();
   if (!room || room.pending || !text || !authorized('send') || $('send').disabled) return;
-  room.draft = text; room.pending = { id: crypto.randomUUID(), text, replyToMessageId: room.replyToMessageId, status: 'new', error: '' };
+  const id = crypto.randomUUID();
+  if (new TextEncoder().encode(JSON.stringify(messageBody(room.scope, text, id, room.replyToMessageId, room.attachment))).length > 60000) {
+    $('attachment-error').textContent = t('attachment.requestTooLarge'); return;
+  }
+  room.draft = text; room.pending = { id, text, replyToMessageId: room.replyToMessageId, attachment: room.attachment, status: 'new', error: '' };
   void sendPending(room, state.selected);
 });
 $('message').addEventListener('input', () => { if (current() && !current().pending) current().draft = $('message').value; updateComposer(); });
@@ -1161,7 +1175,7 @@ $('timeline').addEventListener('scroll', () => {
   markSeen(current());
 }, { passive: true });
 document.addEventListener('keydown', event => {
-  if (event.isComposing || !state.client || $('app').hidden || $('message-change').open || $('conversation-management').open) return;
+  if (event.isComposing || !state.client || $('app').hidden || $('message-change').open || $('conversation-management').open || attachmentUI.opened) return;
   if (event.key === 'Escape' && state.pane) { event.preventDefault(); closePane($('details').contains(document.activeElement)); return; }
   if (state.pane && paneOverlay.matches && event.key === 'Tab') {
     const targets = [...$('details').querySelectorAll('button, a[href], input, select, textarea, [tabindex]')]

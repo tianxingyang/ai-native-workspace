@@ -12,11 +12,13 @@ export interface Grant extends Scope {
   id: string; revision: number; memberId: string; actions: Action[]; expiresAt: number; revoked: boolean;
   effect?: 'allow' | 'deny'; roleIds?: string[];
 }
+export interface TextAttachment { name: string; bytes: number; sha256: string }
 export interface Message extends Scope {
   id: string; revision: number; authorId: string; text: string; createdAt: number;
   origin: 'chat' | 'research'; sourceMessageId?: string; result?: ResearchResult;
   retracted?: boolean; changedAt?: number; invalidated?: boolean;
   replyToMessageId?: string;
+  attachment?: TextAttachment;
 }
 export interface MessageChange extends Scope {
   id: string; messageId: string; actorId: string; kind: 'edit' | 'retract';
