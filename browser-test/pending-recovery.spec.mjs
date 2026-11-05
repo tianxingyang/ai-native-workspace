@@ -238,3 +238,74 @@ test('accepted reply attachment survives failed local acknowledgement cleanup wi
   const attachment = await requestJson(demo.url, demo.ownerToken, `/attachments?${new URLSearchParams({ conversationId: scope.conversationId, threadId: scope.threadId, messageId: sent.id, expectedMembershipGeneration: bodies[0].expectedMembershipGeneration })}`);
   expect(attachment.attachment.name).toBe('receipt.md'); expect(attachment.text).toBe('回执附件内容');
 });
+
+async function recoveryThread(title, event) {
+  return (await requestJson(demo.url, demo.ownerToken, '/threads', {
+    conversationId: scope.conversationId, threadId: scope.threadId, title, clientEventId: event,
+    expectedMembershipGeneration: demo.engine.state.membershipGeneration('demo-owner', scope),
+  })).thread;
+}
+async function selectRecoveryThread(page, title) {
+  await page.getByRole('button', { name: `${title} 讨论线程 · 恢复发送`, exact: true }).click();
+  await expect(page.locator('#room-title')).toHaveText(title);
+}
+
+test('parent and sibling pending sends recover independently and retry only the selected thread payload', async ({ page }) => {
+  const first = await recoveryThread('恢复甲', 'recovery-thread-a'), second = await recoveryThread('恢复乙', 'recovery-thread-b');
+  const source = (await requestJson(demo.url, demo.ownerToken, '/messages', {
+    conversationId: first.conversationId, threadId: first.threadId, text: '线程回复来源', clientEventId: 'thread-reply-source',
+    expectedMembershipGeneration: demo.engine.state.membershipGeneration('demo-owner', first),
+  })).message;
+  const bodies = []; let drop = true;
+  await page.route('**/messages', route => { bodies.push(route.request().postDataJSON()); return drop ? route.abort('failed') : route.continue(); });
+  await connect(page); await pending(page, '父会话待确认');
+  await selectRecoveryThread(page, '恢复甲'); await page.locator(`[data-action="reply-${source.id}"]`).click();
+  await page.locator('#attachment-file').setInputFiles({ name: 'thread.txt', mimeType: 'text/plain', buffer: Buffer.from('只属于甲线程的附件') });
+  await pending(page, '甲线程待确认');
+  await selectRecoveryThread(page, '恢复乙'); await pending(page, '乙线程待确认');
+  const records = await stored(page); expect(records).toHaveLength(3); expect(new Set(records.map(row => row.slot)).size).toBe(3);
+  expect(bodies).toHaveLength(3); expect(new Set(bodies.map(body => body.clientEventId)).size).toBe(3);
+  await page.reload(); await connect(page, demo.ownerToken, false);
+  await expect(page.locator('#outbox [data-action=retry-send]')).toBeEnabled(); await expect(page.locator('#message')).toHaveValue('父会话待确认');
+  await selectRecoveryThread(page, '恢复乙'); await expect(page.locator('#message')).toHaveValue('乙线程待确认');
+  await expect(page.locator('#outbox [data-action=retry-send]')).toBeEnabled();
+  await selectRecoveryThread(page, '恢复甲'); await expect(page.locator('#message')).toHaveValue('甲线程待确认');
+  await expect(page.locator('#outbox [data-action=retry-send]')).toBeEnabled(); expect(bodies).toHaveLength(3);
+  drop = false; await page.locator('#outbox [data-action=retry-send]').click(); await expect(page.locator('#outbox')).toBeEmpty();
+  expect(bodies).toHaveLength(4); expect(bodies[3]).toEqual(bodies[1]); expect(bodies[3].replyToMessageId).toBe(source.id);
+  expect(bodies[3].attachment).toEqual({ name: 'thread.txt', text: '只属于甲线程的附件' });
+  await expect.poll(async () => (await stored(page)).length).toBe(2);
+  const messages = [...demo.engine.state.messages.values()];
+  expect(messages.filter(message => message.text === '甲线程待确认').map(message => message.threadId)).toEqual([first.threadId]);
+  expect(messages.some(message => ['父会话待确认', '乙线程待确认'].includes(message.text))).toBe(false);
+  expect((await stored(page)).map(row => row.id).sort()).toEqual([bodies[0].clientEventId, bodies[2].clientEventId].sort());
+  await selectRecoveryThread(page, '恢复乙'); await expect(page.locator('#message')).toHaveValue('乙线程待确认');
+  expect(bodies[2].threadId).toBe(second.threadId);
+});
+
+for (const change of ['read-revoked', 'membership-rejoined']) test(`parent ${change} clears observed child pending content without resending`, async ({ page }) => {
+  const child = await recoveryThread('父会话授权恢复', 'parent-authority-recovery'), bodies = [];
+  await page.route('**/messages', route => { bodies.push(route.request().postDataJSON()); return route.abort('failed'); });
+  await connect(page); await selectRecoveryThread(page, '父会话授权恢复'); await pending(page, '旧父会话授权的待确认消息');
+  expect(await stored(page)).toHaveLength(1);
+  if (change === 'read-revoked') {
+    demo.engine.state.config.grants.push({ conversationId: scope.conversationId, threadId: scope.threadId, memberId: 'demo-owner',
+      id: 'deny-parent-recovery', revision: 1, actions: ['read'], effect: 'deny', revoked: false, expiresAt: demo.expiresAt });
+    await expect(page.getByRole('button', { name: '父会话授权恢复 讨论线程 · 恢复发送', exact: true })).toHaveCount(0);
+    // Read and send are independent permissions: read loss denies receipt lookup,
+    // while this client clears the intent instead of attempting another send.
+    const query = new URLSearchParams({ conversationId: child.conversationId, threadId: child.threadId, clientEventId: bodies[0].clientEventId });
+    await expect(requestJson(demo.url, demo.ownerToken, `/messages/receipt?${query}`)).rejects.toMatchObject({ status: 403 });
+  } else {
+    demo.engine.state.config.grants.push({ ...authority, id: 'child-recovery-rejoin-source', memberId: 'demo-researcher',
+      actions: ['manage_workspace', 'grant_permissions'], revision: 1, expiresAt: demo.expiresAt, revoked: false });
+    demo.engine.commit(() => demo.engine.removeScopeMember('demo-researcher', 'demo-owner', scope, 1, 'remove-child-owner'));
+    demo.engine.commit(() => demo.engine.addScopeMember('demo-researcher', 'demo-owner', scope, 2, 'rejoin-child-owner', { actions: ['read', 'send'], expiresAt: Date.now() + 120000 }));
+    await expect(page.locator('#message')).toBeEnabled();
+    expect(demo.engine.state.membershipGeneration('demo-owner', child)).not.toBe(bodies[0].expectedMembershipGeneration);
+    await expect(requestJson(demo.url, demo.ownerToken, '/messages', bodies[0])).rejects.toMatchObject({ status: 409, code: 'membership_generation_conflict' });
+  }
+  await expect(page.locator('#outbox')).toBeEmpty(); await expect(page.locator('#message')).toHaveValue('');
+  await expect.poll(async () => (await stored(page)).length).toBe(0); expect(bodies).toHaveLength(1);
+  expect([...demo.engine.state.messages.values()].some(message => message.text === '旧父会话授权的待确认消息')).toBe(false);
+});

@@ -2,7 +2,7 @@
 
 ## Scope and evidence boundary
 
-This acceptance builds on PR #32, merged as `fd260832783e32e22556bd00c531198c5da1053b`. It covers **one committed, unconfirmed send per conversation** in the same origin/browser profile, reauthenticated with the same still-authorized credential. Explicit retry uses the original ID, text, reply and text attachment. Receipt lookup never automatically resends a missing message.
+This acceptance builds on PR #32, merged as `fd260832783e32e22556bd00c531198c5da1053b`, and integrates PR #33 at main `e619bf02ae1b2a5030ac8af21377b110ab733cd8`. It covers **one committed, unconfirmed send per exact conversation/thread scope** in the same origin/browser profile, reauthenticated with the same still-authorized credential. Parent and sibling discussion scopes have independent slots; this does not add a multiple-message queue within one scope. Explicit retry uses the original ID, text, reply and text attachment. Receipt lookup never automatically resends a missing message.
 
 The guarantee begins when IndexedDB commits the encrypted intent. Closing or crashing before that point can lose the unsaved composer contents, but cannot transmit that attempt. Clearing browser data, losing the profile or losing authorization can make an intent unrecoverable. This is not a guarantee to deliver every click on Send regardless of storage or permissions.
 
@@ -35,6 +35,8 @@ The test names below are searchable evidence in the linked source files. Existin
 | Corrupt/tampered ciphertext or expired record | Authentication/schema/expiry failure removes only the observed invalid record | Store AAD/IV/ciphertext, bounded record schema and expiry tests |
 | Local wall clock jumps | Server-adjusted deadlines used; valid intent is not incorrectly discarded | Browser `reconnection uses server expiry even after the local clock jumps forward`; store `server deadlines survive reload and local clock correction, then expire on the injected server clock` |
 | Rejected reply cancellation cannot delete storage | Pending send remains locked/retryable until deletion succeeds | Browser `cancelling a rejected reply waits for durable deletion and remains retryable after storage failure` |
+| Parent and sibling thread pending sends after PR #33 | Separate encrypted slots survive reload; explicit retry sends only the selected thread's original reply/attachment, leaving other pending IDs intact | Integration browser `parent and sibling pending sends recover independently and retry only the selected thread payload` |
+| Parent read revoked or membership replaced after PR #33 | Observed child pending ciphertext and UI clear, with no automatic resend. Read loss denies receipt lookup (send remains an independent permission); membership replacement rejects the old-generation send | Integration browser `parent read-revoked clears observed child pending content without resending`, `parent membership-rejoined clears observed child pending content without resending` |
 
 Sources: [application Chromium tests](../browser-test/pending-recovery.spec.mjs), [IndexedDB Chromium tests](../browser-test/pending-store.spec.mjs), [server recovery tests](../test/pending-recovery.test.ts), [implementation boundary](pending-send.md).
 
@@ -44,7 +46,7 @@ Logout is local UI cleanup, not cross-tab credential revocation. Cleanup may fai
 
 - VIT-101 / VIT-104: whether the first release needs multiple offline messages in one conversation remains **undecided**. This acceptance neither requires nor approves that expansion. The present single-pending-send flow is the only scope assessed here.
 - VIT-124: validate the final integrated commit in the installed Windows WebView with a persistent service identity/profile: interrupt before and after IndexedDB commit, reload, restart the installed app, reauthenticate, check receipt and explicitly retry. Confirm accepted replies/attachments do not duplicate. Record the tested installer version, service version, WebView runtime and any missing scenarios there. No installed-WebView result is claimed here.
-- VIT-125 / VIT-127 / VIT-128: this branch changes recovery tests and documentation only. Once their changes integrate, rerun the suites on that exact combined commit; this branch's result cannot certify future combined code.
+- VIT-125 / PR #33 is included in the integration baseline above. This branch adds only recovery tests/documentation and the existing test-clock correction relative to that baseline. VIT-127 / VIT-128 and any later main changes require regression on their exact combined commit; this branch's result cannot certify future combined code.
 - Unsubmitted drafts, background delivery, cross-device outbox, persisted credentials, multi-message queues, editing/retraction recovery and read/sync cursor persistence are outside this acceptance.
 
 ## Reproduce
