@@ -84,6 +84,7 @@ fn permitted(path: &str, body: &Option<Value>) -> bool {
             || path == "/conversations"
             || path == "/memberships/add"
             || path == "/memberships/remove"
+            || path == "/memberships/leave"
             || path
                 .strip_prefix("/runs/")
                 .and_then(|p| p.strip_suffix("/cancel"))
@@ -344,7 +345,12 @@ mod tests {
             &Some(json!({"messageId":"msg_123"}))
         ));
         assert!(!permitted("/read-position", &None));
-        for route in ["/conversations", "/memberships/add", "/memberships/remove"] {
+        for route in [
+            "/conversations",
+            "/memberships/add",
+            "/memberships/remove",
+            "/memberships/leave",
+        ] {
             assert!(permitted(route, &Some(json!({}))));
             assert!(!permitted(route, &None));
             assert!(!permitted(&format!("{route}?admin=true"), &Some(json!({}))));

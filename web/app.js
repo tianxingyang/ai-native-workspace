@@ -2,6 +2,7 @@ import { Client, ApiError, errorText, messageBody } from './client.js';
 import { presentation, text as t, applyStaticText } from './presentation.js';
 import { conversationManagement } from './conversation-management.js';
 import { attachments } from './attachments.js';
+import { leaveConversation } from './leave-conversation.js';
 
 document.documentElement.lang = presentation.locale;
 applyStaticText(document);
@@ -20,6 +21,7 @@ const state = {
 const labels = Object.fromEntries(['queued', 'running', 'cancel_requested', 'completed', 'failed', 'stopped', 'unknown'].map(status => [status, t(`run.${status}`)]));
 const LIVE = new Set(['queued', 'running', 'cancel_requested']);
 const attachmentUI = attachments({ current, client: () => state.client, authorized, changed: updateComposer, deny: denyReadScope, invalidate });
+const leaveDialog = leaveConversation({ current, client: () => state.client, authorized, beforeOpen: () => closePane(false), left: leaveConfirmed, refresh: sync, invalidate, announce });
 const SETTLED = new Set(['cancel_requested', 'completed', 'failed', 'stopped']);
 const GROUP_WINDOW = 5 * 60 * 1000;
 const EXPIRY_NOTICE = 5 * 60 * 1000;
@@ -88,7 +90,7 @@ function applyReadPosition(room, messageId) {
   if (index >= room.messages.findIndex(message => message.id === room.pendingReadMessageId)) room.pendingReadMessageId = undefined;
 }
 function markSeen(room) {
-  if (!room || room !== current() || !authorized('read', room) || document.hidden || $('app').hidden || $('message-change').open || $('conversation-management').open || attachmentUI.opened
+  if (!room || room !== current() || !authorized('read', room) || document.hidden || $('app').hidden || $('message-change').open || $('conversation-management').open || attachmentUI.opened || leaveDialog.opened
       || $('app').classList.contains('show-rooms') || (state.pane && paneOverlay.matches)) return;
   const timeline = $('timeline');
   if (timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight >= 90) return;
@@ -132,6 +134,19 @@ function denyReadScope(client, room) {
   // Removing the selected room already starts sync through selectRoom().
   if (state.client && !state.syncing) void sync();
 }
+function leaveConfirmed(client, room) {
+  const latest = state.rooms.get(key(room.scope));
+  if (client !== state.client || !latest || latest.cacheIdentity !== room.cacheIdentity) return false;
+  // Management discovery is a separate cache and must disappear immediately too.
+  if (state.session?.management) state.session.management.scopes = state.session.management.scopes.filter(scope => key(scope) !== key(room.scope));
+  denyReadScope(client, room);
+  if (!state.client) $('connect-error').textContent = t('leave.noRemaining');
+  // The original button lived in a now-hidden member pane. Restore focus only
+  // for the generation actually removed, never for a delayed older receipt.
+  const focus = current() ? $('room-title') : state.client ? $('create-conversation').hidden ? $('manage-conversation') : $('create-conversation') : desktop ? $('connect-button') : $('token');
+  focus.focus({ preventScroll: true });
+  return true;
+}
 
 // Known read deadlines apply to cached content too, independently of a pending
 // request or a network outage. Keep other still-authorized conversations usable.
@@ -162,12 +177,14 @@ function expireReadScopes() {
   }
   renderManagement();
   attachmentUI.update();
+  leaveDialog.update();
   const next = Math.min(...[...state.rooms.values()].map(room => deadline('read', room)),
     ...[state.session?.management?.createUntil ?? 0, state.session?.management?.issueUntil ?? 0, ...(state.session?.management?.scopes ?? []).map(scope => scope.until)].filter(until => until > serverNow()));
   state.expiryTimer = setTimeout(expireReadScopes, Math.min(2147483647, Math.max(1, next - serverNow())));
 }
 
 function invalidate(error) {
+  const leaveUnconfirmed = leaveDialog.unconfirmed; leaveDialog.close();
   attachmentUI.reset();
   closeMessageChange();
   managementDialog.close();
@@ -187,7 +204,7 @@ function invalidate(error) {
   $('connection-status').dataset.state = 'pending'; $('connection-status').textContent = t('connection.pending');
   // Only a rejected credential is a field error; expiry and denial are about access, not input.
   $('token').setAttribute('aria-invalid', String(!desktop && error instanceof ApiError && error.status === 401));
-  $('connect-error').textContent = error ? errorText(error) : '';
+  $('connect-error').textContent = error ? leaveUnconfirmed ? t('leave.unconfirmedEnded') : errorText(error) : '';
   $('connect-button').disabled = false; $('connect-button').textContent = t(desktop ? 'desktop.enter' : 'connect.submit');
   (desktop ? $('connect-button') : $('token')).focus();
 }
@@ -817,6 +834,7 @@ function readOnlyReason(room) {
 
 function updateComposer() {
   attachmentUI.update();
+  leaveDialog.update();
   const room = current(); if (!room || !state.session) return;
   const allowed = authorized('send');
   $('message').disabled = !allowed || Boolean(room.pending);
@@ -1175,7 +1193,7 @@ $('timeline').addEventListener('scroll', () => {
   markSeen(current());
 }, { passive: true });
 document.addEventListener('keydown', event => {
-  if (event.isComposing || !state.client || $('app').hidden || $('message-change').open || $('conversation-management').open || attachmentUI.opened) return;
+  if (event.isComposing || !state.client || $('app').hidden || $('message-change').open || $('conversation-management').open || attachmentUI.opened || leaveDialog.opened) return;
   if (event.key === 'Escape' && state.pane) { event.preventDefault(); closePane($('details').contains(document.activeElement)); return; }
   if (state.pane && paneOverlay.matches && event.key === 'Tab') {
     const targets = [...$('details').querySelectorAll('button, a[href], input, select, textarea, [tabindex]')]

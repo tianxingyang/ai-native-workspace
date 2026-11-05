@@ -76,4 +76,22 @@ export class MembershipRegistry {
     this.removed.add(memberKey(targetMemberId, scope)); this.revisions.set(scopeKey(scope), change.revision);
     return { change: structuredClone(change), duplicate: false };
   }
+  leave(actorId: string, scope: Scope, expectedGeneration: string, clientEventId: string, configured: readonly Scope[], now: number) {
+    // Generation is checked before receipts: an old request must never confirm
+    // departure from a newly granted membership, even when its ID is identical.
+    requireCondition(this.generation(actorId, scope) === expectedGeneration, 409, 'membership_generation_conflict');
+    const key = JSON.stringify([actorId, clientEventId]);
+    const fingerprint = createHash('sha256').update(JSON.stringify(['leave', scope.conversationId, scope.threadId, expectedGeneration])).digest('hex');
+    const previous = this.requests.get(key);
+    if (previous) {
+      requireCondition(previous.fingerprint === fingerprint, 409, 'membership_request_conflict');
+      return { change: structuredClone(this.removals.get(previous.removalId)!), duplicate: true };
+    }
+    requireCondition(this.scopes(actorId, configured).some(s => scopeKey(s) === scopeKey(scope)), 404, 'scope_member_not_found');
+    const change: MembershipRemoval = { conversationId: scope.conversationId, threadId: scope.threadId,
+      id: randomUUID(), actorId, targetMemberId: actorId, revision: this.revision(scope) + 1, at: now };
+    this.removals.set(change.id, change); this.requests.set(key, { fingerprint, removalId: change.id });
+    this.removed.add(memberKey(actorId, scope)); this.revisions.set(scopeKey(scope), change.revision);
+    return { change: structuredClone(change), duplicate: false };
+  }
 }

@@ -155,6 +155,11 @@ export class PrivateEngine {
     this.cancelMembershipRuns(result.affectedRunIds, targetMemberId);
     return result;
   }
+  leaveScopeMember(actor: string, scope: Scope, expectedGeneration: string, clientEventId: string) {
+    const result = this.state.leaveScopeMember(actor, scope, expectedGeneration, clientEventId);
+    this.cancelMembershipRuns(result.affectedRunIds, actor);
+    return result;
+  }
   addScopeMember(actor: string, targetMemberId: string, scope: Scope, expectedRevision: number, clientEventId: string, grant?: unknown) {
     const result = this.state.addScopeMember(actor, targetMemberId, scope, expectedRevision, clientEventId, grant);
     this.cancelMembershipRuns(result.affectedRunIds);

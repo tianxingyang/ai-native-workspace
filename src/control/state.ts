@@ -214,6 +214,18 @@ export class ControlState {
     const result = this.memberships.remove(actorId, targetMemberId, scope, expectedRevision, clientEventId, this.configuredScopes(targetMemberId), this.now());
     return { ...result, affectedRunIds: result.duplicate ? [] : this.invalidateMembershipContext(scope, result.change.id) };
   }
+  leaveScopeMember(actorId: string, scope: Scope, expectedGeneration: string, clientEventId: string) {
+    const attempt = { actorId, action: 'leave', allowed: false, resource: { ...scope }, at: this.now() };
+    this.audit.push(attempt);
+    requireCondition(this.config.members.some(member => member.id === actorId), 403, 'member_required');
+    const configured = this.configuredScopes(actorId);
+    requireCondition(configured.some(s => s.conversationId === scope.conversationId && s.threadId === scope.threadId), 404, 'scope_member_not_found');
+    // A configured provisioning scope is not an ordinary joinable conversation.
+    requireCondition(this.conversations.metadata(scope), 403, 'conversation_leave_unavailable');
+    const result = this.memberships.leave(actorId, scope, expectedGeneration, clientEventId, configured, this.now());
+    attempt.allowed = true;
+    return { ...result, affectedRunIds: result.duplicate ? [] : this.invalidateMembershipContext(scope, result.change.id) };
+  }
   private invalidateMembershipContext(scope: Scope, changeId: string): string[] {
       const affectedRunIds: string[] = [];
       this.contextRevisions.set(JSON.stringify([scope.conversationId, scope.threadId]), this.contextRevision(scope) + 1);

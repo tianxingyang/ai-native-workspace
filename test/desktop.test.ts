@@ -24,7 +24,7 @@ test('desktop route boundary excludes URLs, authority changes, arbitrary command
   assert.equal(permittedRequest('/read-position', {}), true);
   assert.equal(permittedRequest('/read-position', undefined), false);
   assert.equal(permittedRequest('/read-position?conversationId=a&threadId=b', {}), false);
-  for (const path of ['/conversations', '/memberships/add', '/memberships/remove']) {
+  for (const path of ['/conversations', '/memberships/add', '/memberships/remove', '/memberships/leave']) {
     assert.equal(permittedRequest(path, {}), true); assert.equal(permittedRequest(path, undefined), false);
     assert.equal(permittedRequest(`${path}?admin=true`, {}), false);
   }
@@ -93,6 +93,8 @@ test('native sidecar performs real authorized HTTP, rejects unshared scope, dedu
   assert.equal((await request('/conversations/options')).status, 403);
   assert.equal((await request('/conversations', { kind: 'group' })).status, 403);
   assert.equal((await request(`/memberships?${query}`)).status, 403);
+  const leave = await request('/memberships/leave', { conversationId: scope.conversationId, threadId: scope.threadId, expectedMembershipGeneration: 'initial', clientEventId: 'static-leave' });
+  assert.equal(leave.status, 403); assert.equal(leave.value.error, 'conversation_leave_unavailable');
   for (const path of ['/memberships/add', '/memberships/remove']) {
     assert.equal((await request(path, { conversationId: scope.conversationId, threadId: scope.threadId, targetMemberId: 'demo-researcher', expectedRevision: 1, clientEventId: 'unauthorized-management' })).status, 403);
   }

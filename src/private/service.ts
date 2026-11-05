@@ -38,6 +38,12 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
       const scope = scopeValue(Object.fromEntries(url.searchParams));
       respond(response, 200, commit(() => state.membershipRoster(actor, scope))); return;
     }
+    if (url.pathname === '/memberships/leave' && body) {
+      requireCondition(Object.keys(body).every(key => ['conversationId', 'threadId', 'expectedMembershipGeneration', 'clientEventId'].includes(key)), 400, 'invalid_leave_request');
+      const value = commit(() => engine.leaveScopeMember(actor, scopeValue(body),
+        stringValue(body.expectedMembershipGeneration, 'membership_generation', 128), stringValue(body.clientEventId, 'client_event_id', 128)));
+      respond(response, 200, { change: value.change, duplicate: value.duplicate }); return;
+    }
     if (url.pathname === '/memberships/remove' && body) {
       const value = commit(() => engine.removeScopeMember(actor, stringValue(body.targetMemberId, 'target_member_id', 128), scopeValue(body),
         body.expectedRevision as number, stringValue(body.clientEventId, 'client_event_id', 128)));

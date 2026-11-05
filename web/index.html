@@ -105,6 +105,7 @@
       <ul id="members" class="member-list"></ul>
       <p class="pane-note" data-i18n="details.agentNote">本演示中的 Agent 在讨论出现明确的调研请求时自动参与，无需 @；只使用合成资料，不访问互联网。</p>
       <p class="pane-note" data-i18n="details.permissionNote">每项操作仍由服务端校验授权。这里只显示你自己的权限，不显示其他成员的授权。</p>
+      <button id="leave-conversation" class="quiet" type="button" hidden data-i18n="leave.open">退出会话</button>
     </div>
     <div id="details-thread" class="details-body" hidden></div>
     <div id="details-search" class="details-body" hidden>
@@ -137,4 +138,5 @@
 </dialog>
 <dialog id="attachment-view" aria-labelledby="attachment-title"><h2 id="attachment-title"></h2><p id="attachment-status" role="status"></p><pre id="attachment-content" tabindex="0"></pre><button id="attachment-close" class="quiet" type="button" data-i18n="attachment.close">关闭附件</button></dialog>
 <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+<dialog id="leave-dialog" aria-labelledby="leave-title"><h2 id="leave-title" data-i18n="leave.open">退出会话</h2><p id="leave-name"></p><p data-i18n="leave.help">退出后将无法查看此会话的消息和附件，相关旧运行会失效。重新加入需要其他管理员操作并重新授权；不会自动转让管理权限或删除会话。</p><p id="leave-status" role="status"></p><div class="change-actions"><button id="leave-close" type="button" class="quiet" data-i18n="leave.stay">留在会话</button><button id="leave-submit" type="button" class="primary" data-i18n="leave.confirm">确认退出</button></div></dialog>
 </body></html>

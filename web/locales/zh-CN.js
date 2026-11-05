@@ -2,6 +2,16 @@
 export default {
   locale: 'zh-CN',
   messages: {
+    'leave.open': '退出会话',
+    'leave.confirm': '确认退出',
+    'leave.stay': '留在会话',
+    'leave.help': '退出后将无法查看此会话的消息和附件，相关旧运行会失效。重新加入需要其他管理员操作并重新授权；不会自动转让管理权限或删除会话。',
+    'leave.sending': '正在提交退出请求…',
+    'leave.uncertain': '退出结果尚未确认。当前连接仍可访问此会话时，可用原请求重试；关闭连接或失去访问权会结束本次核对。',
+    'leave.retry': '核对并重试原请求',
+    'leave.done': '已确认退出会话。',
+    'leave.noRemaining': '已确认退出会话；当前没有其他可用会话，请重新连接其他已获授权的身份。',
+    'leave.unconfirmedEnded': '退出请求未收到确认，当前连接或会话访问已结束，本次核对已关闭。失去访问权不等于该请求已确认成功。',
     'attachment.attach': '添加文本附件',
     'attachment.remove': '移除附件',
     'attachment.close': '关闭附件',
