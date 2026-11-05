@@ -38,7 +38,7 @@
 <section id="connect" class="connection-page" aria-labelledby="connect-title">
   <div class="connect-panel">
     <div class="connect-card-top"><div class="wordmark">CoSeat <span>同席</span></div></div>
-    <div class="connect-body">
+    <div class="connect-body" data-language-selection>
       <h1 id="connect-title" data-i18n="connect.title">回到团队的讨论中</h1>
       <p class="connect-lede" data-i18n="connect.lede">人与 Agent，同席协作。连接后查看你获准访问的会话。</p>
       <form id="connect-form">
@@ -60,7 +60,7 @@
     <div id="management-toolbar" class="management-toolbar" hidden><button id="create-conversation" class="quiet" type="button" hidden data-i18n="management.create">新建会话</button><button id="manage-conversation" class="quiet" type="button" hidden data-i18n="management.manage">管理会话</button></div>
     <p id="management-empty" class="pane-note" hidden data-i18n="management.empty">没有可阅读的会话；你仍可使用已获授权的创建或成员管理功能。</p>
     <nav id="rooms" aria-label="已授权会话" data-i18n-aria-label="shell.authorizedConversations"></nav>
-    <div class="sidebar-footer"><div id="identity" class="identity"></div><button id="logout" class="rail-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-logout"/></svg><span data-i18n="shell.logout">退出连接</span></button></div>
+    <div class="sidebar-footer" data-language-selection><div id="identity" class="identity"></div><button id="logout" class="rail-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-logout"/></svg><span data-i18n="shell.logout">退出连接</span></button></div>
   </aside>
 
   <main id="chat" class="chat" aria-labelledby="room-title">

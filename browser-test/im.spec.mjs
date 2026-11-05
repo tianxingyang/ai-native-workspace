@@ -710,6 +710,7 @@ test('Tauri shell mode reuses the interface through the native request bridge wi
     window.__TAURI__ = {
       core: { invoke: async (command, args = {}) => {
         await window.__record(command);
+        if (command === 'desktop_presentation') return { locale: 'zh-CN', selection: 'rebuild' };
         if (command === 'desktop_request') return window.__bridge(args.path, args.body);
         if (command === 'desktop_take_notification') return { kind: 'none' };
         return null;

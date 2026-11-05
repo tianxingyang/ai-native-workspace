@@ -15,7 +15,7 @@ test('local web demo serves locked-down assets, separate Worker, and authenticat
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.match(await response.text(), /CoSeat/);
   assert.equal((await fetch(`${demo.url}/client.js`)).status, 200);
-  for (const path of ['/presentation.js', '/locales/zh-CN.js']) {
+  for (const path of ['/presentation.js', '/language-ui.js', '/locales/registry.js', '/locales/zh-CN.js']) {
     const asset = await fetch(`${demo.url}${path}`);
     assert.equal(asset.status, 200); assert.match(asset.headers.get('content-type')!, /text\/javascript/);
     assert.equal(asset.headers.get('cache-control'), 'no-store');

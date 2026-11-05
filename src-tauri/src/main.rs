@@ -19,7 +19,7 @@ use tauri::{
 };
 mod notifications;
 mod presentation;
-use presentation::DEMO_ZH_CN;
+use presentation::{DEMO_LOCALE, DEMO_ZH_CN};
 
 struct Host {
     stdin: Mutex<ChildStdin>,
@@ -154,6 +154,11 @@ async fn desktop_request(
 }
 
 #[tauri::command]
+fn desktop_presentation() -> Value {
+    json!({ "locale": DEMO_LOCALE, "selection": "rebuild" })
+}
+
+#[tauri::command]
 fn desktop_connected(host: tauri::State<'_, Arc<Host>>, connected: bool) {
     host.connected.store(connected, Ordering::SeqCst);
 }
@@ -196,6 +201,7 @@ fn main() {
         .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![
             desktop_request,
+            desktop_presentation,
             desktop_connected,
             desktop_status,
             desktop_quit,

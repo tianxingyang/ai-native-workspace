@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "mode": "demo",
+  "selected": "zh-CN",
+  "fallback": "zh-CN",
+  "catalogs": [
+    { "locale": "zh-CN", "file": "zh-CN.json" }
+  ]
+}

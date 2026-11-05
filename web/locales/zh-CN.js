@@ -2,6 +2,8 @@
 export default {
   locale: 'zh-CN',
   messages: {
+    'language.label': '界面语言',
+    'language.unavailable': '无法核对桌面语言资源，请重新构建并启动应用。',
     'send.recovered': '已恢复待确认发送。先核对原回执；未确认时可手动重试，不会自动补发。',
     'send.storageDeleteFailed': '本机记录未能清除，尚未取消这条待发送回复。请恢复存储后重试取消。',
     'send.storageFailed': '无法保存本机待发送记录，本次未发出请求；此前尝试的结果仍需核对。请检查存储是否可用，或核对另一页面的待发送记录后重试。',

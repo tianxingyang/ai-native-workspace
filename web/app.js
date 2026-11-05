@@ -1,3 +1,4 @@
+import { bindText, bindAttribute, bindStaticText, installLanguageSelection } from './language-ui.js';
 import { Client, ApiError, errorText, messageBody } from './client.js';
 import { presentation, text as t, applyStaticText } from './presentation.js';
 import { conversationManagement } from './conversation-management.js';
@@ -7,9 +8,24 @@ import { PendingStore } from './pending-store.js';
 
 document.documentElement.lang = presentation.locale;
 applyStaticText(document);
+bindStaticText(document);
 
 const $ = id => document.getElementById(id);
 const desktop = window.__TAURI__;
+let desktopLanguageReady = !desktop;
+if (desktop) {
+  try {
+    const selected = await desktop.core.invoke('desktop_presentation');
+    if (selected?.selection !== 'rebuild') throw new Error('Unknown desktop language policy');
+    presentation.lock(selected.locale); desktopLanguageReady = true;
+    document.documentElement.lang = presentation.locale;
+  } catch {
+    presentation.lock(presentation.id);
+    $('connect-button').disabled = true;
+    bindText($('connect-error'), () => t('language.unavailable'));
+  }
+}
+installLanguageSelection(document);
 const SVG = 'http://www.w3.org/2000/svg';
 const key = scope => JSON.stringify([scope.conversationId, scope.threadId]);
 const roomName = scope => scope.title ?? scope.conversationId;
@@ -19,7 +35,7 @@ const state = {
   // Render signatures keep focus, selection and open disclosures stable across polling.
   ui: { nav: '', seats: '', seat: '', expiry: '', pane: '', outbox: '' },
 };
-const labels = Object.fromEntries(['queued', 'running', 'cancel_requested', 'completed', 'failed', 'stopped', 'unknown'].map(status => [status, t(`run.${status}`)]));
+const runLabel = status => t(['queued', 'running', 'cancel_requested', 'completed', 'failed', 'stopped', 'unknown'].includes(status) ? `run.${status}` : 'run.unrecognized');
 const LIVE = new Set(['queued', 'running', 'cancel_requested']);
 const attachmentUI = attachments({ current, client: () => state.client, authorized, changed: updateComposer, deny: denyReadScope, invalidate });
 const leaveDialog = leaveConversation({ current, client: () => state.client, authorized, beforeOpen: () => closePane(false), left: leaveConfirmed, refresh: sync, invalidate, announce });
@@ -28,12 +44,13 @@ const GROUP_WINDOW = 5 * 60 * 1000;
 const EXPIRY_NOTICE = 5 * 60 * 1000;
 const paneOverlay = matchMedia('(max-width: 1179px)');
 const SUGGESTIONS = ['请调研一下插件协议', '大家好，同步一下今天的进展。'];
+let changingLanguage = false;
 
 let cancellationRevision = 0;
 let messageChange = null;
 const managementDialog = conversationManagement({ client: () => state.client, session: () => state.session, now: serverNow,
   refresh: sync, invalidate, beforeOpen: () => closePane(false), announce });
-function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
+function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) bindText(node, text); return node; }
 function button(text, fn, className = 'quiet') { const node = el('button', className, text); node.type = 'button'; node.addEventListener('click', fn); return node; }
 function icon(name, className = 'icon') {
   const svg = document.createElementNS(SVG, 'svg'), use = document.createElementNS(SVG, 'use');
@@ -45,7 +62,7 @@ function action(text, id, fn, className = 'text-button', glyph) {
   if (glyph) node.append(icon(glyph));
   node.append(el('span', '', text)); return node;
 }
-function setText(node, text) { if (node.textContent !== text) node.textContent = text; }
+function setText(node, text) { if (typeof text === 'function' || node.textContent !== text) bindText(node, text); }
 function current() { return state.rooms.get(state.selected); }
 function serverNow() { return Date.now() + state.offset; }
 function deadline(action, room = current()) { return Math.min(room?.scope.permissions[action] ?? 0, room?.scope.outboxExpiresAt ?? Infinity); }
@@ -59,7 +76,7 @@ function permission(action, room = current()) {
   if (!last) return { allowed: false, reason: 'none' };
   return { allowed: false, reason: last <= now ? 'expired' : 'withdrawn', until: last };
 }
-function announce(text) { $('announcement').textContent = text; }
+function announce(text) { bindText($('announcement'), text); }
 function clock(ts) { return presentation.format('time', ts); }
 function clockSeconds(ts) { return presentation.format('timeSeconds', ts); }
 function remaining(ms) {
@@ -91,6 +108,7 @@ function applyReadPosition(room, messageId) {
   if (index >= room.messages.findIndex(message => message.id === room.pendingReadMessageId)) room.pendingReadMessageId = undefined;
 }
 function markSeen(room) {
+  if (changingLanguage) return;
   if (!room || room !== current() || !authorized('read', room) || document.hidden || $('app').hidden || $('message-change').open || $('conversation-management').open || attachmentUI.opened || leaveDialog.opened
       || $('app').classList.contains('show-rooms') || (state.pane && paneOverlay.matches)) return;
   const timeline = $('timeline');
@@ -141,7 +159,7 @@ function leaveConfirmed(client, room) {
   // Management discovery is a separate cache and must disappear immediately too.
   if (state.session?.management) state.session.management.scopes = state.session.management.scopes.filter(scope => key(scope) !== key(room.scope));
   denyReadScope(client, room);
-  if (!state.client) $('connect-error').textContent = t('leave.noRemaining');
+  if (!state.client) bindText($('connect-error'), () => t('leave.noRemaining'));
   // The original button lived in a now-hidden member pane. Restore focus only
   // for the generation actually removed, never for a delayed older receipt.
   const focus = current() ? $('room-title') : state.client ? $('create-conversation').hidden ? $('manage-conversation') : $('create-conversation') : desktop ? $('connect-button') : $('token');
@@ -167,10 +185,10 @@ function expireReadScopes() {
   }
   if (!state.rooms.size && !hasManagement()) { invalidate(new ApiError(403, 'grant_expired')); return; }
   state.session.scopes = state.session.scopes.filter(scope => state.rooms.has(key(scope)));
-  setText($('room-count'), t('room.count', { count: state.rooms.size }));
+  setText($('room-count'), () => t('room.count', { count: state.rooms.size }));
   if (state.rooms.size && !state.rooms.has(state.selected)) {
     void selectRoom(state.rooms.keys().next().value);
-    announce(t('room.readExpired'));
+    announce(() => t('room.readExpired'));
   } else renderRooms();
   if (!state.rooms.size) {
     state.selected = ''; state.pane = null; state.paneReturn = null; renderPane();
@@ -205,11 +223,11 @@ function invalidate(error, preservePending = false) {
   updatePaneAccessibility();
   $('announcement').textContent = '';
   $('sync-error').hidden = true; $('new-messages').hidden = true; $('expiry').hidden = true;
-  $('connection-status').dataset.state = 'pending'; $('connection-status').textContent = t('connection.pending');
+  $('connection-status').dataset.state = 'pending'; bindText($('connection-status'), () => t('connection.pending'));
   // Only a rejected credential is a field error; expiry and denial are about access, not input.
   $('token').setAttribute('aria-invalid', String(!desktop && error instanceof ApiError && error.status === 401));
-  $('connect-error').textContent = error ? leaveUnconfirmed ? t('leave.unconfirmedEnded') : errorText(error) : '';
-  $('connect-button').disabled = false; $('connect-button').textContent = t(desktop ? 'desktop.enter' : 'connect.submit');
+  bindText($('connect-error'), () => error ? leaveUnconfirmed ? t('leave.unconfirmedEnded') : errorText(error) : '');
+  $('connect-button').disabled = false; bindText($('connect-button'), () => t(desktop ? 'desktop.enter' : 'connect.submit'));
   (desktop ? $('connect-button') : $('token')).focus();
 }
 
@@ -244,7 +262,7 @@ function sessionReceived(session) {
   updateComposer();
   if (!next.has(state.selected)) { state.selected = next.keys().next().value ?? ''; if (current()) current().entering = true; state.pane = null; renderPane(); }
   renderIdentity();
-  setText($('room-count'), t('room.count', { count: session.scopes.length }));
+  setText($('room-count'), () => t('room.count', { count: session.scopes.length }));
   renderRooms(); renderHeader();
   expireReadScopes();
 }
@@ -255,7 +273,7 @@ async function restorePending(room, id) {
     const saved = await room.store.load(room.scope.outboxKey), latest = state.rooms.get(id);
     if (client !== state.client || latest?.cacheIdentity !== room.cacheIdentity || !authorized('read', latest)) return;
     if (saved && saved.conversationId === room.scope.conversationId && saved.threadId === room.scope.threadId && saved.membershipGeneration === room.scope.membershipGeneration) {
-      latest.pending = { ...saved, status: 'failed', error: t('send.recovered'), recovered: true };
+      latest.pending = { ...saved, status: 'failed', error: t('send.recovered'), errorRender: () => t('send.recovered'), recovered: true };
       latest.draft = saved.text; latest.replyToMessageId = saved.replyToMessageId; latest.attachment = saved.attachment;
       if (id === state.selected) $('message').value = saved.text;
       void reconcilePending(latest, id);
@@ -318,11 +336,11 @@ function renderHeader() {
   const room = current(); if (!room) return;
   const { threadId, members } = room.scope;
   setText($('room-title'), roomName(room.scope));
-  setText($('thread-title'), t('room.threadMembers', { thread: threadId, count: members.length }));
+  setText($('thread-title'), () => t('room.threadMembers', { thread: threadId, count: members.length }));
   setText($('room-tile'), initial(roomName(room.scope)));
-  setText($('members-count'), t('room.members', { count: members.length }));
+  setText($('members-count'), () => t('room.members', { count: members.length }));
   setText($('members-short'), String(members.length));
-  setText($('scope-note'), t('room.scopeNote', { conversation: roomName(room.scope), thread: threadId }));
+  setText($('scope-note'), () => t('room.scopeNote', { conversation: roomName(room.scope), thread: threadId }));
   renderSeats(room); updateComposer();
 }
 
@@ -337,7 +355,7 @@ function renderSeats(room) {
     const working = live.has(member.id), seat = el('li', working ? 'seat is-live' : 'seat');
     seat.append(tile(member), el('span', 'seat-name', member.name));
     if (working) seat.append(el('span', 'live-dot'));
-    seat.append(el('span', 'seat-kind', working ? t('member.researching') : isMe(member.id) ? t('member.you') : kindLabel(member)));
+    seat.append(el('span', 'seat-kind', () => working ? t('member.researching') : isMe(member.id) ? t('member.you') : kindLabel(member)));
     return seat;
   });
   if (room.scope.members.length > shown.length) seats.push(el('li', 'seats-more', `+${room.scope.members.length - shown.length}`));
@@ -410,7 +428,7 @@ async function sync() {
     // service is expiry, not a transient outage worth retrying forever.
     if (!(error instanceof ApiError) && accessEnded()) { invalidate(new ApiError(403, 'grant_expired')); return; }
     setConnection('down');
-    $('sync-error-text').textContent = state.lastSync ? t('sync.staleAt', { error: errorText(error), time: clock(state.lastSync) }) : t('sync.stale', { error: errorText(error) });
+    bindText($('sync-error-text'), () => state.lastSync ? t('sync.staleAt', { error: errorText(error), time: clock(state.lastSync) }) : t('sync.stale', { error: errorText(error) }));
     $('sync-error').hidden = false;
   } finally {
     if (epoch === state.epoch) { state.syncing = false; if (state.client) { updateComposer(); state.timer = setTimeout(sync, 1200); } }
@@ -419,7 +437,7 @@ async function sync() {
 
 function setConnection(value) {
   const node = $('connection-status'); node.dataset.state = value;
-  setText(node, t(value === 'ok' ? 'connection.connected' : 'connection.disconnected'));
+  setText(node, () => t(value === 'ok' ? 'connection.connected' : 'connection.disconnected'));
 }
 
 function invalidateSnapshot(room) {
@@ -454,7 +472,7 @@ function applySnapshot(room, data, selected) {
       // Keep its identity for a read-only check, but discard the withdrawn body.
       messageChange.targetRetracted = true; messageChange.submittedText = '';
       $('change-text').value = ''; $('change-text').hidden = true; $('change-label').hidden = true;
-      $('change-help').textContent = t('editor.retractedPending');
+      bindText($('change-help'), () => t('editor.retractedPending'));
     }
   }
   for (const run of room.runs) if (SETTLED.has(run.status)) state.cancels.delete(run.id);
@@ -464,8 +482,8 @@ function applySnapshot(room, data, selected) {
   if (!selected || firstLoad) return;
   room.runs.forEach((run, index) => {
     const previous = before.get(run.id);
-    if (previous === undefined) announce(t('run.announce.claimed', { name: memberIn(room, run.memberId).name, number: index + 1 }));
-    else if (previous !== run.status && !LIVE.has(run.status)) announce(t('run.announce.status', { number: index + 1, status: labels[run.status] ?? t('run.unrecognized') }));
+    if (previous === undefined) announce(() => t('run.announce.claimed', { name: memberIn(room, run.memberId).name, number: index + 1 }));
+    else if (previous !== run.status && !LIVE.has(run.status)) announce(() => t('run.announce.status', { number: index + 1, status: runLabel(run.status) }));
   });
 }
 
@@ -501,8 +519,8 @@ function messageText(message) {
 function replyQuote(room, message, ctx) {
   const parent = ctx.byId.get(message.replyToMessageId);
   const quote = action('', `quote-${message.id}`, () => { closePane(false); focusMessage(message.replyToMessageId); }, 'quote reply-quote');
-  quote.setAttribute('aria-label', t('reply.view'));
-  quote.append(el('span', 'quote-author', parent ? t(parent.changedAt && !parent.retracted ? 'reply.editedAuthor' : 'reply.author', { name: memberIn(room, parent.authorId).name }) : t('message.reply')),
+  bindAttribute(quote, 'aria-label', () => t('reply.view'));
+  quote.append(el('span', 'quote-author', () => parent ? t(parent.changedAt && !parent.retracted ? 'reply.editedAuthor' : 'reply.author', { name: memberIn(room, parent.authorId).name }) : t('message.reply')),
     el('span', 'quote-text', firstLine(messageText(parent))));
   return quote;
 }
@@ -550,12 +568,12 @@ function renderMessages(force = false) {
   const expanded = new Set([...$('messages').querySelectorAll('details[open]')].map(x => x.dataset.message));
   const focused = $('messages').contains(document.activeElement) ? document.activeElement.dataset.action : undefined;
   const ctx = context(room), nodes = [];
-  let previous = null, day = '';
+  let previous = null, day = null;
   for (const message of room.messages) {
-    const label = dayLabel(message.createdAt);
-    if (label !== day) { day = label; previous = null; const divider = el('div', 'day-divider', label); divider.setAttribute('role', 'separator'); nodes.push(divider); }
+    const dayKey = startOfDay(message.createdAt), label = dayLabel(message.createdAt);
+    if (dayKey !== day) { day = dayKey; previous = null; const divider = el('div', 'day-divider', label); divider.setAttribute('role', 'separator'); nodes.push(divider); }
     if (message.id === room.unreadBoundaryId) {
-      const divider = el('div', 'day-divider unread-divider', t('message.new')); divider.setAttribute('role', 'separator');
+      const divider = el('div', 'day-divider unread-divider', () => t('message.new')); divider.setAttribute('role', 'separator');
       nodes.push(divider); previous = null;
     }
     nodes.push(renderMessage(room, message, previous, ctx, expanded));
@@ -588,23 +606,23 @@ function renderMessage(room, message, previous, ctx, expanded) {
   if (!continued) {
     const head = el('div', 'message-head');
     head.append(el('strong', 'author', member.name), el('span', 'kind', kindLabel(member)));
-    if (isMe(member.id)) head.append(el('span', 'kind you', t('member.you')));
+    if (isMe(member.id)) head.append(el('span', 'kind you', () => t('member.you')));
     head.append(timeNode(message.createdAt)); body.append(head);
   }
   if (message.result) body.append(...resultHead(room, message, ctx));
   if (message.replyToMessageId) body.append(replyQuote(room, message, ctx));
   body.append(el('p', 'message-text', messageText(message)));
-  if (message.attachment && !message.retracted && !message.invalidated) body.append(action(t('attachment.open', message.attachment), `attachment-${message.id}`, () => attachmentUI.open(room, message), 'attachment-link'));
-  if (message.changedAt && !message.retracted) body.append(el('span', 'kind', t('message.edited')));
+  if (message.attachment && !message.retracted && !message.invalidated) body.append(action(() => t('attachment.open', message.attachment), `attachment-${message.id}`, () => attachmentUI.open(room, message), 'attachment-link'));
+  if (message.changedAt && !message.retracted) body.append(el('span', 'kind', () => t('message.edited')));
   if (message.result) body.append(sourcesNode(message, expanded));
   const actions = el('div', 'message-actions');
-  if (!message.retracted && !message.invalidated && authorized('send', room)) actions.append(action(t('message.reply'), `reply-${message.id}`, () => chooseReply(room, message)));
+  if (!message.retracted && !message.invalidated && authorized('send', room)) actions.append(action(() => t('message.reply'), `reply-${message.id}`, () => chooseReply(room, message)));
   if (message.origin === 'chat' && isMe(message.authorId) && !message.retracted && authorized('send', room)) {
-    actions.append(action(t('editor.editTitle'), `edit-${message.id}`, () => openMessageChange(room, message, 'edit')),
-      action(t('editor.retractTitle'), `retract-${message.id}`, () => openMessageChange(room, message, 'retract')));
+    actions.append(action(() => t('editor.editTitle'), `edit-${message.id}`, () => openMessageChange(room, message, 'edit')),
+      action(() => t('editor.retractTitle'), `retract-${message.id}`, () => openMessageChange(room, message, 'retract')));
   }
-  if (message.sourceMessageId) actions.append(action(t('message.sourceDiscussion'), `source-${message.id}`, event => openPane({ kind: 'discussion', messageId: message.sourceMessageId }, event.currentTarget)));
-  else if (runs.length || (ctx.discussions.get(ctx.roots.get(message.id))?.length ?? 0) > 1) actions.append(action(t('message.discussion'), `source-${message.id}`, event => openPane({ kind: 'discussion', messageId: message.id }, event.currentTarget)));
+  if (message.sourceMessageId) actions.append(action(() => t('message.sourceDiscussion'), `source-${message.id}`, event => openPane({ kind: 'discussion', messageId: message.sourceMessageId }, event.currentTarget)));
+  else if (runs.length || (ctx.discussions.get(ctx.roots.get(message.id))?.length ?? 0) > 1) actions.append(action(() => t('message.discussion'), `source-${message.id}`, event => openPane({ kind: 'discussion', messageId: message.id }, event.currentTarget)));
   if (actions.firstElementChild) body.append(actions);
   for (const run of runs) body.append(renderRun(room, run, ctx));
   article.append(body);
@@ -613,13 +631,13 @@ function renderMessage(room, message, previous, ctx, expanded) {
 
 function resultHead(room, message, ctx) {
   const head = el('div', 'result-head'), nodes = [head];
-  head.append(el('span', 'result-label', t('result.synthetic')));
+  head.append(el('span', 'result-label', () => t('result.synthetic')));
   const run = (ctx.runsBySource.get(message.sourceMessageId) ?? []).find(item => item.memberId === message.authorId);
-  if (run) head.append(el('span', 'run-code', t('run.label', { number: ctx.code.get(run.id) })));
+  if (run) head.append(el('span', 'run-code', () => t('run.label', { number: ctx.code.get(run.id) })));
   const source = ctx.byId.get(message.sourceMessageId);
   if (source) {
     const quote = el('div', 'quote');
-    quote.append(el('span', 'quote-author', t('result.respondingTo', { name: memberIn(room, source.authorId).name })), el('span', 'quote-text', firstLine(source.text)));
+    quote.append(el('span', 'quote-author', () => t('result.respondingTo', { name: memberIn(room, source.authorId).name })), el('span', 'quote-text', firstLine(source.text)));
     nodes.push(quote);
   }
   return nodes;
@@ -632,16 +650,16 @@ function sourcesNode(message, expanded) {
   summary.dataset.action = `sources-${message.id}`;
   keys.setAttribute('aria-hidden', 'true');
   sources.forEach((_, index) => keys.append(el('span', 'source-key', String(index + 1))));
-  summary.append(icon('i-chevron'), el('span', '', t('result.sourcesSummary', { count: sources.length })), keys);
+  summary.append(icon('i-chevron'), el('span', '', () => t('result.sourcesSummary', { count: sources.length })), keys);
   const list = el('ol', 'source-list');
   sources.forEach((source, index) => {
     const item = el('li'), copy = el('div');
-    copy.append(el('strong', 'source-title', source.title), el('p', 'source-excerpt', source.excerpt), el('span', 'source-url', t('result.placeholderUrl', { url: source.url })));
+    copy.append(el('strong', 'source-title', source.title), el('p', 'source-excerpt', source.excerpt), el('span', 'source-url', () => t('result.placeholderUrl', { url: source.url })));
     item.append(el('span', 'source-key', String(index + 1)), copy); list.append(item);
   });
   details.append(summary, list);
   if (limitations.length) {
-    const limits = el('div', 'limits'); limits.append(el('strong', '', t('result.limitations')));
+    const limits = el('div', 'limits'); limits.append(el('strong', '', () => t('result.limitations')));
     for (const limitation of limitations) limits.append(el('p', '', limitation));
     details.append(limits);
   }
@@ -683,7 +701,7 @@ function runSteps(run) {
 
 function stepsNode(run) {
   const list = el('ol', 'run-steps');
-  list.setAttribute('aria-label', t('run.progressLabel'));
+  bindAttribute(list, 'aria-label', () => t('run.progressLabel'));
   for (const step of runSteps(run)) {
     const item = el('li', `is-${step.state}`);
     item.append(el('span', 'step-dot'), el('span', '', step.label));
@@ -695,26 +713,26 @@ function stepsNode(run) {
 
 function renderRun(room, run, ctx) {
   const code = ctx.code.get(run.id), block = el('section', `run is-${run.status}`);
-  block.dataset.run = run.id; block.setAttribute('aria-label', t('run.label', { number: code }));
+  block.dataset.run = run.id; bindAttribute(block, 'aria-label', () => t('run.label', { number: code }));
   const top = el('div', 'run-top'), status = el('span', 'run-state'), title = el('span', 'run-title');
-  status.append(icon(`st-${run.status}`, `mark st-${run.status}`), el('span', 'status-label', labels[run.status] ?? t('run.unrecognized')));
-  title.append(el('strong', '', t('run.label', { number: code })), el('span', '', memberIn(room, run.memberId).name));
+  status.append(icon(`st-${run.status}`, `mark st-${run.status}`), el('span', 'status-label', () => runLabel(run.status)));
+  title.append(el('strong', '', () => t('run.label', { number: code })), el('span', '', memberIn(room, run.memberId).name));
   top.append(status, title);
   const cancellation = state.cancels.get(run.id);
   if (['queued', 'running', 'unknown'].includes(run.status) && authorized('cancel')) {
-    const cancel = action(t(cancellation === 'sending' ? 'run.cancel.requesting' : cancellation === 'failed' ? 'run.cancel.retry' : 'run.cancel.action'), `cancel-${run.id}`, () => cancelRun(run.id), 'outline-button run-cancel');
+    const cancel = action(() => t(cancellation === 'sending' ? 'run.cancel.requesting' : cancellation === 'failed' ? 'run.cancel.retry' : 'run.cancel.action'), `cancel-${run.id}`, () => cancelRun(run.id), 'outline-button run-cancel');
     cancel.disabled = cancellation === 'sending'; top.append(cancel);
   }
   block.append(top, stepsNode(run), el('p', 'run-note', runNote(run)));
-  if (cancellation === 'failed') block.append(el('p', 'error', t('run.cancel.unconfirmed')));
+  if (cancellation === 'failed') block.append(el('p', 'error', () => t('run.cancel.unconfirmed')));
   const result = (ctx.resultsBySource.get(run.sourceMessageId) ?? []).find(message => message.authorId === run.memberId);
-  if (result) block.append(action(t('run.viewResult'), `jump-${run.id}`, () => focusMessage(result.id), 'text-button run-jump', 'i-jump'));
+  if (result) block.append(action(() => t('run.viewResult'), `jump-${run.id}`, () => focusMessage(result.id), 'text-button run-jump', 'i-jump'));
   return block;
 }
 
 function emptyState(room) {
   if (!room.loaded) {
-    const skeleton = el('div', 'skeleton'); skeleton.append(el('p', 'sr-only', t('room.loading')));
+    const skeleton = el('div', 'skeleton'); skeleton.append(el('p', 'sr-only', () => t('room.loading')));
     for (let row = 0; row < 3; row++) {
       const line = el('div', 'skeleton-row'), lines = el('div', 'skeleton-lines');
       lines.append(el('span'), el('span')); line.append(el('span'), lines); skeleton.append(line);
@@ -722,7 +740,7 @@ function emptyState(room) {
     return skeleton;
   }
   const empty = el('div', 'empty');
-  empty.append(el('h3', '', t('room.emptyTitle')), el('p', '', t('room.emptyHelp')));
+  empty.append(el('h3', '', () => t('room.emptyTitle')), el('p', '', () => t('room.emptyHelp')));
   if (authorized('send', room)) {
     const list = el('div', 'suggestions');
     for (const text of SUGGESTIONS) list.append(button(text, () => { if (current().pending) return; $('message').value = text; current().draft = text; updateComposer(); $('message').focus(); }, 'suggestion'));
@@ -758,13 +776,13 @@ async function cancelRun(id) {
       receiptId: result.publishedReceiptId ?? run.receiptId,
       } : run);
     }
-    state.cancels.delete(id); announce(t('run.cancel.accepted'));
+    state.cancels.delete(id); announce(() => t('run.cancel.accepted'));
     renderMessages(); renderPane(); renderRooms(); renderSeats(current());
     await sync();
   } catch (error) {
     if (client !== state.client) return;
     if (error instanceof ApiError && [401, 403].includes(error.status)) { invalidate(error); return; }
-    state.cancels.set(id, 'failed'); announce(errorText(error));
+    state.cancels.set(id, 'failed'); announce(() => errorText(error));
   }
   if (client === state.client) { renderMessages(); renderPane(); renderRooms(); }
 }
@@ -778,11 +796,11 @@ function closeMessageChange() {
 }
 function openMessageChange(room, message, kind) {
   messageChange = { roomId: key(room.scope), membershipGeneration: room.scope.membershipGeneration ?? 'initial', messageId: message.id, revision: message.revision, kind, id: crypto.randomUUID(), sending: false, submittedText: undefined };
-  $('change-title').textContent = t(kind === 'edit' ? 'editor.editTitle' : 'editor.retractTitle');
+  bindText($('change-title'), () => t(kind === 'edit' ? 'editor.editTitle' : 'editor.retractTitle'));
   $('change-text').value = message.text; $('change-text').hidden = kind === 'retract'; $('change-label').hidden = kind === 'retract';
   $('change-text').disabled = false; $('change-save').disabled = false; $('change-close').disabled = false;
-  $('change-save').textContent = t(kind === 'edit' ? 'editor.save' : 'editor.retract');
-  $('change-help').textContent = t(kind === 'edit' ? 'editor.editHelp' : 'editor.retractHelp');
+  bindText($('change-save'), () => t(kind === 'edit' ? 'editor.save' : 'editor.retract'));
+  bindText($('change-help'), () => t(kind === 'edit' ? 'editor.editHelp' : 'editor.retractHelp'));
   $('change-error').textContent = ''; $('message-change').showModal();
   (kind === 'edit' ? $('change-text') : $('change-save')).focus();
 }
@@ -792,7 +810,7 @@ function updateMessageChange() {
   const change = messageChange; if (!change || change.sending) return;
   const allowed = authorized('send', state.rooms.get(change.roomId)), submitted = change.submittedText !== undefined;
   $('change-save').disabled = change.conflict || (!submitted && !allowed);
-  $('change-save').textContent = t(submitted ? (allowed && !change.targetRetracted ? 'editor.retry' : 'editor.check') : change.kind === 'edit' ? 'editor.save' : 'editor.retract');
+  bindText($('change-save'), () => t(submitted ? (allowed && !change.targetRetracted ? 'editor.retry' : 'editor.check') : change.kind === 'edit' ? 'editor.save' : 'editor.retract'));
   if (allowed && !change.targetRetracted) change.autoChecked = false;
 }
 function acceptMessageChange(change, result) {
@@ -804,7 +822,7 @@ function acceptMessageChange(change, result) {
   // Hide cached derived output immediately, before the next snapshot.
   latest.messages = latest.messages.map(m => m.origin === 'research' ? { ...m, text: '', result: undefined, invalidated: true } : m);
   closeMessageChange(); renderMessages(); renderPane(); renderRooms();
-  announce(t(result.message.revision > result.change.revision ? 'editor.receivedNewer' : 'editor.received'));
+  announce(() => t(result.message.revision > result.change.revision ? 'editor.receivedNewer' : 'editor.received'));
   void sync();
 }
 async function submitMessageChange(receiptOnly = false) {
@@ -819,7 +837,7 @@ async function submitMessageChange(receiptOnly = false) {
   change.submittedText = text; change.sending = true;
   const restoreFocus = document.activeElement === $('change-save');
   $('change-text').disabled = true; $('change-save').disabled = true; $('change-close').disabled = true;
-  $('change-error').textContent = t(retry ? 'editor.checking' : 'editor.submitting');
+  bindText($('change-error'), () => t(retry ? 'editor.checking' : 'editor.submitting'));
   $('change-error').tabIndex = -1;
   if (restoreFocus) $('change-error').focus();
   let readingReceipt = false;
@@ -832,7 +850,7 @@ async function submitMessageChange(receiptOnly = false) {
       if (receipt) { acceptMessageChange(change, receipt); return; }
     }
     if (receiptOnly || change.targetRetracted || !authorized('send', state.rooms.get(change.roomId))) {
-      $('change-error').textContent = t('editor.missingReceipt'); return;
+      bindText($('change-error'), () => t('editor.missingReceipt')); return;
     }
     const result = await client.change(change.messageId, change.kind, change.revision, change.id, text, change.membershipGeneration);
     if (client !== state.client || messageChange !== change) return;
@@ -842,7 +860,7 @@ async function submitMessageChange(receiptOnly = false) {
     if (error instanceof ApiError && error.status === 401) { invalidate(error); return; }
     if (readingReceipt && error instanceof ApiError && error.status === 403) { denyReadScope(client, room); return; }
     change.conflict = error instanceof ApiError && error.status === 409;
-    $('change-error').textContent = change.conflict ? t('editor.conflict') : errorText(error);
+    bindText($('change-error'), () => change.conflict ? t('editor.conflict') : errorText(error));
     if (change.conflict || (error instanceof ApiError && error.status === 403)) void sync();
   } finally {
     if (client === state.client && messageChange === change) {
@@ -874,17 +892,17 @@ function updateComposer() {
   if (preview.dataset.signature !== replySignature) {
     preview.dataset.signature = replySignature; preview.hidden = !room.replyToMessageId; preview.replaceChildren();
     if (room.replyToMessageId) {
-      const copy = el('div'); copy.append(el('strong', '', parent ? t('reply.author', { name: memberIn(room, parent.authorId).name }) : t('message.reply')),
-        el('p', '', replyUnavailable ? t('reply.unavailable') : firstLine(messageText(parent))));
-      const cancel = button(t('reply.cancel'), () => { current().replyToMessageId = undefined; updateComposer(); $('message').focus(); }, 'quiet');
+      const copy = el('div'); copy.append(el('strong', '', () => parent ? t('reply.author', { name: memberIn(room, parent.authorId).name }) : t('message.reply')),
+        el('p', '', () => replyUnavailable ? t('reply.unavailable') : firstLine(messageText(parent))));
+      const cancel = button(() => t('reply.cancel'), () => { current().replyToMessageId = undefined; updateComposer(); $('message').focus(); }, 'quiet');
       cancel.disabled = Boolean(room.pending); preview.append(copy, cancel);
     }
   }
-  setText($('send-label'), t(room.pending?.status === 'sending' ? 'composer.sending' : 'composer.send'));
+  setText($('send-label'), () => t(room.pending?.status === 'sending' ? 'composer.sending' : 'composer.send'));
   $('composer').classList.toggle('is-readonly', !allowed);
   // The input folds away when speaking ends; keep keyboard focus somewhere visible.
   if (!allowed && document.activeElement === $('message')) $('timeline').focus();
-  setText($('send-help'), allowed ? t('composer.keyboardHint') : readOnlyReason(room));
+  setText($('send-help'), () => allowed ? t('composer.keyboardHint') : readOnlyReason(room));
   const placeholder = allowed ? t('composer.threadPlaceholder', { thread: room.scope.threadId }) : t('composer.readOnlyPlaceholder');
   if ($('message').placeholder !== placeholder) $('message').placeholder = placeholder;
   renderSeatCard(room, allowed); renderExpiry(room, allowed);
@@ -898,7 +916,7 @@ function renderSeatCard(room, allowed) {
   if (signature === state.ui.seat) return;
   state.ui.seat = signature;
   $('seat').classList.toggle('is-soon', soon);
-  $('seat').replaceChildren(tile(member), el('span', 'seat-member', member.name), el('span', 'seat-standing', t(allowed ? 'seat.present' : 'seat.readOnly')), el('span', 'seat-detail', detail));
+  $('seat').replaceChildren(tile(member), el('span', 'seat-member', member.name), el('span', 'seat-standing', () => t(allowed ? 'seat.present' : 'seat.readOnly')), el('span', 'seat-detail', detail));
   if (!allowed) $('seat').prepend(icon('i-lock'));
 }
 
@@ -913,6 +931,8 @@ function renderExpiry(room, allowed) {
   $('expiry').hidden = !text;
 }
 
+function setPendingError(pending, render) { pending.errorRender = render; pending.error = render(); }
+
 function renderOutbox() {
   const room = current(), pending = room?.pending;
   const signature = pending ? JSON.stringify([state.selected, pending.id, pending.status, pending.error, pending.checking, authorized('send', room)]) : '';
@@ -925,21 +945,21 @@ function renderOutbox() {
   const focusedAction = hadFocus && document.activeElement.dataset.action;
   if (focusedAction && focusedAction !== 'pending-status') pending.focusAction = focusedAction;
   const failed = pending.status === 'failed', node = el('div', `outbox-item is-${failed ? 'failed' : 'sending'}`), head = el('div', 'outbox-head');
-  const status = el('p', '', pending.checking ? t('send.checking') : failed ? pending.error : t('send.sending'));
+  const status = el('p', '', () => pending.checking ? t('send.checking') : failed ? (pending.errorRender?.() ?? pending.error) : t('send.sending'));
   status.tabIndex = -1; status.dataset.action = 'pending-status';
   head.append(icon(failed ? 'i-alert' : 'i-clock'), status);
   node.append(head);
   if (failed) {
     const actions = el('div', 'outbox-actions');
-    const check = button(t(pending.checking ? 'send.checkingAction' : 'send.check'), () => reconcilePending(current(), state.selected), 'outline-button');
+    const check = button(() => t(pending.checking ? 'send.checkingAction' : 'send.check'), () => reconcilePending(current(), state.selected), 'outline-button');
     check.dataset.action = 'check-receipt'; check.disabled = Boolean(pending.checking); actions.append(check);
     if (authorized('send', room)) {
-      const retry = button(t('send.retry'), () => sendPending(current(), state.selected), 'outline-button');
+      const retry = button(() => t('send.retry'), () => sendPending(current(), state.selected), 'outline-button');
       retry.dataset.action = 'retry-send'; retry.disabled = Boolean(pending.checking); actions.append(retry);
     }
-    actions.append(el('p', 'muted', t('send.receiptHelp')));
+    actions.append(el('p', 'muted', () => t('send.receiptHelp')));
     if (pending.replyRejected) {
-      const cancel = button(t('send.cancelReply'), () => void cancelPendingReply(current(), state.selected), 'outline-button');
+      const cancel = button(() => t('send.cancelReply'), () => void cancelPendingReply(current(), state.selected), 'outline-button');
       cancel.dataset.action = 'cancel-reply'; cancel.disabled = Boolean(pending.checking); actions.append(cancel);
     }
     node.append(actions);
@@ -962,7 +982,7 @@ async function cancelPendingReply(room, id) {
     latest.pending = null; latest.replyToMessageId = undefined;
     if (id === state.selected) { updateComposer(); renderOutbox(); $('message').focus(); }
   } catch {
-    pending.error = t('send.storageDeleteFailed');
+    setPendingError(pending, () => t('send.storageDeleteFailed'));
   } finally {
     pending.checking = false;
     if (client === state.client && state.rooms.get(id)?.pending === pending && id === state.selected) renderOutbox();
@@ -981,7 +1001,7 @@ function acceptPending(id, pending, result) {
     $('message').value = ''; renderMessages(!result.duplicate); updateComposer(); renderOutbox();
     if (!result.duplicate && (!state.pane || !paneOverlay.matches)) (authorized('send', latest) ? $('message') : $('timeline')).focus();
   }
-  renderRooms(); announce(t(result.duplicate ? 'send.duplicateConfirmed' : 'send.delivered'));
+  renderRooms(); announce(() => t(result.duplicate ? 'send.duplicateConfirmed' : 'send.delivered'));
   return true;
 }
 async function reconcilePending(room, id) {
@@ -992,13 +1012,13 @@ async function reconcilePending(room, id) {
     const result = await client.receipt(room.scope, pending.id);
     if (client !== state.client || state.rooms.get(id)?.pending !== pending) return false;
     if (result.message) return acceptPending(id, pending, { ...result, duplicate: true });
-    if (!pending.replyRejected) pending.error = t('send.missingReceipt');
+    if (!pending.replyRejected) setPendingError(pending, () => t('send.missingReceipt'));
   } catch (error) {
     if (client !== state.client) return false;
     if (error instanceof ApiError && error.status === 401) { invalidate(error); return false; }
     if (state.rooms.get(id)?.cacheIdentity !== room.cacheIdentity || state.rooms.get(id)?.pending !== pending) return false;
     if (error instanceof ApiError && error.status === 403) { denyReadScope(client, room); return false; }
-    pending.error = errorText(error);
+    setPendingError(pending, () => errorText(error));
   } finally {
     pending.checking = false;
     if (client === state.client && state.rooms.get(id)?.pending === pending && id === state.selected) { updateComposer(); renderOutbox(); }
@@ -1021,7 +1041,7 @@ async function sendPending(room, id) {
     const currentRoom = state.rooms.get(id);
     if (client !== state.client || currentRoom?.cacheIdentity !== room.cacheIdentity || currentRoom.pending !== pending || !authorized('read', currentRoom)) return;
     if (!authorized('send', currentRoom)) {
-      pending.status = 'failed'; pending.error = t('send.recovered');
+      pending.status = 'failed'; setPendingError(pending, () => t('send.recovered'));
       if (id === state.selected) { updateComposer(); renderOutbox(); }
       return;
     }
@@ -1033,7 +1053,7 @@ async function sendPending(room, id) {
     if (client !== state.client) return;
     if (error instanceof ApiError && error.status === 401) { invalidate(error); return; }
     pending.replyRejected = error instanceof ApiError && error.code === 'reply_source_unavailable';
-    pending.status = 'failed'; pending.error = error?.message?.startsWith('pending_storage_') ? t('send.storageFailed') : pending.replyRejected ? t('send.replyRejected') : errorText(error); announce(pending.error);
+    pending.status = 'failed'; setPendingError(pending, () => error?.message?.startsWith('pending_storage_') ? t('send.storageFailed') : pending.replyRejected ? t('send.replyRejected') : errorText(error)); announce(() => pending.errorRender?.() ?? pending.error);
     if (error instanceof ApiError && error.status === 403) await sync();
   }
   if (client === state.client && id === state.selected) { updateComposer(); renderOutbox(); }
@@ -1085,8 +1105,8 @@ function renderSearchPane(room, focusId) {
   if (signature === state.ui.pane) return;
   const restoreFocus = $('search-results').contains(document.activeElement);
   focusId ??= document.activeElement?.dataset.searchMessage;
-  state.ui.pane = signature; setText($('details-title'), t('search.title'));
-  setText($('search-count'), !query ? t('search.prompt') : matches.length ? t('search.count', { total: matches.length, shown: shown.length }) : t('search.empty'));
+  state.ui.pane = signature; setText($('details-title'), () => t('search.title'));
+  setText($('search-count'), () => !query ? t('search.prompt') : matches.length ? t('search.count', { total: matches.length, shown: shown.length }) : t('search.empty'));
   const nodes = shown.map(message => {
     const row = button('', () => {
       const latest = current();
@@ -1102,7 +1122,7 @@ function renderSearchPane(room, focusId) {
     row.append(head, el('span', 'search-excerpt', `${start ? '…' : ''}${message.text.slice(start, end)}${message.text.length > end ? '…' : ''}`));
     return row;
   });
-  if (matches.length > shown.length) nodes.push(button(t('search.more'), () => { pane.limit += 50; renderSearchPane(current(), matches[shown.length]?.id); }, 'text-button'));
+  if (matches.length > shown.length) nodes.push(button(() => t('search.more'), () => { pane.limit += 50; renderSearchPane(current(), matches[shown.length]?.id); }, 'text-button'));
   $('search-results').replaceChildren(...nodes);
   if (restoreFocus) (nodes.find(node => node.dataset.searchMessage === focusId) ?? $('search-query')).focus();
 }
@@ -1127,18 +1147,18 @@ function renderMembersPane(room) {
   const signature = JSON.stringify(['members', key(room.scope), room.scope.members, [...live], permissions]);
   if (signature === state.ui.pane) return;
   state.ui.pane = signature;
-  setText($('details-title'), t('seat.title'));
+  setText($('details-title'), () => t('seat.title'));
   const member = state.session.member, speaking = authorized('send', room), head = el('div', 'my-seat-head'), copy = el('div');
-  copy.append(el('strong', '', member.name), el('span', '', t('member.selfKind', { kind: kindLabel(member) })));
-  head.append(tile(member), copy, el('span', speaking ? 'standing' : 'standing is-readonly', t(speaking ? 'seat.present' : 'seat.readOnly')));
+  copy.append(el('strong', '', member.name), el('span', '', () => t('member.selfKind', { kind: kindLabel(member) })));
+  head.append(tile(member), copy, el('span', speaking ? 'standing' : 'standing is-readonly', () => t(speaking ? 'seat.present' : 'seat.readOnly')));
   const names = { read: t('permission.read'), send: t('permission.send'), cancel: t('permission.cancel') }, list = el('dl', 'perm-list');
   for (const [name, grant] of permissions) {
-    list.append(el('dt', '', names[name]), el('dd', grant.allowed ? 'perm-on' : 'perm-off', grant.allowed ? t('permission.availableUntil', { time: clock(grant.until) }) : lapse(grant)));
+    list.append(el('dt', '', names[name]), el('dd', grant.allowed ? 'perm-on' : 'perm-off', () => grant.allowed ? t('permission.availableUntil', { time: clock(grant.until) }) : lapse(grant)));
   }
   $('my-seat').replaceChildren(head, list);
   $('members').replaceChildren(...room.scope.members.map(person => {
     const row = el('li'), name = el('span', 'member-name');
-    name.append(el('strong', '', person.name), el('span', '', isMe(person.id) ? t('member.selfKind', { kind: kindLabel(person) }) : kindLabel(person)));
+    name.append(el('strong', '', person.name), el('span', '', () => isMe(person.id) ? t('member.selfKind', { kind: kindLabel(person) }) : kindLabel(person)));
     row.append(tile(person), name);
     if (live.has(person.id)) { const working = el('span', 'member-state is-live'); working.append(el('span', 'live-dot'), t('member.researching')); row.append(working); }
     return row;
@@ -1152,14 +1172,14 @@ function renderThreadPane(room, messageId) {
   const signature = JSON.stringify(['discussion', messageId, messages, runs, authorized('send', room)]);
   if (signature === state.ui.pane) return;
   state.ui.pane = signature;
-  setText($('details-title'), t('discussion.title'));
-  const nodes = [el('p', 'thread-intro', t('discussion.intro'))];
-  if (!messages.length) nodes.push(el('p', 'pane-note', t('discussion.unavailable')));
+  setText($('details-title'), () => t('discussion.title'));
+  const nodes = [el('p', 'thread-intro', () => t('discussion.intro'))];
+  if (!messages.length) nodes.push(el('p', 'pane-note', () => t('discussion.unavailable')));
   for (const message of messages) {
     nodes.push(threadMessage(room, message, ctx));
     for (const run of runs.filter(r => r.sourceMessageId === message.id)) nodes.push(threadRun(room, run, ctx));
   }
-  nodes.push(el('p', 'pane-note', t('discussion.help')));
+  nodes.push(el('p', 'pane-note', () => t('discussion.help')));
   $('details-thread').replaceChildren(...nodes);
 }
 
@@ -1167,18 +1187,18 @@ function threadMessage(room, message, ctx) {
   const member = memberIn(room, message.authorId), item = el('article', 'thread-item'), head = el('div', 'thread-head');
   head.append(el('strong', '', member.name), el('span', 'kind', kindLabel(member)), timeNode(message.createdAt));
   item.append(head);
-  if (message.result) item.append(el('span', 'thread-synthetic', t('result.synthetic')));
+  if (message.result) item.append(el('span', 'thread-synthetic', () => t('result.synthetic')));
   if (message.replyToMessageId) item.append(replyQuote(room, message, ctx));
   item.append(el('p', 'thread-text', messageText(message)));
-  if (!message.retracted && !message.invalidated && authorized('send', room)) item.append(button(t('message.reply'), () => chooseReply(room, message), 'text-button'));
+  if (!message.retracted && !message.invalidated && authorized('send', room)) item.append(button(() => t('message.reply'), () => chooseReply(room, message), 'text-button'));
   if (message.result) {
     const list = el('ol', 'thread-sources');
     message.result.sources.forEach((source, index) => {
       const row = el('li'), copy = el('div');
-      copy.append(el('strong', 'source-title', source.title), el('p', 'source-excerpt', source.excerpt), el('span', 'source-url', t('result.placeholderUrl', { url: source.url })));
+      copy.append(el('strong', 'source-title', source.title), el('p', 'source-excerpt', source.excerpt), el('span', 'source-url', () => t('result.placeholderUrl', { url: source.url })));
       row.append(el('span', 'source-key', String(index + 1)), copy); list.append(row);
     });
-    const limits = el('div', 'thread-limits'); limits.append(el('strong', '', t('result.limitations')));
+    const limits = el('div', 'thread-limits'); limits.append(el('strong', '', () => t('result.limitations')));
     for (const limitation of message.result.limitations) limits.append(el('p', '', limitation));
     item.append(list, limits);
   }
@@ -1187,16 +1207,17 @@ function threadMessage(room, message, ctx) {
 
 function threadRun(room, run, ctx) {
   const box = el('div', 'thread-run'), top = el('div', 'thread-run-top'), status = el('span', 'thread-status');
-  status.append(icon(`st-${run.status}`, `mark st-${run.status}`), el('span', '', labels[run.status] ?? t('run.unrecognized')));
-  top.append(status, el('span', 'run-title', t('run.ownerLabel', { number: ctx.code.get(run.id), name: memberIn(room, run.memberId).name })));
+  status.append(icon(`st-${run.status}`, `mark st-${run.status}`), el('span', '', () => runLabel(run.status)));
+  top.append(status, el('span', 'run-title', () => t('run.ownerLabel', { number: ctx.code.get(run.id), name: memberIn(room, run.memberId).name })));
   box.append(top, stepsNode(run), el('p', 'run-note', runNote(run)));
   return box;
 }
 
 $('connect-form').addEventListener('submit', async event => {
+  if (!desktopLanguageReady) { event.preventDefault(); return; }
   event.preventDefault(); if ($('connect-button').disabled) return;
   const token = desktop ? 'local-demo' : $('token').value.trim(); if (!token) return;
-  $('connect-button').disabled = true; $('connect-button').textContent = t('connect.connecting'); $('connect-error').textContent = '';
+  $('connect-button').disabled = true; bindText($('connect-button'), () => t('connect.connecting')); $('connect-error').textContent = '';
   const client = new Client(token); $('token').value = ''; $('token').setAttribute('aria-invalid', 'false');
   try {
     const session = await client.session(); state.client = client; state.epoch++;
@@ -1211,7 +1232,7 @@ $('composer').addEventListener('submit', event => {
   if (!room || room.pending || !text || !authorized('send') || $('send').disabled) return;
   const id = crypto.randomUUID();
   if (new TextEncoder().encode(JSON.stringify(messageBody(room.scope, text, id, room.replyToMessageId, room.attachment))).length > 60000) {
-    $('attachment-error').textContent = t('attachment.requestTooLarge'); return;
+    bindText($('attachment-error'), () => t('attachment.requestTooLarge')); return;
   }
   room.draft = text; room.pending = { id, text, replyToMessageId: room.replyToMessageId, attachment: room.attachment, status: 'new', error: '' };
   void sendPending(room, state.selected);
@@ -1273,19 +1294,19 @@ window.addEventListener('focus', expireReadScopes);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) expireReadScopes(); });
 window.addEventListener('pagehide', () => invalidate(undefined, true));
 window.addEventListener('beforeunload', event => { if ([...state.rooms.values()].some(room => room.pending)) { event.preventDefault(); event.returnValue = ''; } });
-if (desktop) {
+if (desktop && desktopLanguageReady) {
   $('token').required = false; $('token').hidden = true;
   document.querySelector('label[for="token"]').hidden = true;
-  $('connect-button').textContent = t('desktop.enter');
-  $('credential-help').textContent = t('desktop.help');
-  document.querySelector('.demo-note').textContent = t('desktop.demoNote', { version: '0.1.3' });
-  $('logout').querySelector('span').textContent = t('desktop.disconnect');
+  bindText($('connect-button'), () => t('desktop.enter'));
+  bindText($('credential-help'), () => t('desktop.help'));
+  bindText(document.querySelector('.demo-note'), () => t('desktop.demoNote', { version: '0.1.3' }));
+  bindText($('logout').querySelector('span'), () => t('desktop.disconnect'));
   const actions = el('div', 'desktop-actions'), quit = button('', () => desktop.core.invoke('desktop_quit'), 'rail-button');
-  quit.append(icon('i-power'), el('span', '', t('desktop.quit')));
+  quit.append(icon('i-power'), el('span', '', () => t('desktop.quit')));
   $('logout').before(actions); actions.append($('logout'), quit);
-  document.querySelector('.connect-body').append(button(t('desktop.quit'), () => desktop.core.invoke('desktop_quit'), 'quiet connect-quit'));
+  document.querySelector('.connect-body').append(button(() => t('desktop.quit'), () => desktop.core.invoke('desktop_quit'), 'quiet connect-quit'));
   const noticePanel = el('section', 'connection-page'); noticePanel.hidden = true;
-  noticePanel.append(el('p', '', t('desktop.checkingNotice'))); document.body.append(noticePanel);
+  noticePanel.append(el('p', '', () => t('desktop.checkingNotice'))); document.body.append(noticePanel);
   let noticeBusy = false, noticePending = false;
   async function openNotification() {
     noticePending = true;
@@ -1314,9 +1335,9 @@ if (desktop) {
               invalidate(new ApiError(Number(result.status) || 403, 'notification_access_denied'));
             } else {
               invalidate();
-              $('connect-error').textContent = result.reason === 'disconnected'
+              bindText($('connect-error'), () => result.reason === 'disconnected'
                 ? t('desktop.noticeDisconnected')
-                : t('desktop.noticeUnavailable');
+                : t('desktop.noticeUnavailable'));
             }
             noticePanel.hidden = true;
           }
@@ -1341,3 +1362,35 @@ if (desktop) {
     void openNotification();
   }).then(() => openNotification());
 }
+
+presentation.subscribe(() => {
+  document.documentElement.lang = presentation.locale;
+  const focused = document.activeElement, container = focused.closest('#details,#messages,#outbox,#rooms')?.id;
+  const action = focused.dataset.action, room = focused.dataset.room, search = focused.dataset.searchMessage;
+  const selection = typeof focused.selectionStart === 'number' ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
+  changingLanguage = true;
+  try {
+    // Repaint derived display only. Never reconnect, resubmit, re-read, or change
+    // drafts/receipts/identity/deadlines as a side effect of language selection.
+    for (const item of state.rooms.values()) {
+      item.signature = '';
+      if (item.pending?.errorRender) item.pending.error = item.pending.errorRender();
+    }
+    for (const name of ['seats', 'seat', 'expiry', 'pane', 'outbox']) state.ui[name] = '';
+    delete $('reply-preview').dataset.signature;
+    if (state.session) {
+      renderIdentity(); renderRooms(); renderHeader(); renderMessages(); renderPane(); renderOutbox(); updateMessageChange();
+    }
+    const parent = container ? $(container) : document;
+    const target = focused.isConnected ? focused : focused.id ? $(focused.id)
+      : [...parent.querySelectorAll('[data-action],[data-room],[data-search-message]')].find(node =>
+        action ? node.dataset.action === action : room ? node.dataset.room === room : search && node.dataset.searchMessage === search);
+    if (target && !target.disabled) {
+      target.focus({ preventScroll: true });
+      if (selection && target.setSelectionRange) target.setSelectionRange(...selection);
+    }
+  } finally {
+    // Layout-induced scroll events must not write a read receipt for a language change.
+    requestAnimationFrame(() => requestAnimationFrame(() => { changingLanguage = false; }));
+  }
+});

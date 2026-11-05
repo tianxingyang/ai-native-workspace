@@ -9,8 +9,12 @@ pub struct DemoPresentation {
     pub notification_body: &'static str,
 }
 
-// Generated at compile time from locales/zh-CN.json; never load external language files.
+// Generated from the explicit demo manifest at compile time; no runtime language files.
 include!(concat!(env!("OUT_DIR"), "/demo_presentation.rs"));
+
+#[cfg(test)]
+#[path = "../locales/registry.rs"]
+mod registry;
 
 #[cfg(test)]
 mod tests {
@@ -20,8 +24,10 @@ mod tests {
     fn compiled_resources_and_configuration_match_the_demo_catalog() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        let catalog: serde_json::Value =
-            serde_json::from_str(include_str!("../locales/zh-CN.json")).unwrap();
+        let catalog: serde_json::Value = serde_json::from_str(RESOLVED_DEMO_JSON).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../locales/manifest.json")).unwrap();
+        assert_eq!(DEMO_LOCALE, manifest["selected"].as_str().unwrap());
         for (actual, key) in [
             (DEMO_ZH_CN.menu_show, "menu_show"),
             (DEMO_ZH_CN.menu_quit, "menu_quit"),

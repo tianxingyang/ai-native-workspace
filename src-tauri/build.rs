@@ -1,11 +1,28 @@
-use std::{env, fs, path::PathBuf};
+use std::{collections::BTreeMap, env, fs, path::PathBuf};
+
+#[path = "locales/registry.rs"]
+mod registry;
 
 fn main() {
-    // Keep the existing demo language explicit; this is not runtime locale selection.
-    println!("cargo:rerun-if-changed=locales/zh-CN.json");
+    // This manifest selects the existing demo build, not the product's default language.
+    println!("cargo:rerun-if-changed=locales/manifest.json");
     println!("cargo:rerun-if-changed=tauri.conf.json");
-    let catalog: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string("locales/zh-CN.json").unwrap()).unwrap();
+    let manifest =
+        serde_json::from_str(&fs::read_to_string("locales/manifest.json").unwrap()).unwrap();
+    let registry = registry::Registry::parse(&manifest).expect("Invalid desktop manifest");
+    let catalogs = registry
+        .catalogs
+        .iter()
+        .map(|(locale, file)| {
+            let path = format!("locales/{file}");
+            println!("cargo:rerun-if-changed={path}");
+            let catalog = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+            (locale.clone(), catalog)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let catalog = registry
+        .resolve(&catalogs)
+        .expect("Invalid desktop resources");
     let config: serde_json::Value =
         serde_json::from_str(&fs::read_to_string("tauri.conf.json").unwrap()).unwrap();
     let windows = config["app"]["windows"].as_array().unwrap();
@@ -23,8 +40,7 @@ fn main() {
             "Stale desktop configuration; run npm run desktop:resources"
         );
     }
-    let mut generated =
-        String::from("pub const DEMO_ZH_CN: DemoPresentation = DemoPresentation {\n");
+    let mut generated = format!("pub const DEMO_LOCALE: &str = {:?};\npub const SELECTED_DEMO: DemoPresentation = DemoPresentation {{\n", registry.selected);
     for (field, key) in [
         ("menu_show", "menu_show"),
         ("menu_quit", "menu_quit"),
@@ -39,6 +55,11 @@ fn main() {
         generated.push_str(&format!("    {field}: {value:?},\n"));
     }
     generated.push_str("};\n");
+    generated.push_str("// Compatibility alias for the existing demo callers.\npub const DEMO_ZH_CN: DemoPresentation = SELECTED_DEMO;\n");
+    generated.push_str(&format!(
+        "#[cfg(test)]\nconst RESOLVED_DEMO_JSON: &str = {:?};\n",
+        catalog.to_string()
+    ));
     fs::write(
         PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("demo_presentation.rs"),
         generated,
