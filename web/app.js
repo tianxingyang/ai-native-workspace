@@ -1020,7 +1020,11 @@ async function sendPending(room, id) {
     Math.min(room.scope.outboxExpiresAt, deadline('read', room)));
     const currentRoom = state.rooms.get(id);
     if (client !== state.client || currentRoom?.cacheIdentity !== room.cacheIdentity || currentRoom.pending !== pending || !authorized('read', currentRoom)) return;
-    if (!authorized('send', currentRoom)) { pending.status = 'failed'; pending.error = t('send.recovered'); return; }
+    if (!authorized('send', currentRoom)) {
+      pending.status = 'failed'; pending.error = t('send.recovered');
+      if (id === state.selected) { updateComposer(); renderOutbox(); }
+      return;
+    }
     const result = await client.send(room.scope, pending.text, pending.id, pending.replyToMessageId, pending.attachment);
     if (client !== state.client) return;
     acceptPending(id, pending, result);

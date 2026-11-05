@@ -163,3 +163,16 @@ test('send permission loss still permits recovery and receipt checking but never
   await expect(page.locator('#outbox [data-action=retry-send]')).toHaveCount(0); await expect(page.locator('#message')).toHaveValue('只读时核对');
   expect(requests).toBe(1); expect(await stored(page)).toHaveLength(1);
 });
+test('send loss during a held save exposes receipt checking immediately even when sync is offline', async ({ page }) => {
+  let requests = 0; await page.route('**/messages', route => { requests++; return route.continue(); });
+  await connect(page); await expect(page.locator('#message')).toBeEnabled();
+  await page.evaluate(() => { const original = crypto.subtle.encrypt.bind(crypto.subtle); window.encryptArrived = false;
+    crypto.subtle.encrypt = async (...args) => { window.encryptArrived = true; await new Promise(resolve => { window.releaseEncrypt = resolve; }); return original(...args); }; });
+  await page.locator('#message').fill('保存期间失去发言权'); await page.locator('#send').click(); await expect.poll(() => page.evaluate(() => window.encryptArrived)).toBe(true);
+  demo.engine.state.config.grants.push({ conversationId: scope.conversationId, threadId: scope.threadId, memberId: 'demo-owner', id: 'held-save-deny', revision: 1, actions: ['send'], effect: 'deny', revoked: false, expiresAt: demo.expiresAt });
+  await expect(page.locator('#composer')).toHaveClass(/is-readonly/);
+  await page.route('**/session', route => route.abort('failed')); await page.route('**/sync?**', route => route.abort('failed'));
+  await page.evaluate(() => window.releaseEncrypt());
+  await expect(page.locator('#outbox [data-action=check-receipt]')).toBeVisible(); await expect(page.locator('#outbox [data-action=retry-send]')).toHaveCount(0);
+  expect(requests).toBe(0); expect(await stored(page)).toHaveLength(1);
+});
