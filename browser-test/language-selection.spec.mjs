@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { startWebDemo } from '../dist/scripts/web-demo.js';
 import catalog from '../web/locales/zh-CN.js';
 import { defaultPolicy } from '../dist/src/control/authorization.js';
+import { requestJson } from '../dist/src/http.js';
 
 let demo;
 test.beforeEach(async () => { demo = await startWebDemo(); });
@@ -65,7 +66,7 @@ for (const width of [320, 390]) test(`language selection preserves content, draf
   await select(page, 'synthetic');
   await expect(page.locator('#connection-status')).toHaveText(synthetic.messages['connection.connected']);
   await expect(page.locator('#message')).toHaveValue(draft);
-  expect(requests.filter(url => !url.endsWith('/messages/read'))).toEqual([]);
+  expect(requests.filter(url => !url.endsWith('/read-position'))).toEqual([]);
   expect(await page.evaluate(() => [...document.querySelectorAll('body *')].filter(node => {
     const rect = node.getBoundingClientRect(); return rect.width && rect.right > innerWidth + 1;
   }).slice(0, 12).map(node => ({ tag: node.tagName, id: node.id, class: node.className, right: node.getBoundingClientRect().right })))).toEqual([]);
@@ -136,7 +137,7 @@ test('switching while reading history neither marks unread messages read nor res
   const read = demo.engine.state.readPosition('demo-owner', scope);
   for (let i = 0; i < 15; i++) demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, `未读原文 ${i}`, `language-unread-${i}`));
   await expect(page.locator('.message')).toHaveCount(55);
-  const reads = []; page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname === '/messages/read') reads.push(request.url()); });
+  const reads = []; page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname === '/read-position') reads.push(request.url()); });
   await select(page, 'synthetic');
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await expect(page.locator('#timeline')).toBeFocused();
@@ -146,6 +147,37 @@ test('switching while reading history neither marks unread messages read nor res
   await expect(page.locator('#messages')).toBeEmpty(); await expect(page.locator('#rooms')).toBeEmpty();
   for (const id of ['thread-title', 'members-count', 'scope-note', 'send-label', 'send-help', 'announcement', 'change-save']) await expect(page.locator(`#${id}`)).toBeEmpty();
   await expect(page.locator('body')).not.toContainText('历史原文'); await expect(page.locator('body')).not.toContainText('未读原文');
+});
+
+test('language selection keeps recovered checkpoints quarantined until a current authorized sync', async ({ page }) => {
+  const scope = { conversationId: '产品讨论', threadId: '日常交流' };
+  const stale = demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, '恢复前正文不可闪现', 'language-recovery-old').message);
+  await resources(page); await connect(page);
+  await expect(page.locator('.message-text')).toHaveText(stale.text);
+  const session = await requestJson(demo.url, demo.ownerToken, '/session');
+  const target = session.scopes.find(item => item.conversationId === scope.conversationId);
+  const checkpoint = () => page.evaluate(async ({ target, memberId }) => {
+    const { SyncStore } = await import('/sync-store.js'), store = new SyncStore(target.outboxKey);
+    try { return await store.load([memberId, target.conversationId, target.threadId, target.membershipGeneration]); } finally { store.close(); }
+  }, { target, memberId: session.member.id });
+  await expect.poll(async () => (await checkpoint())?.messages.length).toBe(1);
+  await page.reload();
+  demo.engine.commit(() => demo.engine.changeMessage('demo-researcher', stale.id, 'retract', 1, 'language-recovery-retract'));
+  demo.engine.commit(() => demo.engine.state.createMessage('demo-researcher', scope, '当前授权同步正文', 'language-recovery-new'));
+  const selectedSync = url => url.pathname === '/sync' && url.searchParams.get('conversationId') === scope.conversationId;
+  await page.route(selectedSync, route => route.abort('failed'));
+  await page.locator('#token').fill(demo.ownerToken); await page.locator('#connect-button').click();
+  await expect(page.locator('#sync-error')).toBeVisible();
+  const saved = await checkpoint(), posts = [];
+  page.on('request', request => { if (request.method() === 'POST') posts.push(request.url()); });
+  await select(page, 'synthetic'); await select(page, 'zh-CN');
+  await expect(page.locator('.message')).toHaveCount(0); await expect(page.locator('body')).not.toContainText(stale.text);
+  expect(await checkpoint()).toEqual(saved); expect(posts).toEqual([]);
+  await page.unroute(selectedSync); await page.locator('#reconnect').click();
+  await expect(page.locator('.message-text')).toHaveText(['消息已撤回', '当前授权同步正文']);
+  await select(page, 'synthetic');
+  await expect(page.locator('body')).not.toContainText(stale.text);
+  await expect(page.locator('.message-text').last()).toHaveText('当前授权同步正文');
 });
 
 test('language selection cannot repopulate fixed scope or editor slots after reading access ends', async ({ page }) => {
