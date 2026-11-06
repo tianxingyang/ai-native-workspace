@@ -82,7 +82,7 @@
     <div class="composer-wrap">
       <div id="outbox" aria-live="polite"></div>
       <div id="expiry" class="banner warn expiry" role="status" hidden></div>
-      <form id="composer">
+      <form id="composer" autocomplete="off">
         <div id="seat" class="seat-card"></div>
         <div class="composer-fold"><div class="composer-fold-inner">
           <div id="reply-preview" class="reply-preview" hidden></div>
@@ -90,7 +90,7 @@
           <p id="attachment-error" class="attachment-error" role="alert"></p>
           <input id="attachment-file" type="file" accept=".txt,.md,text/plain,text/markdown" hidden>
           <label class="sr-only" for="message" data-i18n="composer.label">发送到当前会话的消息</label>
-          <textarea id="message" rows="1" maxlength="8000" placeholder="和团队说点什么…" data-i18n-placeholder="composer.placeholder"></textarea>
+          <textarea id="message" rows="1" maxlength="8000" autocomplete="off" placeholder="和团队说点什么…" data-i18n-placeholder="composer.placeholder"></textarea>
           <div class="composer-bottom"><button id="attach" class="quiet" type="button" data-i18n="attachment.attach">添加文本附件</button><span id="send-help" data-i18n="composer.keyboardHint">Enter 发送 · Shift + Enter 换行</span><button id="send" class="primary" type="submit"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg><span id="send-label" data-i18n="composer.send">发送</span></button></div>
         </div></div>
       </form>
@@ -119,17 +119,17 @@
   </aside>
 </div>
 <dialog id="message-change" aria-labelledby="change-title">
-  <form id="change-form">
+  <form id="change-form" autocomplete="off">
     <h2 id="change-title" data-i18n="editor.editTitle">编辑消息</h2>
     <label for="change-text" id="change-label" data-i18n="editor.content">消息内容</label>
-    <textarea id="change-text" rows="5" maxlength="8000"></textarea>
+    <textarea id="change-text" rows="5" maxlength="8000" autocomplete="off"></textarea>
     <p id="change-help" data-i18n="editor.editHelp">保存后，相关研究会停止使用旧内容；确认旧运行结束后重新处理。</p>
     <p id="change-error" role="alert"></p>
     <div class="change-actions"><button type="button" id="change-close" class="quiet" data-i18n="editor.return">返回讨论</button><button type="submit" id="change-save" class="primary" data-i18n="editor.save">保存修改</button></div>
   </form>
 </dialog>
 <dialog id="conversation-management" aria-labelledby="management-title">
-  <form id="management-form">
+  <form id="management-form" autocomplete="off">
     <h2 id="management-title" tabindex="-1"></h2>
     <p class="muted" data-i18n="management.privacy">加入不会自动获得权限。阅读权包含该会话的历史消息；重新加入需要重新授权。</p>
     <fieldset id="management-fields"></fieldset>
