@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ApiError, PROTOCOL_VERSION, requireCondition, terminal, type CheckpointRef, type RuntimeCapabilities, type RuntimeEvent, type RuntimeInput, type RuntimeProvider, type RunStatus, type WorkPackage } from '../contracts.js';
 import { CoSeatTools } from './coseat-tools.js';
-import { ContextCompiler, frozenSnapshot, validateWorkerWork } from './context-compiler.js';
+import { ContextCompiler, frozenSnapshot, validateWorkerInput, validateWorkerWork } from './context-compiler.js';
 
 /** Providers acknowledge only when the input has actually entered their execution context. */
 export type Execute = (work: WorkPackage, input: RuntimeInput, tools: CoSeatTools, signal: AbortSignal, output: (data: Record<string, unknown>) => void, onInputApplied: () => void) => Promise<void>;
@@ -37,7 +37,7 @@ export class LocalRuntime implements RuntimeProvider {
   }
   async submitInput(id: string, input: RuntimeInput) {
     const s = this.session(id);
-    requireCondition(typeof input.id === 'string' && input.id.length > 0 && typeof input.text === 'string' && input.text.length > 0 && input.text.length <= 8000, 400, 'invalid_input');
+    validateWorkerInput(input);
     if (s.input?.id === input.id) {
       requireCondition(JSON.stringify(s.input) === JSON.stringify(input), 409, 'input_conflict');
       return { accepted: true };
@@ -62,12 +62,12 @@ export class LocalRuntime implements RuntimeProvider {
       };
       let budgetExpired = false;
       const timer = setTimeout(() => { budgetExpired = true; s.abort.abort(new Error('runtime_budget_exceeded')); }, s.work.budget.maxDurationMs);
-      const tools = new CoSeatTools(this.config.controlUrl, this.config.memberToken, s.work, s.abort.signal, value => this.emit(s, 'approval_requested', value), this.config.toolHeaders);
+      const tools = new CoSeatTools(this.config.controlUrl, this.config.memberToken, s.work, s.abort.signal, value => this.emit(s, 'approval_requested', value), this.config.toolHeaders, s.id);
       try {
         const context = this.compiler.compile(s.work, input, s.abort.signal);
         // Confirm live control authority and exact bindings before any provider
         // starts. This budgeted call does not acknowledge input application.
-        await tools.claimTask();
+        await tools.prepareExecution();
         s.abort.signal.throwIfAborted();
         validateWorkerWork(context.work);
         await this.config.execute(context.work, context.input, tools, s.abort.signal, value => this.emit(s, 'output', value), onInputApplied);
@@ -77,7 +77,8 @@ export class LocalRuntime implements RuntimeProvider {
         }
       } catch (error) {
         if (!s.cancelRequested) {
-          s.status = 'failed'; this.emit(s, 'failed', { code: error instanceof ApiError ? error.code : 'execution_failed' });
+          s.status = 'failed'; this.emit(s, 'failed', { code: error instanceof ApiError ? error.code : 'execution_failed',
+            ...(tools.receiptId ? { receiptId: tools.receiptId } : {}) });
         }
       } finally {
         executionSettled = true;

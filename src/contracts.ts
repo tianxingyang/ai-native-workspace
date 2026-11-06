@@ -75,6 +75,11 @@ export interface Run {
   contextInvalidated?: boolean;
   stopEvidence?: { scope: 'runtime_session_not_created' | 'worker_acknowledged_not_started'; executionStarted: false };
 }
+/** Explicit control facts for provider admission; never reconstructed from a transcript. */
+export interface ClaimConfirmation {
+  run: Run; duplicate: true;
+  execution: { toolCalls: number; publishedReceiptId: string | null; sessionId: string | null };
+}
 export class ApiError extends Error {
   constructor(public status: number, public code: string) { super(code); }
 }

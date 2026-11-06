@@ -41,6 +41,14 @@ export interface CompiledContext {
   readonly systemPrompt: string;
 }
 
+/** v0 accepts a single task input, not provider history or control-state patches. */
+export function validateWorkerInput(input: RuntimeInput): void {
+  objectValue(input);
+  requireCondition(Object.keys(input).every(key => ['id', 'text', 'contextRevision'].includes(key)), 400, 'unsupported_input_fields');
+  requireCondition(typeof input.id === 'string' && input.id.length > 0 && input.id.length <= 128
+    && typeof input.text === 'string' && input.text.length > 0 && input.text.length <= 8000, 400, 'invalid_input');
+}
+
 /** A fresh, bounded context for the v0 synthetic-research slice. No history,
  * checkpoint, summary, or retrieved text can supply missing control state. */
 export class ContextCompiler {
@@ -52,9 +60,7 @@ export class ContextCompiler {
   compile(work: WorkPackage, input: RuntimeInput, signal: AbortSignal): CompiledContext {
     signal.throwIfAborted();
     const bound = this.bind(work);
-    objectValue(input);
-    requireCondition(typeof input.id === 'string' && input.id.length > 0
-      && typeof input.text === 'string' && input.text.length > 0 && input.text.length <= 8000, 400, 'invalid_input');
+    validateWorkerInput(input);
     requireCondition(input.contextRevision === bound.contextRevision, 409, 'context_revision_changed');
     // Only fixed instructions are promoted to system context. Bindings are
     // encoded as data; source text and the submitted input remain lower trust.

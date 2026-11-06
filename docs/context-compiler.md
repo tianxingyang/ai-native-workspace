@@ -1,6 +1,6 @@
 # Worker ContextCompiler：v0 合成调研切片
 
-VIT-106 的本轮增量提供独立 `src/worker/context-compiler.ts`，供 `LocalRuntime` 和 pi adapter 使用。范围是全新执行的授权工作包与输入编译，不实现恢复、历史压缩、第二 provider 或新的成员生命周期。
+VIT-106 提供独立 `src/worker/context-compiler.ts`，供 `LocalRuntime` 和 pi adapter 使用。范围是授权工作包与输入编译、provider 初始化期间重新校验，以及重建 worker 时拒绝重放旧动作。不启用 provider checkpoint 恢复、SDK 历史压缩、第二 provider 或新的成员生命周期。
 
 ## 接受与拒绝
 
@@ -10,17 +10,28 @@ VIT-106 的本轮增量提供独立 `src/worker/context-compiler.ts`，供 `Loca
 
 创建 session 和真正进入 provider 前均校验工作包，因此排队期间过期的工作不能启动。编译结果包含完整绑定和固定系统指令；提交的 input 单独传入 user 消息，检索结果仍通过工具返回。系统指令不会直接拼入调用方的自由文本 constraints。工作包、授权、预算和输入递归冻结，并与调用方对象分离，避免异步排队期间被篡改。
 
+`RuntimeInput` 只接受 `id`、`text`、`contextRevision`，拒绝额外的 checkpoint、history、summary、messages、authorization、receiptId 等字段，避免把尚不支持的恢复请求静默当成普通输入。压缩摘要可以作为有界的 `text` 任务数据，但不能提供授权、清除取消、改变目标/受众、补充缺失状态、重置预算或证明发布成功。编译器不解析这类文字宣称；固定约束和当前控制面绑定仍独立存在。
+
 ## 程序执行边界
 
-- 统一 runtime 在启动任何 provider 前调用一次现有 `confirm-claim` API。控制面检查实时权限、来源/上下文版本、取消/终态，并在私有模式检查租约。worker 核对返回的完整工作包与本地绑定。此调用计入工具预算，不创建新任务，不表示输入已实际应用；异步确认返回后再次检查取消和本地期限。
+- 统一 runtime 在启动任何 provider 前调用现有 `confirm-claim` API。控制面检查实时权限、来源/上下文版本、取消/终态，并在私有模式检查租约。worker 核对返回的完整工作包与本地绑定，包括目标、来源范围、四项 Grant、策略摘要和预算；异步确认返回后再次检查取消和原始本地期限。
+- `confirm-claim` 增加明确的 `execution` 事实：服务端累计 `toolCalls`、`publishedReceiptId`（没有回执时为 `null`）、`sessionId`（未绑定时为 `null`）。工具计数和回执沿用控制面现有保存的数据，不增加持久化格式或凭据。缺失、格式错误、不一致的事实或控制面不可达均拒绝启动，不能从历史/摘要推断；旧控制端未提供这些字段时，新 worker 会拒绝执行。
+- 对没有发布回执的运行，核验调用计入原有工具预算，要求服务端计数与当前工具客户端的调用数一致；旧客户端已执行过动作或未知确认请求已经消耗预算时，新 worker 拒绝重放。已绑定的另一 provider session 同样被拒绝。本地 deadline 和调用计数在 pi 初始化期间共用，不因重新编译上下文而重置。
+- 对已有权威发布回执的当前运行或已完成运行，核验只读取该事实，不再消耗执行预算；worker 记录已知回执并以 `publication_already_recorded` 拒绝进入 provider，不再调用读取、审批或发送。回执读取仍必须通过全部绑定授权、版本、来源、取消状态及私有租约检查。拒绝重新执行不冒充 provider 完成或实际停止；原业务回执和终态不会因此改写。
+- pi 保留异步模型工厂返回后及首次 `transformContext` 的实时核验，并通过会话独立的 runtime facade，在请求级 `getAuth()` 和原 SDK 异步 headers 转换都完成后，在固定 SDK 的 `transformHeaders` 分派前钩子中再次核验，随后才交给 provider。facade 保留 SDK 既有请求参数和 headers 转换结果，不修改共享 runtime；后续请求仍检查本地取消和原 deadline。不能把 `transformContext` 当作请求认证完成的证据。
+- 首次分派核验拒绝时，即使 SDK 把拒绝转成 assistant error 消息，adapter 也继续传播原拒绝，不能因并发发布者已有回执而误报本 provider 成功。SDK 已实际加入输入时仍保留 `input_applied` 事实，即使随后的请求核验拒绝模型执行。正常 pi 启动共用四次预算内核验，仍只有一个注入模型/SDK。
 - 每次工具调用前检查本地取消信号、完整工作包、Grant 期限、执行时限和调用次数。`send_message` 还要求合成证据类型与 `fixtures.invalid` 来源格式。实际读取和写入仍由 CoSeat API 逐次校验实时权限、版本、目标和回执。
 - pi 继续只暴露四个 CoSeat 工具，关闭环境资源加载、恢复和压缩。权限变更不能通过 source/input 文本扩展工具集；未知或失败的动作不能由提示词授权。
 - `input_received`、provider 实际确认的 `input_applied`、取消受理和 `stopped` 语义保持独立。需要成功发布回执才能完成；本轮不更改 PR #6 已修复的事件确认机制。
 
-这些检查不把提示词当作权限边界，不证明 provider JavaScript 或宿主进程已被 OS 沙箱隔离。模型工厂与 adapter 是受信任代码。初始化前的控制面确认不是权限租约，也不能保证远端状态永远不变；后续动作仍依赖 API 实时检查，已经读取的数据无法被“撤回”。worker 本地信号与 deadline 是辅助围栏，不替代服务端权限真相。
+这些检查不把提示词当作权限边界，不证明 provider JavaScript 或宿主进程已被 OS 沙箱隔离。模型工厂与 adapter 是受信任代码。控制面确认不是权限租约，也不能保证远端状态在网络响应后永远不变；后续动作仍依赖 API 实时检查，已经读取的数据无法被“撤回”。worker 本地信号与 deadline 是辅助围栏，不替代服务端权限真相。旧执行有历史但不能安全恢复时采用拒绝策略，不自动续跑、不自动更换 Grant 或重新创建任务。
 
 ## 验证与尚未完成的验收
 
 `test/context-compiler.test.ts` 覆盖约束完整性、未知要求、缺失授权、关键字段、冻结快照、排队过期、撤权/版本变化/伪造绑定在模型初始化前被拒绝，以及本地工具期限、预算与合成来源检查。既有 runtime/pi 测试覆盖输入确认、初始化失败、SDK 异步认证期间取消和真实 SDK 加注入模型的 HTTP 工具闭环。
 
-本轮没有真实模型/互联网调研验证，不声明 VIT-106 全部完成。原 provider checkpoint、压缩后约束保留、恢复时回执对账且不重放旧动作、第二真实 provider 兼容性仍需后续单独实现和验证。
+`test/context-recovery.test.ts` 增加控制状态往返恢复后的发布回执（含已完成及预算耗尽）、旧读取/审批动作、旧 session、结构化恢复输入、摘要伪造回执、缺失权威字段、控制端断连、迟到核验响应，以及模型工厂/SDK auth 等待期间失效的故障回归。真实 pi SDK 加合成模型还检查压缩文本留在 user 数据、全部固定约束和当前绑定仍到达模型请求，并由实际 CoSeat 发送回执完成。
+
+请求分派竞态回归额外挂起真实 SDK 请求级 `getAuth()`，分别在等待期间撤权、取消、记录发布回执和缩减预算，要求 provider 调用数为零且保留真实输入应用事件。`test/pi-request-admission.test.ts` 对完整异步 headers 转换覆盖同样四类失效，另验证 headers/原 runtime 方法得到保留、headers 失败不能被绕过。所有测试使用合成 provider；没有改动 SDK、加载环境扩展或启用认证/模型网络。
+
+本轮没有真实模型/互联网调研验证，不声明 VIT-106 全部完成。原 provider checkpoint 的安全续跑、真实 SDK 压缩后的上下文重建、完整已执行动作账本及第二真实 provider 兼容性仍需后续单独实现和验证。本轮验证的是拒绝不安全恢复、普通摘要输入的边界，以及现有发布回执对账，不把普通摘要输入测试当作原生压缩支持。
