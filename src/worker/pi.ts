@@ -17,6 +17,7 @@ export function piExecution(modelFactory: PiModelFactory, workspace: string): Ex
     work = context.work; input = context.input;
     const { runtime, model, callCount } = await modelFactory();
     compiler.compile(work, input, signal);
+    await tools.prepareExecution();
     const resourceLoader: ResourceLoader = {
       getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
       getSkills: () => ({ skills: [], diagnostics: [] }),
@@ -42,6 +43,17 @@ export function piExecution(modelFactory: PiModelFactory, workspace: string): Ex
       settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false, provider: { maxRetries: 0 } }, cacheWarming: 'off', enableAnalytics: false, enableInstallTelemetry: false }),
     });
     const activeTools = session.getActiveToolNames().sort();
+    const transformContext = session.agent.transformContext;
+    let admitted = false;
+    session.agent.transformContext = async (messages, requestSignal) => {
+      const transformed = transformContext ? await transformContext(messages, requestSignal) : messages;
+      // SDK auth and prompt preparation can await after adapter construction.
+      // Recheck once at the first actual request, before the injected model runs.
+      if (!admitted) { await tools.prepareExecution(); admitted = true; }
+      tools.assertActive();
+      requestSignal?.throwIfAborted();
+      return transformed;
+    };
     const sdkEvents: string[] = [];
     const unsubscribe = session.subscribe(event => {
       // An abort during asynchronous prompt preflight can precede the SDK's

@@ -2,7 +2,7 @@ import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { PROTOCOL_VERSION, objectValue, requireCondition, resultValue, stringValue, terminal, type Action, type AuthorizationPolicy, type Grant, type Member, type Message, type ResearchResult, type Run, type RuntimeEvent, type Scope, type Source, type WorkPackage } from '../contracts.js';
 import { decideParticipation } from '../participation.js';
 import { actionList, decideAuthorization, policyDigest, type AuthorizationDecision } from './authorization.js';
-import type { MessageChange } from '../contracts.js';
+import type { ClaimConfirmation, MessageChange } from '../contracts.js';
 import { DeliveryJournal } from './delivery.js';
 import { MembershipRegistry } from './memberships.js';
 import { textAttachment } from './attachments.js';
@@ -504,11 +504,15 @@ export class ControlState {
     this.claims.set(key, runId);
     return { run, duplicate: false };
   }
-  confirmClaim(actorId: string, runId: string, messageId: string, revision: number): { run: Run; duplicate: true } {
-    const run = this.currentRun(actorId, runId, 'claim');
+  confirmClaim(actorId: string, runId: string, messageId: string, revision: number): ClaimConfirmation {
+    const publication = this.resultKeys.get(runId);
+    const run = this.currentRun(actorId, runId, 'claim', Boolean(publication));
     requireCondition(run.sourceMessageId === messageId && run.work.source.revision === revision, 409, 'claim_binding_mismatch');
-    this.useTool(run);
-    return { run, duplicate: true };
+    // Reading an existing publication fact must work even at the tool limit.
+    // It never admits a new execution or changes the terminal state.
+    if (!publication) this.useTool(run);
+    return { run, duplicate: true, execution: { toolCalls: this.toolCalls.get(run.id)!,
+      publishedReceiptId: publication?.receiptId ?? null, sessionId: run.sessionId ?? null } };
   }
   currentRun(actorId: string, runId: string, action: Action, allowCompleted = false): Run {
     const run = this.runs.get(runId);
