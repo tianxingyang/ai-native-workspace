@@ -27,7 +27,7 @@ await cp(join(extracted, 'node.exe'), join(runtime, 'node.exe'));
 await cp(join(extracted, 'LICENSE'), join(runtime, 'NODE-LICENSE.txt'));
 await cp('dist/src', join(runtime, 'dist/src'), { recursive: true });
 await mkdir(join(runtime, 'dist/scripts'), { recursive: true });
-for (const name of ['desktop-host', 'web-demo', 'web-worker-demo', 'process-pair']) await cp(`dist/scripts/${name}.js`, join(runtime, `dist/scripts/${name}.js`));
+for (const name of ['desktop-host', 'desktop-recovery', 'web-demo', 'web-worker-demo', 'process-pair']) await cp(`dist/scripts/${name}.js`, join(runtime, `dist/scripts/${name}.js`));
 await writeFile(join(runtime, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
 const metadata = spawnSync('cargo', ['metadata', '--locked', '--format-version', '1', '--filter-platform', 'x86_64-pc-windows-msvc'], { cwd: 'src-tauri', encoding: 'utf8', maxBuffer: 20 * 1024 * 1024, windowsHide: true });
 if (metadata.status) throw new Error('Cargo license metadata unavailable');

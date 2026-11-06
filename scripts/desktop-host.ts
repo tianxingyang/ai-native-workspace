@@ -2,9 +2,10 @@ import { createInterface } from 'node:readline';
 import { startWebDemo } from './web-demo.js';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
+import { recoveryConnection } from './desktop-recovery.js';
 
-// This bridge has no URL/config/credential input. Only the disposable service
-// created by this process can be reached. HTTP still performs all authorization.
+// Web IPC has no URL/config/credential input. A native launcher may opt into
+// bounded loopback acceptance via the first stdin line. HTTP still authorizes.
 export function permittedRequest(path: unknown, body: unknown): path is string {
   if (typeof path !== 'string' || path.length > 2048 || !path.startsWith('/') || path.startsWith('//') || path.includes('\\')) return false;
   if (body !== undefined) return ['/messages', '/read-position', '/threads', '/conversations', '/conversations/rename', '/memberships/add', '/memberships/remove', '/memberships/leave'].includes(path) || /^\/runs\/[a-zA-Z0-9_-]{1,100}\/cancel$/.test(path)
@@ -24,9 +25,21 @@ export function permittedRequest(path: unknown, body: unknown): path is string {
 }
 
 export async function startDesktopHost() {
-  const demo = await startWebDemo({ web: false, credentialFile: false });
   const output = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  const lines = input[Symbol.asyncIterator]();
+  const external = process.argv.includes('--recovery-acceptance');
+  let demo;
+  try {
+    if (external) {
+      const first = await lines.next();
+      if (first.done || Buffer.byteLength(first.value) > 8192) throw new Error('invalid_recovery_bootstrap');
+      const connection = recoveryConnection(JSON.parse(first.value));
+      // The launcher owns the stable service; client exit never renews credentials
+      // or destroys that service. Default disposable demos still stop as before.
+      demo = { ...connection, stop: async () => {} };
+    } else { demo = await startWebDemo({ web: false, credentialFile: false }); }
+  } catch { input.close(); process.stdin.destroy(); throw new Error('desktop_start_failed'); }
   let stopped = false, polling = false;
   const seen = new Set<string>();
   const request = async (path: string, body?: unknown) => {
@@ -63,7 +76,8 @@ export async function startDesktopHost() {
   input.on('close', () => void stop());
   process.stdout.on('error', () => void stop());
   process.on('SIGTERM', () => void stop());
-  input.on('line', line => void (async () => {
+  void (async () => { for await (const line of lines) {
+    void (async () => {
     let id: unknown;
     try {
       if (Buffer.byteLength(line) > 65536) throw new Error('invalid_request');
@@ -72,7 +86,8 @@ export async function startDesktopHost() {
       if (!Number.isSafeInteger(id) || !permittedRequest(data.path, data.body)) throw new Error('invalid_request');
       output({ id, ...await request(data.path, data.body) });
     } catch { output({ id, status: 503, value: { error: 'desktop_request_failed' } }); }
-  })());
+    })();
+  } await stop(); })().catch(() => void stop());
   return { stop };
 }
 
