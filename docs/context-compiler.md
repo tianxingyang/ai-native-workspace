@@ -18,7 +18,8 @@ VIT-106 提供独立 `src/worker/context-compiler.ts`，供 `LocalRuntime` 和 p
 - `confirm-claim` 增加明确的 `execution` 事实：服务端累计 `toolCalls`、`publishedReceiptId`（没有回执时为 `null`）、`sessionId`（未绑定时为 `null`）。工具计数和回执沿用控制面现有保存的数据，不增加持久化格式或凭据。缺失、格式错误、不一致的事实或控制面不可达均拒绝启动，不能从历史/摘要推断；旧控制端未提供这些字段时，新 worker 会拒绝执行。
 - 对没有发布回执的运行，核验调用计入原有工具预算，要求服务端计数与当前工具客户端的调用数一致；旧客户端已执行过动作或未知确认请求已经消耗预算时，新 worker 拒绝重放。已绑定的另一 provider session 同样被拒绝。本地 deadline 和调用计数在 pi 初始化期间共用，不因重新编译上下文而重置。
 - 对已有权威发布回执的当前运行或已完成运行，核验只读取该事实，不再消耗执行预算；worker 记录已知回执并以 `publication_already_recorded` 拒绝进入 provider，不再调用读取、审批或发送。回执读取仍必须通过全部绑定授权、版本、来源、取消状态及私有租约检查。拒绝重新执行不冒充 provider 完成或实际停止；原业务回执和终态不会因此改写。
-- pi 在异步模型工厂返回后、SDK auth/prompt 准备完成后的第一次实际模型请求前分别再做实时核验，封住初始化等待期间的撤权、取消、版本/受众/期限/预算变化和新增回执。SDK 已实际加入输入时仍保留 `input_applied` 事实，即使随后的请求核验拒绝模型执行。正常 pi 启动共用三次预算内核验，仍只有一个注入模型/SDK。
+- pi 保留异步模型工厂返回后及首次 `transformContext` 的实时核验，并通过会话独立的 runtime facade，在请求级 `getAuth()` 和原 SDK 异步 headers 转换都完成后，在固定 SDK 的 `transformHeaders` 分派前钩子中再次核验，随后才交给 provider。facade 保留 SDK 既有请求参数和 headers 转换结果，不修改共享 runtime；后续请求仍检查本地取消和原 deadline。不能把 `transformContext` 当作请求认证完成的证据。
+- 首次分派核验拒绝时，即使 SDK 把拒绝转成 assistant error 消息，adapter 也继续传播原拒绝，不能因并发发布者已有回执而误报本 provider 成功。SDK 已实际加入输入时仍保留 `input_applied` 事实，即使随后的请求核验拒绝模型执行。正常 pi 启动共用四次预算内核验，仍只有一个注入模型/SDK。
 - 每次工具调用前检查本地取消信号、完整工作包、Grant 期限、执行时限和调用次数。`send_message` 还要求合成证据类型与 `fixtures.invalid` 来源格式。实际读取和写入仍由 CoSeat API 逐次校验实时权限、版本、目标和回执。
 - pi 继续只暴露四个 CoSeat 工具，关闭环境资源加载、恢复和压缩。权限变更不能通过 source/input 文本扩展工具集；未知或失败的动作不能由提示词授权。
 - `input_received`、provider 实际确认的 `input_applied`、取消受理和 `stopped` 语义保持独立。需要成功发布回执才能完成；本轮不更改 PR #6 已修复的事件确认机制。
@@ -30,5 +31,7 @@ VIT-106 提供独立 `src/worker/context-compiler.ts`，供 `LocalRuntime` 和 p
 `test/context-compiler.test.ts` 覆盖约束完整性、未知要求、缺失授权、关键字段、冻结快照、排队过期、撤权/版本变化/伪造绑定在模型初始化前被拒绝，以及本地工具期限、预算与合成来源检查。既有 runtime/pi 测试覆盖输入确认、初始化失败、SDK 异步认证期间取消和真实 SDK 加注入模型的 HTTP 工具闭环。
 
 `test/context-recovery.test.ts` 增加控制状态往返恢复后的发布回执（含已完成及预算耗尽）、旧读取/审批动作、旧 session、结构化恢复输入、摘要伪造回执、缺失权威字段、控制端断连、迟到核验响应，以及模型工厂/SDK auth 等待期间失效的故障回归。真实 pi SDK 加合成模型还检查压缩文本留在 user 数据、全部固定约束和当前绑定仍到达模型请求，并由实际 CoSeat 发送回执完成。
+
+请求分派竞态回归额外挂起真实 SDK 请求级 `getAuth()`，分别在等待期间撤权、取消、记录发布回执和缩减预算，要求 provider 调用数为零且保留真实输入应用事件。`test/pi-request-admission.test.ts` 对完整异步 headers 转换覆盖同样四类失效，另验证 headers/原 runtime 方法得到保留、headers 失败不能被绕过。所有测试使用合成 provider；没有改动 SDK、加载环境扩展或启用认证/模型网络。
 
 本轮没有真实模型/互联网调研验证，不声明 VIT-106 全部完成。原 provider checkpoint 的安全续跑、真实 SDK 压缩后的上下文重建、完整已执行动作账本及第二真实 provider 兼容性仍需后续单独实现和验证。本轮验证的是拒绝不安全恢复、普通摘要输入的边界，以及现有发布回执对账，不把普通摘要输入测试当作原生压缩支持。

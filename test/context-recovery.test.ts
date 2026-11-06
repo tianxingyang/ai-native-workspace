@@ -231,3 +231,40 @@ test('authority lost during SDK auth preflight prevents the first model request'
   assert.equal(modelCalls(), 0);
   assert.equal(run.receiptId, undefined);
 });
+
+for (const mutation of ['revoked', 'cancelled', 'receipt', 'budget'] as const) {
+  test(`request-level getAuth cannot admit a stale first provider request: ${mutation}`, { timeout: 10000 }, async t => {
+    const entered = gate(), hold = gate(); let modelCalls = () => -1;
+    const env = await environment(piExecution(async () => {
+      const model = await fixturePiModel()(); modelCalls = model.callCount!;
+      const getAuth = model.runtime.getAuth.bind(model.runtime);
+      model.runtime.getAuth = async (providerOrModel: string | Parameters<typeof getAuth>[0], overrides?: Parameters<typeof getAuth>[1]) => {
+        entered.release(); await hold.promise;
+        return typeof providerOrModel === 'string' ? getAuth(providerOrModel, overrides) : getAuth(providerOrModel, overrides);
+      };
+      return model;
+    }, process.cwd()), false);
+    t.after(async () => { hold.release(); await env.dispose(); });
+    const { message } = await env.post(); const { run } = env.state.claim('sam', message.id);
+    const { sessionId } = await env.runtime.createSession(run.work);
+    await env.runtime.submitInput(sessionId, input); await entered.promise;
+    assert.equal(env.state.snapshot().toolCalls.find(([id]) => id === run.id)?.[1], 3);
+    assert.equal(modelCalls(), 0);
+    assert.equal(env.runtime.events(sessionId, 0).filter(event => event.kind === 'input_applied').length, 1);
+    if (mutation === 'revoked') env.state.config.grants.find(grant => grant.id === run.work.grant.id)!.revoked = true;
+    if (mutation === 'cancelled') env.state.cancel('alex', run.id);
+    if (mutation === 'receipt') env.state.publish('sam', run.id, fixtureResult());
+    if (mutation === 'budget') run.work.budget.maxToolCalls = 1;
+    const originalReceipt = run.receiptId;
+    hold.release();
+    await waitFor(() => terminal(env.runtime.status(sessionId).status) ? true : undefined);
+    const events = env.runtime.events(sessionId, 0);
+    assert.equal(modelCalls(), 0);
+    assert.equal(events.at(-1)!.status, 'failed');
+    assert.equal(events.filter(event => event.kind === 'input_applied').length, 1);
+    assert.equal(run.receiptId, originalReceipt);
+    assert.equal(env.state.approvals.size, 0);
+    assert.equal([...env.state.messages.values()].filter(item => item.origin === 'research').length, mutation === 'receipt' ? 1 : 0);
+    if (mutation === 'receipt') assert.equal(events.find(event => event.kind === 'failed')?.data.receiptId, originalReceipt);
+  });
+}
