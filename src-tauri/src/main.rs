@@ -19,6 +19,7 @@ use tauri::{
 };
 mod notifications;
 mod presentation;
+mod recovery;
 use presentation::{DEMO_LOCALE, DEMO_ZH_CN};
 
 struct Host {
@@ -28,6 +29,7 @@ struct Host {
     next: AtomicU64,
     quitting: AtomicBool,
     connected: AtomicBool,
+    storage_protected: AtomicBool,
     messages_received: AtomicU64,
     notifications_submitted: AtomicU64,
 }
@@ -145,7 +147,7 @@ async fn desktop_request(
     path: String,
     body: Option<Value>,
 ) -> Result<Value, String> {
-    if !permitted(&path, &body) {
+    if !host.storage_protected.load(Ordering::SeqCst) || !permitted(&path, &body) {
         return Err("request_denied".into());
     }
     let host = host.inner().clone();
@@ -168,6 +170,7 @@ fn desktop_connected(host: tauri::State<'_, Arc<Host>>, connected: bool) {
 fn desktop_status(app: tauri::AppHandle, host: tauri::State<'_, Arc<Host>>) -> Value {
     let window = app.get_webview_window("main").unwrap();
     json!({ "connected": host.connected.load(Ordering::SeqCst),
+        "storageProtected": host.storage_protected.load(Ordering::SeqCst),
         "messagesReceived": host.messages_received.load(Ordering::SeqCst),
         "notificationsSubmitted": host.notifications_submitted.load(Ordering::SeqCst),
         "visible": window.is_visible().unwrap_or(false), "focused": window.is_focused().unwrap_or(false) })
@@ -192,6 +195,14 @@ fn show(app: &tauri::AppHandle) {
 }
 
 fn main() {
+    let recovery = if std::env::args().any(|arg| arg == "--recovery-acceptance") {
+        match recovery::Recovery::read() {
+            Ok(value) => Some(value),
+            Err(_) => std::process::exit(1),
+        }
+    } else {
+        None
+    };
     tauri::Builder::default()
         .manage(Arc::new(notifications::Notifications::default()))
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
@@ -209,7 +220,7 @@ fn main() {
             desktop_present,
             notifications::desktop_take_notification
         ])
-        .setup(|app| {
+        .setup(move |app| {
             let resource = app.path().resource_dir()?.join("runtime");
             let mut command = Command::new(resource.join("node.exe"));
             command
@@ -227,20 +238,42 @@ fn main() {
                     command.env(name, value);
                 }
             }
+            if recovery.is_some() {
+                command.arg("--recovery-acceptance");
+            }
             let mut child = command.spawn()?;
             let stdout = child.stdout.take().unwrap();
+            let mut stdin = child.stdin.take().unwrap();
+            if let Some(bootstrap) = &recovery {
+                if writeln!(stdin, "{}", bootstrap.connection()).is_err() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("recovery_bootstrap_failed".into());
+                }
+            }
             let host = Arc::new(Host {
-                stdin: Mutex::new(child.stdin.take().unwrap()),
+                stdin: Mutex::new(stdin),
                 child: Mutex::new(child),
                 pending: Mutex::new(HashMap::new()),
                 next: AtomicU64::new(1),
                 quitting: AtomicBool::new(false),
                 connected: AtomicBool::new(false),
+                storage_protected: AtomicBool::new(false),
                 messages_received: AtomicU64::new(0),
                 notifications_submitted: AtomicU64::new(0),
             });
             app.manage(host.clone());
-            tauri::WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?
+            let mut window =
+                tauri::WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?;
+            if let Some(bootstrap) = recovery {
+                // Credentials remain in the sidecar. Startup never authenticates
+                // the UI automatically; only encrypted checkpoints/intents persist.
+                window = window
+                    .incognito(false)
+                    .data_directory(bootstrap.profile_directory);
+            }
+            let window = window
+                .visible(false)
                 .title(DEMO_ZH_CN.window_title)
                 .on_navigation(|url| {
                     url.as_str().starts_with("http://tauri.localhost/")
@@ -248,6 +281,30 @@ fn main() {
                 })
                 .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
                 .build()?;
+            let protected_host = host.clone();
+            let protected_app = app.handle().clone();
+            window.with_webview(move |webview| {
+                use windows::core::Interface;
+                // WebView2 otherwise persists submitted textarea contents in
+                // its plaintext Web Data autofill database, outside IndexedDB.
+                // Keep the window hidden and IPC closed until both settings apply.
+                let result = (|| -> windows::core::Result<()> {
+                    unsafe {
+                        let settings = webview.controller().CoreWebView2()?.Settings()?;
+                        let settings = settings.cast::<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings4>()?;
+                        settings.SetIsGeneralAutofillEnabled(false)?;
+                        settings.SetIsPasswordAutosaveEnabled(false)?;
+                    }
+                    Ok(())
+                })();
+                if result.is_ok() {
+                    protected_host.storage_protected.store(true, Ordering::SeqCst);
+                    show(&protected_app);
+                } else {
+                    protected_host.stop();
+                    protected_app.exit(1);
+                }
+            })?;
             notifications::queue_activation(app.handle(), std::env::args().skip(1));
             let event_app = app.handle().clone();
             std::thread::spawn(move || {
