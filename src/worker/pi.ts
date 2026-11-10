@@ -5,6 +5,7 @@ import { createAgentSession, createExtensionRuntime, ModelRuntime, SessionManage
 import { objectValue, requireCondition, resultValue, stringValue } from '../contracts.js';
 import type { Execute } from './runtime.js';
 import { ContextCompiler } from './context-compiler.js';
+import { withPiRequestAdmission } from './pi-request-admission.js';
 
 export interface PiModelConfig { runtime: ModelRuntime; model: Model<string>; callCount?: () => number }
 export type PiModelFactory = () => Promise<PiModelConfig>;
@@ -17,6 +18,21 @@ export function piExecution(modelFactory: PiModelFactory, workspace: string): Ex
     work = context.work; input = context.input;
     const { runtime, model, callCount } = await modelFactory();
     compiler.compile(work, input, signal);
+    await tools.prepareExecution();
+    let requestAdmitted = false;
+    let admissionFailure: { error: unknown } | undefined;
+    const requestRuntime = withPiRequestAdmission(runtime, async () => {
+      try {
+        // ModelRuntime resolves request auth after transformContext. Its final
+        // headers hook runs after that auth and the SDK's async headers hook.
+        if (!requestAdmitted) { await tools.prepareExecution(); requestAdmitted = true; }
+        tools.assertActive(); signal.throwIfAborted();
+      } catch (error) {
+        // lazyStream converts admission errors to SDK assistant error messages.
+        // Preserve the rejection even when a concurrent publisher has a receipt.
+        admissionFailure ??= { error }; throw error;
+      }
+    });
     const resourceLoader: ResourceLoader = {
       getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
       getSkills: () => ({ skills: [], diagnostics: [] }),
@@ -36,12 +52,23 @@ export function piExecution(modelFactory: PiModelFactory, workspace: string): Ex
     ];
     const { session } = await createAgentSession({
       cwd: resolve(workspace), agentDir: resolve(workspace, 'sdk-state-unused'),
-      modelRuntime: runtime, model, thinkingLevel: 'off', resourceLoader,
+      modelRuntime: requestRuntime, model, thinkingLevel: 'off', resourceLoader,
       tools: [...work.tools], customTools,
       sessionManager: SessionManager.inMemory(resolve(workspace)),
       settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false, provider: { maxRetries: 0 } }, cacheWarming: 'off', enableAnalytics: false, enableInstallTelemetry: false }),
     });
     const activeTools = session.getActiveToolNames().sort();
+    const transformContext = session.agent.transformContext;
+    let admitted = false;
+    session.agent.transformContext = async (messages, requestSignal) => {
+      const transformed = transformContext ? await transformContext(messages, requestSignal) : messages;
+      // Keep the early context check; request auth and headers still await
+      // afterwards, so the request-runtime facade also checks before dispatch.
+      if (!admitted) { await tools.prepareExecution(); admitted = true; }
+      tools.assertActive();
+      requestSignal?.throwIfAborted();
+      return transformed;
+    };
     const sdkEvents: string[] = [];
     const unsubscribe = session.subscribe(event => {
       // An abort during asynchronous prompt preflight can precede the SDK's
@@ -68,6 +95,7 @@ export function piExecution(modelFactory: PiModelFactory, workspace: string): Ex
       await session.prompt(input.text);
       await session.waitForIdle();
       signal.throwIfAborted();
+      if (admissionFailure) throw admissionFailure.error;
       requireCondition(Boolean(tools.receiptId), 409, 'sdk_did_not_publish');
       output({ text: session.getLastAssistantText() ?? '', receiptId: tools.receiptId, sdkEvents, activeTools, modelCalls: callCount?.() ?? null, evidenceLevel: 'real_sdk_with_injected_model' });
     } finally {
