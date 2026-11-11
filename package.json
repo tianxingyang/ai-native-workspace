@@ -7,6 +7,8 @@
     "node": ">=24.14.0 <25"
   },
   "scripts": {
+    "quality:gate": "node scripts/quality-gate.mjs",
+    "quality:gate:test": "node --test scripts/quality-gate.test.mjs",
     "build": "npm run check:desktop-resources && tsc -p tsconfig.json",
     "test": "npm run build && node --test --test-concurrency=1 dist/test/*.test.js web-test/*.test.mjs scripts/*.test.mjs",
     "demo": "npm run build && node dist/scripts/demo.js",
