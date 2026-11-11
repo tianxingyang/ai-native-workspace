@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { CHECKS, browserVersionCommand, parseArgs, runCommand, runGate, summarize } from './quality-gate.mjs';
+import { CHECKS, auditSourceFiles, browserVersionCommand, parseArgs, runCommand, runGate, summarize } from './quality-gate.mjs';
 
 const sha = 'a'.repeat(40);
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -32,7 +32,7 @@ async function fixture(t, { body = "console.log('synthetic evaluation fixture');
   await mkdir(join(root, 'src-tauri'));
   for (const [path, bytes] of Object.entries({
     '.node-version': `${node}\n`,
-    '.gitignore': 'eval/generated-cache/\n',
+    '.gitignore': 'eval/generated-cache/\nnode_modules/\n',
     'package.json': JSON.stringify({ type: 'module', engines: { node: '>=24.14.0 <25' } }),
     'package-lock.json': '{}\n', 'src-tauri/Cargo.toml': '# synthetic fixture\n', 'src-tauri/Cargo.lock': '# synthetic fixture\n',
     'marker.txt': 'original', 'eval/vit121/harness.test.mjs': body,
@@ -195,6 +195,48 @@ test('ignored output beneath a tracked directory and metadata-only changes do no
   assert.equal(manifest.source.verifiedAtEnd, true);
   assert.deepEqual(manifest.integrityErrors, []); assert.deepEqual(manifest.sourceEvents, []);
   assert.equal(manifest.overallStatus, 'NOT-RUN');
+});
+
+test('unidentified notifications audit every tracked file and fail on changed or unreadable bytes', async t => {
+  const root = await workspace(t);
+  await writeFile(join(root, 'first.txt'), 'first'); await writeFile(join(root, 'later.txt'), 'later');
+  const hashes = new Map([['first.txt', digest('first')], ['later.txt', digest('later')]]);
+  assert.deepEqual(auditSourceFiles(root, hashes), []);
+  await writeFile(join(root, 'later.txt'), 'changed');
+  assert.deepEqual(auditSourceFiles(root, hashes), ['later.txt']);
+  await rm(join(root, 'first.txt'));
+  assert.deepEqual(auditSourceFiles(root, hashes), ['first.txt', 'later.txt']);
+});
+
+test('ignored subtree notification churn is reconciled without discarding source verification', async t => {
+  const body = `import {mkdir,writeFile} from 'node:fs/promises';
+    for (const path of ['../generated-cache/','../../node_modules/.cache/']) {
+      const cache=new URL(path,import.meta.url); await mkdir(cache,{recursive:true});
+      for (let batch=0;batch<16;batch++) await Promise.all(Array.from({length:64},(_,i)=>writeFile(new URL(batch+'-'+i+'.txt',cache),'ignored synthetic output')));
+    }
+    await new Promise(r=>setTimeout(r,100));`;
+  const { root, args } = await fixture(t, { body });
+  const { manifest } = await runGate(args, root);
+  assert.equal(manifest.checks.find(check => check.id === 'eval').status, 'PASS');
+  assert.equal(manifest.sourceMonitor.mode, 'tracked-byte-reconciliation');
+  assert.equal(manifest.sourceMonitor.unknownNotifications, manifest.sourceMonitor.reconciledUnknownNotifications);
+  assert.equal(manifest.source.verifiedAtEnd, true, JSON.stringify({ setupErrors: manifest.setupErrors, integrityErrors: manifest.integrityErrors, sourceEvents: manifest.sourceEvents, sourceMonitor: manifest.sourceMonitor }));
+  assert.deepEqual(manifest.integrityErrors, []);
+  assert.equal(manifest.overallStatus, 'NOT-RUN');
+});
+
+test('tracked directory rename and restore is observed at its original path', async t => {
+  const body = `import {rename} from 'node:fs/promises';
+    const from=new URL('./',import.meta.url),to=new URL('../vit121-moved/',import.meta.url);
+    await rename(from,to); await new Promise(r=>setTimeout(r,100));
+    await rename(to,from); await new Promise(r=>setTimeout(r,100));`;
+  const { root, args } = await fixture(t, { body });
+  const { manifest } = await runGate(args, root);
+  assert.equal(manifest.checks.find(check => check.id === 'eval').status, 'PASS');
+  assert.equal(manifest.overallStatus, 'SETUP-ERROR');
+  assert.match(manifest.integrityErrors.join('\n'), /Source change observed/);
+  assert.ok(manifest.sourceEvents.some(event => event.path === 'eval/vit121/harness.test.mjs'));
+  assert.equal(git(root, ['status', '--porcelain']), '');
 });
 
 test('evidence cannot be written inside the source checkout, including dot-dot-prefixed names', async t => {

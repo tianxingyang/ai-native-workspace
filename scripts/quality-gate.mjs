@@ -134,24 +134,34 @@ export function browserVersionCommand(module) {
   return [process.execPath, '--input-type=module', '--eval', code];
 }
 
+export function auditSourceFiles(root, hashes, files = [...hashes.keys()]) {
+  return files.filter(path => {
+    try { return hash(readFileSync(join(root, path))) !== hashes.get(path); }
+    catch { return true; } // Unreadable/missing is never equivalent to unchanged.
+  });
+}
+
 function watchSource(root, manifest) {
   const paths = git(root, ['ls-files', '-z']).split('\0').filter(Boolean);
   paths.push('.git/HEAD');
   try { paths.push(`.git/${git(root, ['symbolic-ref', '-q', 'HEAD'])}`); } catch { /* Detached HEAD has no branch ref. */ }
   const hashes = new Map(paths.filter(path => existsSync(join(root, path))).map(path => [path, hash(readFileSync(join(root, path)))]));
+  manifest.sourceMonitor = { mode: 'tracked-byte-reconciliation', unknownNotifications: 0, reconciledUnknownNotifications: 0 };
   return watch(root, { recursive: true }, (event, filename) => {
     const path = filename?.toString().replaceAll('\\', '/');
-    const candidates = !path ? [] : hashes.has(path) ? [path] : event === 'rename' ? paths.filter(file => file.startsWith(`${path}/`)) : [];
-    for (const candidate of candidates) {
-      let current;
-      try { current = hash(readFileSync(join(root, candidate))); } catch { current = null; }
-      // Windows may report directory/attribute metadata changes for ordinary
-      // reads or ignored outputs. Compare bytes before invalidating source.
-      if (current === hashes.get(candidate)) continue;
-      if (!manifest.sourceEvents.some(item => item.path === candidate)) manifest.sourceEvents.push({ event, path: candidate, observedAt: now() });
+    // Windows can omit filenames when ignored output is noisy. Reconcile all
+    // tracked bytes rather than treating an unidentifiable event as a pass or
+    // an unconditional failure. This is best-effort evidence, not OS auditing.
+    const candidates = !path ? [...hashes.keys()] : hashes.has(path) ? [path] : event === 'rename' ? [...hashes.keys()].filter(file => file.startsWith(`${path}/`)) : [];
+    const changed = auditSourceFiles(root, hashes, candidates);
+    if (!path) {
+      manifest.sourceMonitor.unknownNotifications++;
+      if (!changed.length) manifest.sourceMonitor.reconciledUnknownNotifications++;
+    }
+    for (const candidate of changed) {
+      if (!manifest.sourceEvents.some(item => item.path === candidate)) manifest.sourceEvents.push({ event, path: candidate, observedAt: now(), trigger: path ? 'file-event' : 'unknown-notification-audit' });
       if (!manifest.integrityErrors.includes('Source change observed during the run')) manifest.integrityErrors.push('Source change observed during the run');
     }
-    if (!path) manifest.integrityErrors.push('Source watcher could not identify a changed path');
   });
 }
 
