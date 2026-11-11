@@ -3,6 +3,7 @@ import { ApiError, requireCondition, scopeValue, stringValue } from '../contract
 import { bearer, jsonBody, respond, server } from '../http.js';
 import { PrivateEngine } from './engine.js';
 import { clientSession, serveWeb } from './web.js';
+import { claimInput } from '../control/work-identity.js';
 
 export function privateService(engine: PrivateEngine, options: { web?: boolean } = {}) {
   const { state } = engine;
@@ -126,6 +127,10 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
     }
     if (url.pathname === '/worker/not-started' && body) {
       respond(response, 200, commit(() => engine.notStarted(actor, stringValue(body.instanceId, 'instance', 128), stringValue(body.leaseId, 'lease', 128)))); return;
+    }
+    if (url.pathname === '/tools/claim' && body) {
+      const input = claimInput(body);
+      respond(response, 200, commit(() => state.presentClaim(state.claim(actor, input.messageId, input)))); return;
     }
     if (url.pathname.startsWith('/tools/') && body) {
       const runId = stringValue(body.runId, 'run', 128);

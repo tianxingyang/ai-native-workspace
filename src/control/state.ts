@@ -8,6 +8,8 @@ import { MembershipRegistry } from './memberships.js';
 import { textAttachment } from './attachments.js';
 import { ConversationRegistry, creationRuleValue, conversationInput, digest, type ConversationCreationRule, type GrantSource, type InitialGrant } from './conversations.js';
 import { ThreadRegistry, threadInput, THREAD_POLICY } from './threads.js';
+import { researchIdentity, researchSlot } from './work-identity.js';
+import type { PendingDispatch, ResearchSlot, Task } from '../contracts.js';
 
 export interface ControlConfig {
   members: Member[]; grants: Grant[]; tokens: Record<string, string>;
@@ -16,6 +18,10 @@ export interface ControlConfig {
   memberships: Record<string, Scope[]>; researchMemberId: string; sources: Source[];
   policy?: AuthorizationPolicy;
   conversationCreation?: ConversationCreationRule;
+}
+interface WorkClaim {
+  task: Task; run: Run; duplicate: boolean; ownedByActor: boolean;
+  blockedByCompletion?: true; blockedByInvalidation?: true; reconciliationRequired?: true; requestedWorkKey?: string;
 }
 export class ControlState {
   private storageEpoch = randomUUID();
@@ -30,6 +36,8 @@ export class ControlState {
   private readonly contextRevisions = new Map<string, number>();
   private readonly readPositions = new Map<string, string>();
   readonly runs = new Map<string, Run>();
+  readonly tasks = new Map<string, Task>();
+  private readonly pendingDispatches = new Map<string, PendingDispatch>();
   readonly approvals = new Map<string, { id: string; runId: string; memberId: string; action: string; reason: string; status: 'pending' }>();
   readonly decisions: { messageId: string; participate: boolean; reason: string }[] = [];
   readonly audit: { actorId: string; action: string; allowed: boolean; resource: Scope; at: number; reason?: AuthorizationDecision['reason'] | 'policy_revision_changed' | 'grant_revision_changed' | 'grant_expired'; policyVersion?: number; policyDigest?: string; grantIds?: string[]; grantRevisions?: { id: string; revision: number }[] }[] = [];
@@ -40,9 +48,14 @@ export class ControlState {
   constructor(readonly config: ControlConfig, private readonly now = Date.now) {}
 
   snapshot() {
+    // A stopped/invalidated assignment is not eligible for a new dispatch.
+    for (const [id] of this.pendingDispatches) {
+      const run = this.runs.get(id);
+      if (!run || run.status !== 'queued' || run.invalidatedBy) this.pendingDispatches.delete(id);
+    }
     return structuredClone({ storageEpoch: this.storageEpoch, messages: [...this.messages], attachments: [...this.attachments], runs: [...this.runs], approvals: [...this.approvals],
       decisions: this.decisions, audit: this.audit.slice(-1000), messageKeys: [...this.messageKeys],
-      claims: [...this.claims], resultKeys: [...this.resultKeys], toolCalls: [...this.toolCalls],
+      claims: [...this.claims], tasks: [...this.tasks], pendingDispatches: [...this.pendingDispatches], resultKeys: [...this.resultKeys], toolCalls: [...this.toolCalls],
       changes: [...this.changes], changeKeys: [...this.changeKeys], contextRevisions: [...this.contextRevisions], readPositions: [...this.readPositions], delivery: this.delivery.snapshot(), memberships: this.memberships.snapshot(), conversations: this.conversations.snapshot(), threads: this.threads.snapshot() });
   }
   restore(data: ReturnType<ControlState['snapshot']>): void {
@@ -50,7 +63,14 @@ export class ControlState {
     const restoreMap = <K, V>(map: Map<K, V>, entries: [K, V][]) => { map.clear(); for (const [key, value] of entries) map.set(key, value); };
     restoreMap(this.messages, data.messages); restoreMap(this.runs, data.runs); restoreMap(this.approvals, data.approvals);
     restoreMap(this.attachments, data.attachments ?? []);
-    restoreMap(this.messageKeys, data.messageKeys); restoreMap(this.claims, data.claims);
+    restoreMap(this.messageKeys, data.messageKeys);
+    restoreMap(this.tasks, data.tasks ?? []); restoreMap(this.pendingDispatches, data.pendingDispatches ?? []);
+    if (!data.tasks) this.migrateLegacyTasks();
+    this.claims.clear();
+    for (const task of this.tasks.values()) {
+      task.workKeys ??= [...new Set([task.workKey, ...data.claims.filter(([, id]) => id === task.id).map(([key]) => key)])];
+      for (const key of task.workKeys) this.claims.set(key, task.id);
+    }
     restoreMap(this.resultKeys, data.resultKeys); restoreMap(this.toolCalls, data.toolCalls);
     restoreMap(this.changes, data.changes ?? []); restoreMap(this.changeKeys, data.changeKeys ?? []);
     restoreMap(this.contextRevisions, data.contextRevisions ?? []);
@@ -61,6 +81,40 @@ export class ControlState {
     this.threads.restore(data.threads);
     this.decisions.splice(0, this.decisions.length, ...data.decisions);
     this.restoreAudit(data.audit);
+  }
+  private migrateLegacyTasks(): void {
+    const groups = new Map<string, Run[]>();
+    for (const run of this.runs.values()) {
+      const source = run.work.source, slot = run.work.workIdentity?.slot ?? 'research';
+      const family = JSON.stringify([source.conversationId, source.threadId, source.messageId, 'research', slot]);
+      const group = groups.get(family) ?? []; group.push(run); groups.set(family, group);
+    }
+    for (const runs of groups.values()) {
+      const current = runs.at(-1)!, root = runs[0]!;
+      const linked = runs.every((run, index) => run.memberId === root.memberId && (index === runs.length - 1
+        || (run.replacementRunId === runs[index + 1]!.id && run.invalidatedBy && terminal(run.status) && !run.receiptId)));
+      const conflict = runs.length > 1 && !linked;
+      const taskId = linked ? root.taskId : current.taskId;
+      const workKey = researchIdentity(current.work.source, current.work.workIdentity?.slot).key;
+      const workKeys = [...new Set(runs.map(run => researchIdentity(run.work.source, run.work.workIdentity?.slot).key))];
+      const aliases = [...new Set(runs.map(run => run.taskId))].filter(id => id !== taskId);
+      if (conflict) for (const run of runs) if (!terminal(run.status)) {
+        run.status = 'unknown'; run.error = 'legacy_work_identity_collision'; run.rebuildAfterInvalidation = false;
+      }
+      const task: Task = { id: taskId, workKey, workKeys, source: { ...current.work.source }, intent: 'research', slot: current.work.workIdentity?.slot ?? 'research',
+        ownerId: conflict ? null : current.memberId, createdAt: this.messages.get(current.sourceMessageId)?.createdAt ?? this.now(), currentRunId: current.id, runIds: runs.map(run => run.id),
+        ...(aliases.length ? { legacyTaskIds: aliases } : {}), ...(conflict ? { reconciliationRequired: true as const } : {}) };
+      this.tasks.set(task.id, task);
+      // Keep existing wire taskIds/work packages, sessions, owner and receipts intact.
+      if (!conflict && current.status === 'queued' && !current.sessionId && !current.invalidatedBy) this.pendingDispatches.set(current.id, { taskId: task.id, runId: current.id, workKey });
+    }
+  }
+  pendingRuns(): Run[] {
+    return [...this.pendingDispatches.keys()].map(id => this.runs.get(id)!).filter(run => run?.status === 'queued' && !run.invalidatedBy);
+  }
+  dispatched(runId: string): void { this.pendingDispatches.delete(runId); }
+  presentClaim(value: ReturnType<ControlState['claim']>) {
+    return { ...value, task: { ...value.task, status: value.run.status }, run: this.presentRun(value.run) };
   }
   restoreAudit(entries: ControlState['audit']): void {
     this.audit.splice(0, this.audit.length, ...entries.slice(-1000).map(({ actorId, action, allowed, resource, at, reason, policyVersion, policyDigest, grantIds, grantRevisions }) => ({
@@ -448,9 +502,10 @@ export class ControlState {
       // Never overlap replacement work with an unconfirmed stale execution.
       if ([...this.runs.values()].some(r => r.memberId === old.memberId && r.invalidatedBy && !terminal(r.status)
         && r.work.route.conversationId === source.conversationId && r.work.route.threadId === source.threadId)) continue;
-      if (!this.evaluate(source)) { old.rebuildAfterInvalidation = false; continue; }
+      if (!this.evaluate(source, old.memberId)) { old.rebuildAfterInvalidation = false; continue; }
       try {
-        const replacement = this.claim(old.memberId, source.id);
+        const replacement = this.claimWork(old.memberId, source.id, source.revision, old.work.workIdentity?.slot ?? 'research', old.id);
+        if (replacement.blockedByCompletion || replacement.reconciliationRequired) { old.rebuildAfterInvalidation = false; continue; }
         old.replacementRunId = replacement.run.id;
         if (!replacement.duplicate) created.push(replacement.run);
       } catch {
@@ -460,9 +515,8 @@ export class ControlState {
     }
     return created;
   }
-  evaluate(message: Message): boolean {
+  evaluate(message: Message, memberId = this.config.researchMemberId): boolean {
     if (message.retracted) return false;
-    const memberId = this.config.researchMemberId;
     // Inaccessible contents never enter the participation policy or worker queue.
     if (!this.visible(memberId, message)) return false;
     const author = this.config.members.find(m => m.id === message.authorId)!;
@@ -470,32 +524,57 @@ export class ControlState {
     this.decisions.push({ messageId: message.id, ...decision });
     return decision.participate;
   }
-  claim(actorId: string, messageId: string): { run: Run; duplicate: boolean } {
+  claim(actorId: string, messageId: string, options: { sourceRevision?: number; slot?: ResearchSlot } = {}) {
+    return this.claimWork(actorId, messageId, options.sourceRevision, researchSlot(options.slot));
+  }
+  private claimWork(actorId: string, messageId: string, sourceRevision: number | undefined, slot: ResearchSlot, replacesRunId?: string): WorkClaim {
     const source = this.messages.get(messageId);
     requireCondition(source, 404, 'source_not_found');
-    requireCondition(!source.retracted, 409, 'message_retracted');
     const readGrant = this.authorize(actorId, 'read', source);
     const grant = this.authorize(actorId, 'claim', source);
     const sendGrant = this.authorize(actorId, 'send', source);
     const approvalGrant = this.authorize(actorId, 'request_approval', source);
+    requireCondition(!source.retracted, 409, 'message_retracted');
+    if (sourceRevision !== undefined) {
+      requireCondition(Number.isSafeInteger(sourceRevision) && sourceRevision > 0, 400, 'invalid_source_revision');
+      requireCondition(source.revision === sourceRevision, 409, 'source_revision_changed');
+    }
     const bindings = ([['read', readGrant], ['claim', grant], ['send', sendGrant], ['request_approval', approvalGrant]] as const)
       .map(([action, g]) => ({ action, id: g.id, revision: g.revision, expiresAt: g.expiresAt }));
     requireCondition(source.origin === 'chat' && this.config.members.find(m => m.id === source.authorId)?.kind === 'human', 409, 'not_a_research_source');
-    // Synchronous transaction in this single process. No awaits between check and insert.
+    // Synchronous domain mutation. PrivateEngine commits claim, Task, Run and dispatch
+    // relation together under the existing exclusive single-controller SQLite lock.
     const contextRevision = this.contextRevision(source);
-    const key = JSON.stringify([messageId, source.revision, 'research', contextRevision]);
-    // Keep persisted pre-versioning claim keys idempotent on the original context.
-    const legacyKey = contextRevision === 1 ? JSON.stringify([messageId, source.revision, 'research']) : '';
-    const prior = this.claims.get(key) ?? this.claims.get(legacyKey);
-    if (prior) {
-      const run = this.runs.get(prior)!;
-      requireCondition(run.memberId === actorId, 409, 'already_claimed');
-      return { run, duplicate: true };
-    }
-    const runId = randomUUID(), taskId = randomUUID();
     const scope = { conversationId: source.conversationId, threadId: source.threadId };
+    const identity = researchIdentity({ ...scope, messageId, revision: source.revision }, slot);
+    const prior = this.claims.get(identity.key);
+    const family = [...this.tasks.values()].filter(candidate => candidate.source.messageId === messageId
+      && candidate.source.conversationId === scope.conversationId && candidate.source.threadId === scope.threadId && candidate.slot === slot);
+    const conflict = family.find(candidate => candidate.reconciliationRequired);
+    if (conflict) return { task: conflict, run: this.runs.get(conflict.currentRunId)!, duplicate: true, ownedByActor: false, reconciliationRequired: true };
+    // Revision is not a replay permission. A committed publication is a durable
+    // side-effect fence for this source/slot family, including earlier revisions.
+    // An explicit rerun/compensation flow is outside this slice.
+    const publishedTask = family.find(candidate => candidate.runIds.some(id => this.runs.get(id)?.receiptId));
+    if (publishedTask) {
+      const run = this.runs.get(publishedTask.currentRunId)!;
+      return { task: publishedTask, run, duplicate: true, ownedByActor: run.memberId === actorId, blockedByCompletion: true };
+    }
+    const replacementTask = replacesRunId ? family.find(candidate => candidate.runIds.includes(replacesRunId)) : undefined;
+    const task = (prior ? this.tasks.get(prior) : undefined) ?? replacementTask ?? family[0];
+    if (task) {
+      const run = this.runs.get(task.currentRunId)!;
+      // A retry never admits execution, transfers ownership, or interprets a
+      // source revision as permission to rerun. Only stop reconciliation can
+      // advance the same Task to its next bound source/context revision.
+      if (replacesRunId !== run.id) return { task, run, duplicate: true, ownedByActor: run.memberId === actorId,
+        ...(task.workKey !== identity.key || run.invalidatedBy ? { blockedByInvalidation: true as const, requestedWorkKey: identity.key } : {}) };
+      requireCondition((!replacementTask || task === replacementTask) && run.memberId === actorId && run.invalidatedBy && terminal(run.status)
+        && run.work.contextRevision !== contextRevision, 409, 'replacement_not_settled');
+    }
+    const runId = randomUUID(), taskId = task?.id ?? randomUUID();
     const work: WorkPackage = {
-      protocol: PROTOCOL_VERSION, memberId: actorId, taskId, runId,
+      protocol: PROTOCOL_VERSION, memberId: actorId, taskId, runId, workIdentity: identity,
       source: { ...scope, messageId, revision: source.revision }, contextRevision,
       grant: { id: grant.id, revision: grant.revision, expiresAt: Math.min(...bindings.map(g => g.expiresAt)) },
       authorization: { policyVersion: this.config.policy?.version ?? 0, policyDigest: this.scopePolicyDigest(scope), grants: bindings },
@@ -505,8 +584,14 @@ export class ControlState {
     };
     const run: Run = { id: runId, taskId, memberId: actorId, sourceMessageId: messageId, intent: 'research', work, status: 'queued', events: [] };
     this.runs.set(runId, run);
-    this.claims.set(key, runId);
-    return { run, duplicate: false };
+    const logicalTask: Task = task ?? { id: taskId, workKey: identity.key, workKeys: [], source: { ...work.source }, intent: 'research', slot, ownerId: actorId,
+      createdAt: this.now(), currentRunId: runId, runIds: [] };
+    logicalTask.currentRunId = runId; logicalTask.runIds.push(runId);
+    logicalTask.workKey = identity.key; logicalTask.source = { ...work.source };
+    if (!logicalTask.workKeys.includes(identity.key)) logicalTask.workKeys.push(identity.key);
+    this.tasks.set(taskId, logicalTask); this.claims.set(identity.key, taskId);
+    this.pendingDispatches.set(runId, { taskId, runId, workKey: identity.key });
+    return { task: logicalTask, run, duplicate: false, ownedByActor: true };
   }
   confirmClaim(actorId: string, runId: string, messageId: string, revision: number): ClaimConfirmation {
     const publication = this.resultKeys.get(runId);
@@ -530,7 +615,8 @@ export class ControlState {
     return run;
   }
   contextBlocked(run: Run): boolean {
-    return [...this.runs.values()].some(r => r.id !== run.id && r.memberId === run.memberId && r.invalidatedBy && !terminal(r.status)
+    return [...this.runs.values()].some(r => r.id !== run.id && (r.memberId === run.memberId || (r.sourceMessageId === run.sourceMessageId
+      && (r.work.workIdentity?.slot ?? 'research') === (run.work.workIdentity?.slot ?? 'research'))) && r.invalidatedBy && !terminal(r.status)
       && r.work.route.conversationId === run.work.route.conversationId && r.work.route.threadId === run.work.route.threadId);
   }
   presentRun(run: Run): Run {
