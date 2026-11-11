@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { ApiError, objectValue, requireCondition } from './contracts.js';
+import { requestContext, requestRoute, type RequestAuditContext, type RequestRejectionAudit } from './request-audit.js';
 
 export async function jsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   requireCondition(request.headers['content-type']?.split(';')[0] === 'application/json', 415, 'json_required');
@@ -22,9 +23,22 @@ export function respond(response: ServerResponse, status: number, body: unknown)
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   response.end(JSON.stringify(body));
 }
-export function server(handler: (request: IncomingMessage, response: ServerResponse, url: URL) => Promise<void>) {
+export function server(handler: (request: IncomingMessage, response: ServerResponse, url: URL, context: RequestAuditContext) => Promise<void>, audit?: RequestRejectionAudit) {
   return createServer((request, response) => {
-    void handler(request, response, new URL(request.url ?? '/', 'http://localhost')).catch(error => {
+    const context = requestContext(request.method);
+    void (async () => {
+      let url: URL;
+      try { url = new URL(request.url ?? '/', 'http://localhost'); }
+      catch { throw new ApiError(400, 'invalid_request_target'); }
+      context.route = requestRoute(url.pathname);
+      audit?.flush();
+      await handler(request, response, url, context);
+    })().catch(error => {
+      // A completed response or disconnected peer is not a new request rejection. In
+      // particular, a response failure cannot roll back an already committed action.
+      if (response.headersSent || response.writableEnded || response.destroyed) return;
+      try { audit?.record(context, error); }
+      catch { error = new ApiError(503, 'request_audit_persistence_failed'); }
       const known = error instanceof ApiError;
       respond(response, known ? error.status : 500, { error: known ? error.code : 'internal_error' });
     });

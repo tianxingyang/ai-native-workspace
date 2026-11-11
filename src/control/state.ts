@@ -124,6 +124,10 @@ export class ControlState {
       ...(grantRevisions === undefined ? {} : { grantRevisions: grantRevisions.map(({ id, revision }) => ({ id, revision })) }),
     })));
   }
+  private appendAudit(entry: ControlState['audit'][number]): void {
+    this.audit.push(entry);
+    this.audit.splice(0, Math.max(0, this.audit.length - 1000));
+  }
 
   authenticate(token: string): string {
     const actorId = this.config.tokens[token];
@@ -139,7 +143,7 @@ export class ControlState {
     // Resolve audit metadata independently of expiry passing between two clock reads.
     const grants = [...this.config.grants, ...this.conversations.allGrants()];
     const grantRevisions = grantIds.map(id => ({ id, revision: grants.find(g => g.id === id)!.revision }));
-    this.audit.push({ actorId, action, allowed, reason, policyVersion, policyDigest, grantIds, grantRevisions, resource: { conversationId: scope.conversationId, threadId: scope.threadId }, at: this.now() });
+    this.appendAudit({ actorId, action, allowed, reason, policyVersion, policyDigest, grantIds, grantRevisions, resource: { conversationId: scope.conversationId, threadId: scope.threadId }, at: this.now() });
     requireCondition(allowed && grant, 403, 'scope_denied');
     return grant;
   }
@@ -318,7 +322,7 @@ export class ControlState {
   }
   leaveScopeMember(actorId: string, scope: Scope, expectedGeneration: string, clientEventId: string) {
     const attempt = { actorId, action: 'leave', allowed: false, resource: { ...scope }, at: this.now() };
-    this.audit.push(attempt);
+    this.appendAudit(attempt);
     requireCondition(this.config.members.some(member => member.id === actorId), 403, 'member_required');
     const configured = this.configuredScopes(actorId);
     requireCondition(configured.some(s => s.conversationId === scope.conversationId && s.threadId === scope.threadId), 404, 'scope_member_not_found');
@@ -629,7 +633,7 @@ export class ControlState {
   authorizeRunGrant(actorId: string, run: Run, actions: Action[]): void {
     requireCondition(run.memberId === actorId, 403, 'run_denied');
     const check = (condition: unknown, code: 'policy_revision_changed' | 'grant_revision_changed' | 'grant_expired', status = 409) => {
-      if (!condition) this.audit.push({ actorId, action: actions[0] ?? 'read', allowed: false, reason: code,
+      if (!condition) this.appendAudit({ actorId, action: actions[0] ?? 'read', allowed: false, reason: code,
         resource: { conversationId: run.work.route.conversationId, threadId: run.work.route.threadId }, at: this.now(),
         policyVersion: this.config.policy?.version ?? 0, policyDigest: this.scopePolicyDigest(run.work.route),
         grantIds: (run.work.authorization?.grants ?? [run.work.grant]).map(g => g.id),

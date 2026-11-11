@@ -4,6 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { requireCondition } from '../contracts.js';
 import type { ControlConfig } from '../control/state.js';
+import { REQUEST_AUDIT_LIMIT, type RequestRejection } from '../request-audit.js';
 
 /** Small single-instance trial: one bounded aggregate commits all related facts atomically. */
 export class SnapshotStore {
@@ -14,6 +15,7 @@ export class SnapshotStore {
     try {
       this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA locking_mode=EXCLUSIVE; CREATE TABLE IF NOT EXISTS snapshot (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, body TEXT NOT NULL) STRICT;');
       this.db.exec('CREATE TABLE IF NOT EXISTS authorization_audit (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL) STRICT;');
+      this.db.exec('CREATE TABLE IF NOT EXISTS request_rejection_audit (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL) STRICT;');
       this.db.exec('CREATE TABLE IF NOT EXISTS authorization_configuration (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL) STRICT;');
       // Retain SQLite's exclusive lock for this connection; a second service must fail startup.
       this.db.exec('BEGIN EXCLUSIVE; COMMIT;');
@@ -41,6 +43,14 @@ export class SnapshotStore {
   saveAudit(entries: readonly unknown[]): void {
     // Its own atomic SQLite transaction, independent of business rollback and snapshot size limits.
     this.db.prepare('INSERT INTO authorization_audit(id, body) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body').run(JSON.stringify(entries.slice(-1000)));
+  }
+  loadRequestAudit(): unknown {
+    const row = this.db.prepare('SELECT body FROM request_rejection_audit WHERE id=1').get();
+    return row ? JSON.parse(String(row.body)) : undefined;
+  }
+  saveRequestAudit(entries: readonly RequestRejection[]): void {
+    // Independent of the business snapshot transaction. The bound also caps row bytes.
+    this.db.prepare('INSERT INTO request_rejection_audit(id, body) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body').run(JSON.stringify(entries.slice(-REQUEST_AUDIT_LIMIT)));
   }
   recordAuthorizationConfiguration(config: ControlConfig): void {
     // Operator-supplied configuration is the current authority on restart. Never persist credentials.
