@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { ControlState, type ControlConfig } from '../control/state.js';
 import { ApiError, objectValue, requireCondition, stringValue, terminal, type Run, type RuntimeEvent, type Scope, type WorkPackage } from '../contracts.js';
 import { SnapshotStore } from './store.js';
+import { RequestRejectionAudit } from '../request-audit.js';
 
 interface Lease { id: string; runId: string; memberId: string; instanceId: string; expiresAt: number; cancel: boolean; finished: boolean }
 interface Saved { state: ReturnType<ControlState['snapshot']>; leases: [string, Lease][] }
@@ -11,11 +12,13 @@ export interface Delivery {
 }
 export class PrivateEngine {
   readonly state: ControlState;
+  readonly requestAudit: RequestRejectionAudit;
   private readonly leases = new Map<string, Lease>();
   constructor(readonly store: SnapshotStore, config: ControlConfig, readonly leaseMs = 10000, private readonly now = Date.now, restoredBackup = false) {
     requireCondition(config.credentialExpiresAt && config.members.every(m => Number.isSafeInteger(config.credentialExpiresAt![m.id]) && config.credentialExpiresAt![m.id]! > 0), 400, 'private_credential_expiry_required');
     store.recordAuthorizationConfiguration(config);
     this.state = new ControlState(config, now);
+    this.requestAudit = new RequestRejectionAudit(store, now);
     const saved = store.load<Saved>();
     const audit = store.loadAudit<ControlState['audit']>();
     if (saved) {

@@ -3,8 +3,10 @@ import { ApiError, PROTOCOL_VERSION, requireCondition, scopeValue, stringValue, 
 import { bearer, jsonBody, respond, server } from '../http.js';
 import { ControlState } from './state.js';
 import { RuntimeClient } from './runtime-client.js';
+import { RequestRejectionAudit } from '../request-audit.js';
 
 export function controlService(state: ControlState, runtime: RuntimeClient, options: { autoDispatch?: boolean; cancellationReconcileMs?: number } = {}) {
+  const requestAudit = new RequestRejectionAudit();
   const jobs = new Set<Promise<void>>();
   const creatingSessions = new Set<string>();
   const pollers = new Map<string, Promise<void>>();
@@ -88,9 +90,17 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
     })();
     jobs.add(job); void job.finally(() => jobs.delete(job));
   };
-  const service = server(async (request, response, url) => {
+  const service = server(async (request, response, url, context) => {
     if (url.pathname === '/health' && request.method === 'GET') { respond(response, 200, { service: 'control', pid: process.pid, mode: 'development-fixture' }); return; }
     const actor = state.authenticate(bearer(request));
+    context.actorId = actor;
+    const readBody = async () => {
+      const body = await jsonBody(request);
+      // Body reads await client I/O. The first authentication is not a credential
+      // extension, and a newly mapped identity cannot act as the earlier actor.
+      requireCondition(state.authenticate(bearer(request)) === actor, 401, 'invalid_identity');
+      return body;
+    };
     if (url.pathname === '/attachments' && request.method === 'GET') {
       respond(response, 200, state.readAttachment(actor, scopeValue(Object.fromEntries(url.searchParams)), stringValue(url.searchParams.get('messageId'), 'messageId', 128),
         stringValue(url.searchParams.get('expectedMembershipGeneration'), 'membership_generation', 128), url.searchParams.get('runId') ?? undefined)); return;
@@ -107,15 +117,13 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
       respond(response, 200, { receipt: state.messageChangeReceipt(actor, scope, stringValue(url.searchParams.get('clientEventId'), 'clientEventId', 128)) }); return;
     }
     if (url.pathname === '/read-position' && request.method === 'POST') {
-      const body = await jsonBody(request);
-      state.authenticate(bearer(request));
+      const body = await readBody();
       requireCondition(body.authorId === undefined && body.memberId === undefined, 400, 'identity_is_authenticated');
       respond(response, 200, state.advanceReadPosition(actor, scopeValue(body), stringValue(body.messageId, 'messageId', 128))); return;
     }
     const changeMatch = /^\/messages\/([^/]+)\/(edit|retract)$/.exec(url.pathname);
     if (changeMatch && request.method === 'POST') {
-      const body = await jsonBody(request);
-      state.authenticate(bearer(request));
+      const body = await readBody();
       requireCondition(body.authorId === undefined && body.memberId === undefined, 400, 'identity_is_authenticated');
       const result = state.changeMessage(actor, changeMatch[1]!, changeMatch[2] as 'edit' | 'retract',
         body.expectedRevision as number, stringValue(body.clientEventId, 'clientEventId', 128),
@@ -133,7 +141,7 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
       respond(response, 200, result); return;
     }
     if (url.pathname === '/messages' && request.method === 'POST') {
-      const body = await jsonBody(request);
+      const body = await readBody();
       requireCondition(body.authorId === undefined && body.memberId === undefined, 400, 'identity_is_authenticated');
       const result = state.createMessage(actor, scopeValue(body), stringValue(body.text, 'text'), stringValue(body.clientEventId, 'clientEventId', 128),
         body.replyToMessageId === undefined ? undefined : stringValue(body.replyToMessageId, 'replyToMessageId', 128), body.expectedMembershipGeneration, body.attachment);
@@ -154,24 +162,24 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
       respond(response, 200, { messages: state.readMessages(actor, scope, runId), readThroughMessageId: state.readPosition(actor, scope) }); return;
     }
     if (url.pathname === '/tools/claim' && request.method === 'POST') {
-      const body = await jsonBody(request);
+      const body = await readBody();
       requireCondition(body.intent === 'research', 400, 'unsupported_intent');
       const result = state.claim(actor, stringValue(body.sourceMessageId, 'sourceMessageId', 128));
       if (!result.duplicate && options.autoDispatch !== false) dispatch(result.run);
       respond(response, 200, result); return;
     }
     if (url.pathname === '/tools/confirm-claim' && request.method === 'POST') {
-      const body = await jsonBody(request);
+      const body = await readBody();
       requireCondition(Number.isInteger(body.sourceRevision) && Number(body.sourceRevision) > 0, 400, 'invalid_source_revision');
       respond(response, 200, state.confirmClaim(actor, stringValue(body.runId, 'runId', 128), stringValue(body.sourceMessageId, 'sourceMessageId', 128), Number(body.sourceRevision))); return;
     }
     if (url.pathname === '/tools/send' && request.method === 'POST') {
-      const body = await jsonBody(request);
+      const body = await readBody();
       requireCondition(body.authorId === undefined && body.memberId === undefined && body.conversationId === undefined && body.threadId === undefined, 400, 'identity_and_route_are_bound');
       respond(response, 200, state.publish(actor, stringValue(body.runId, 'runId', 128), body.result)); return;
     }
     if (url.pathname === '/tools/request-approval' && request.method === 'POST') {
-      const body = await jsonBody(request);
+      const body = await readBody();
       respond(response, 202, state.requestApproval(actor, stringValue(body.runId, 'runId', 128), stringValue(body.action, 'action', 128), stringValue(body.reason, 'reason', 1000))); return;
     }
     if (url.pathname === '/runs' && request.method === 'GET') {
@@ -198,7 +206,7 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
       const cancellationOutcome = run.stopEvidence ? 'stopped_before_session' : run.status === 'completed' ? 'too_late_completed' : run.status === 'stopped' ? 'stopped' : run.status === 'failed' ? 'already_failed' : 'unconfirmed';
       respond(response, 202, { status: run.status, cancellation: receipt, cancellationOutcome, stopEvidence: run.stopEvidence ?? null, publishedReceiptId: run.receiptId ?? null }); return;
     }
-    respond(response, 404, { error: 'not_found' });
-  });
-  return { service, dispatch, async drain() { await Promise.all(jobs); }, stop() { shuttingDown = true; } };
+    throw new ApiError(404, 'not_found');
+  }, requestAudit);
+  return { service, requestAudit, dispatch, async drain() { await Promise.all(jobs); }, stop() { shuttingDown = true; } };
 }
