@@ -23,6 +23,7 @@ export class PrivateEngine {
       if (restoredBackup) this.state.resetDelivery();
       if (audit) this.state.restoreAudit(audit);
       for (const [id, lease] of saved.leases) this.leases.set(id, lease);
+      for (const lease of this.leases.values()) this.state.dispatched(lease.runId);
       if (restoredBackup) for (const run of this.state.runs.values()) {
         if (!terminal(run.status)) { run.status = 'unknown'; run.error = 'backup_restore_reconciliation_required'; }
       }
@@ -102,7 +103,7 @@ export class PrivateEngine {
       }
       return { command: 'execute', leaseId: held.id, runId: run.id, work: run.work, after: run.events.length, leaseTtlMs: this.leaseMs };
     }
-    for (const run of this.state.runs.values()) {
+    for (const run of this.state.pendingRuns()) {
       if (run.memberId !== actor || run.status !== 'queued' || [...this.leases.values()].some(l => l.runId === run.id)) continue;
       try { this.state.currentRun(actor, run.id, 'claim'); }
       catch (error) {
@@ -111,6 +112,7 @@ export class PrivateEngine {
       }
       const lease: Lease = { id: randomUUID(), runId: run.id, memberId: actor, instanceId, expiresAt: this.now() + this.leaseMs, cancel: false, finished: false };
       this.leases.set(lease.id, lease);
+      this.state.dispatched(run.id);
       return { command: 'execute', leaseId: lease.id, runId: run.id, work: run.work, after: 0, leaseTtlMs: this.leaseMs };
     }
     return { command: 'idle' };

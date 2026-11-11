@@ -29,9 +29,23 @@ export interface ResearchResult {
   conclusion: string; sources: Source[]; limitations: string[];
   evidence: 'synthetic-fixture'; // This slice has no live research provider.
 }
+export const WORK_IDENTITY_VERSION = 'coseat.work.v1' as const;
+/** Control-owned slots, not agent-provided labels or a hash of message contents. */
+export const RESEARCH_SLOTS = ['research', 'source_verification'] as const;
+export type ResearchSlot = typeof RESEARCH_SLOTS[number];
+export interface WorkIdentity { version: typeof WORK_IDENTITY_VERSION; key: string; intent: 'research'; slot: ResearchSlot }
+export interface Task {
+  id: string; workKey: string; workKeys: string[]; source: Scope & { messageId: string; revision: number };
+  intent: 'research'; slot: ResearchSlot; ownerId: string | null; createdAt: number; currentRunId: string; runIds: string[];
+  /** Historical pre-Task runs keep their original wire IDs, never rewritten in flight. */
+  legacyTaskIds?: string[];
+  reconciliationRequired?: true;
+}
+export interface PendingDispatch { taskId: string; runId: string; workKey: string }
 export interface WorkPackage {
   protocol: typeof PROTOCOL_VERSION;
   memberId: string; taskId: string; runId: string;
+  workIdentity?: WorkIdentity; // Optional only for persisted pre-Task work packages.
   source: Scope & { messageId: string; revision: number };
   contextRevision: number;
   grant: { id: string; revision: number; expiresAt: number };
@@ -120,6 +134,12 @@ export function validateWork(work: WorkPackage): void {
   stringValue(source.messageId, 'sourceMessageId', 128); stringValue(grant.id, 'grantId', 128);
   requireCondition(Number.isInteger(work.source.revision) && work.source.revision > 0 && Number.isInteger(work.contextRevision) && work.contextRevision > 0, 400, 'missing_revision');
   requireCondition(work.route.conversationId === work.source.conversationId && work.route.threadId === work.source.threadId, 400, 'route_mismatch');
+  if (work.workIdentity !== undefined) {
+    const identity = objectValue(work.workIdentity);
+    requireCondition(Object.keys(identity).every(key => ['version', 'key', 'intent', 'slot'].includes(key))
+      && identity.version === WORK_IDENTITY_VERSION && identity.intent === 'research' && RESEARCH_SLOTS.includes(identity.slot as ResearchSlot)
+      && identity.key === JSON.stringify([WORK_IDENTITY_VERSION, work.source.conversationId, work.source.threadId, work.source.messageId, work.source.revision, 'research', identity.slot]), 400, 'invalid_work_identity');
+  }
   requireCondition(Number.isInteger(work.grant.revision) && work.grant.revision > 0 && Number.isFinite(work.grant.expiresAt) && work.grant.expiresAt > Date.now(), 403, 'invalid_grant');
   if (work.authorization !== undefined) {
     const authorization = objectValue(work.authorization);

@@ -3,6 +3,7 @@ import { ApiError, PROTOCOL_VERSION, requireCondition, scopeValue, stringValue, 
 import { bearer, jsonBody, respond, server } from '../http.js';
 import { ControlState } from './state.js';
 import { RuntimeClient } from './runtime-client.js';
+import { claimInput } from './work-identity.js';
 
 export function controlService(state: ControlState, runtime: RuntimeClient, options: { autoDispatch?: boolean; cancellationReconcileMs?: number } = {}) {
   const jobs = new Set<Promise<void>>();
@@ -55,6 +56,7 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
     return job;
   };
   const dispatch = (run: Run) => {
+    state.dispatched(run.id);
     const job = (async () => {
       try {
         // Accepted new messages remain queued while an old context is unconfirmed.
@@ -155,10 +157,11 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
     }
     if (url.pathname === '/tools/claim' && request.method === 'POST') {
       const body = await jsonBody(request);
-      requireCondition(body.intent === 'research', 400, 'unsupported_intent');
-      const result = state.claim(actor, stringValue(body.sourceMessageId, 'sourceMessageId', 128));
+      state.authenticate(bearer(request));
+      const input = claimInput(body);
+      const result = state.claim(actor, input.messageId, input);
       if (!result.duplicate && options.autoDispatch !== false) dispatch(result.run);
-      respond(response, 200, result); return;
+      respond(response, 200, state.presentClaim(result)); return;
     }
     if (url.pathname === '/tools/confirm-claim' && request.method === 'POST') {
       const body = await jsonBody(request);

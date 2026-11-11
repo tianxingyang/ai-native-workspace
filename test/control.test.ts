@@ -161,15 +161,16 @@ test('invisible messages never enter participation evaluation or the runtime que
   assert.equal(env.state.runs.size, 0);
 });
 
-test('concurrent claims share one task/run; another member cannot take the same claim', async t => {
+test('concurrent claims share one task/run; another authorized member sees the existing owner', async t => {
   const env = await environment(undefined, false); t.after(() => env.dispose());
   const { message } = await env.post();
-  const claim = { sourceMessageId: message.id, intent: 'research' };
+  const claim = { sourceMessageId: message.id, sourceRevision: 1, intent: 'research' };
   const values = await Promise.all(Array.from({ length: 12 }, () => requestJson<{ run: Run; duplicate: boolean }>(env.url, DEV.agentToken, '/tools/claim', claim)));
   assert.equal(new Set(values.map(v => v.run.id)).size, 1);
   assert.equal(values.filter(v => !v.duplicate).length, 1);
   assert.equal(env.state.runs.size, 1);
-  await expectStatus(requestJson(env.url, DEV.humanToken, '/tools/claim', claim), 409, 'already_claimed');
+  const existing = await requestJson<{ run: Run; duplicate: boolean; ownedByActor: boolean }>(env.url, DEV.humanToken, '/tools/claim', claim);
+  assert.equal(existing.run.id, values[0]!.run.id); assert.ok(existing.duplicate); assert.equal(existing.ownedByActor, false);
   await expectStatus(requestJson(env.url, DEV.strangerToken, '/tools/claim', claim), 403);
 });
 
