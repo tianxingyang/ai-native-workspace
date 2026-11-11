@@ -28,6 +28,7 @@ CoSeat 是一个以即时通讯（IM）为核心的人与 Agent 协作产品设�
 - [设计摘要](docs/design.md)：成员模型、消息到工作、授权、运行时与记忆边界。
 - [阶段规划](docs/roadmap.md)：实施顺序、验证门槛和待决事项。
 - [本地开发切片](docs/development-slice.md)：运行、API、协议边界与验证层级。
+- [开发质量门禁](docs/development-quality.md)：统一本地检查、固定 SHA 证据与独立评审，不自动发布。
 - [临时运行时选择 ADR](docs/adr/0001-runtime-development-slice.md)：固定版本、隐式行为和未验证项。
 - [两端私有试用](docs/private-trial.md)：显式身份配置、出站领取、启动停止、备份恢复及部署前事项。
 - [私有协议与持久化 ADR](docs/adr/0002-private-outbound-sqlite.md)：单实例 SQLite 和未知执行的保守对账。
