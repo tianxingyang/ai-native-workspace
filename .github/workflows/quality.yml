@@ -1,0 +1,109 @@
+name: CoSeat quality
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  complete-windows-gate:
+    name: Complete Windows gate
+    runs-on: windows-2025
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CI: 'true'
+      RUSTUP_TOOLCHAIN: 1.95.0-x86_64-pc-windows-msvc
+      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}\coseat-quality-${{ github.run_id }}-${{ github.run_attempt }}\browsers
+      CARGO_TARGET_DIR: ${{ runner.temp }}\coseat-quality-${{ github.run_id }}-${{ github.run_attempt }}\cargo-target
+    steps:
+      # Official GitHub repositories, release refs verified 2026-11-11.
+      - name: Checkout exact event commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          set-safe-directory: false
+          submodules: false
+          lfs: false
+
+      - name: Exact project Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          architecture: x64
+          check-latest: false
+          package-manager-cache: false
+
+      - name: Pin event base, merge parents, and checkout
+        id: context
+        timeout-minutes: 2
+        run: node scripts/ci-quality.mjs context
+
+      - name: Test CI contract and failure handling
+        timeout-minutes: 3
+        run: node --test scripts/ci.test.mjs
+
+      - name: Prepare locked dependencies and desktop resources
+        id: prepare
+        timeout-minutes: 25
+        run: node scripts/ci-prepare.mjs
+
+      - name: Run all seven required checks
+        id: gate
+        timeout-minutes: 65
+        env:
+          QUALITY_BASE: ${{ steps.context.outputs.base }}
+          QUALITY_HEAD: ${{ steps.context.outputs.head }}
+          QUALITY_OUTPUT: ${{ steps.context.outputs.output }}
+        run: |
+          npm run quality:gate -- --base $env:QUALITY_BASE --head $env:QUALITY_HEAD --output $env:QUALITY_OUTPUT
+          exit $LASTEXITCODE
+
+      - name: Stage only allowlisted gate evidence
+        id: stage
+        if: ${{ always() && !cancelled() && steps.gate.outcome != 'skipped' }}
+        timeout-minutes: 2
+        run: node scripts/ci-quality.mjs stage
+
+      - name: Verify staged evidence immediately before upload
+        id: bundle
+        if: ${{ always() && !cancelled() && steps.stage.outcome == 'success' }}
+        timeout-minutes: 2
+        run: node scripts/ci-quality.mjs bundle
+
+      - name: Upload gate logs and manifest
+        id: upload
+        if: ${{ always() && !cancelled() && steps.bundle.outcome == 'success' }}
+        timeout-minutes: 3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quality-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: ${{ runner.temp }}\coseat-quality-${{ github.run_id }}-${{ github.run_attempt }}\artifact\
+          if-no-files-found: error
+          retention-days: 3
+          include-hidden-files: false
+          overwrite: false
+
+      - name: Verify complete evidence and all step outcomes
+        if: ${{ always() && !cancelled() && steps.context.outcome == 'success' }}
+        timeout-minutes: 2
+        env:
+          QUALITY_PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
+          QUALITY_GATE_OUTCOME: ${{ steps.gate.outcome }}
+          QUALITY_STAGE_OUTCOME: ${{ steps.stage.outcome }}
+          QUALITY_BUNDLE_OUTCOME: ${{ steps.bundle.outcome }}
+          QUALITY_UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        run: node scripts/ci-quality.mjs verify
