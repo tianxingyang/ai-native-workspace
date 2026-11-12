@@ -11,6 +11,42 @@ const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40), TREE = 'd'.rep
 const REPO = 'tianxingyang/ai-native-workspace';
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const identity = { base: A, head: B, baseTree: BASE_TREE, tree: TREE };
+const RUNTIME_ENV = {
+  PLAYWRIGHT_BROWSERS_PATH: '${{ runner.temp }}\\coseat-quality-${{ github.run_id }}-${{ github.run_attempt }}\\browsers',
+  CARGO_TARGET_DIR: '${{ runner.temp }}\\coseat-quality-${{ github.run_id }}-${{ github.run_attempt }}\\cargo-target',
+};
+
+// Fixed-workflow semantic contract, not a general YAML/Actions validator.
+// GitHub's availability table excludes runner/env/steps/job at job.env, but
+// allows runner at step.env. This test runs before npm dependencies exist.
+// https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability
+function assertRuntimeEnvironmentScopes(workflow) {
+  const lines = workflow.replaceAll('\r\n', '\n').split('\n');
+  const block = (input, header, indent) => {
+    const start = input.findIndex(line => line === `${' '.repeat(indent)}${header}`);
+    assert.notEqual(start, -1, `Missing workflow block: ${header}`);
+    const end = input.findIndex((line, index) => index > start && line.trim() && line.search(/\S/) <= indent);
+    return input.slice(start + 1, end < 0 ? undefined : end);
+  };
+  const job = block(lines, 'complete-windows-gate:', 2);
+  const jobEnv = block(job, 'env:', 4).join('\n');
+  const allowed = new Set(['github', 'needs', 'strategy', 'matrix', 'vars', 'secrets', 'inputs']);
+  for (const [, expression] of jobEnv.matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
+    const unquoted = expression.replace(/'(?:''|[^'])*'/g, "''");
+    for (const [, context] of unquoted.matchAll(/(?<![.\w-])([a-z_][\w-]*)\s*(?:\.|\[)/gi)) {
+      assert.ok(allowed.has(context.toLowerCase()), `Context ${context} is unavailable at job.env`);
+    }
+  }
+  assert.doesNotMatch(jobEnv, /\b(?:PLAYWRIGHT_BROWSERS_PATH|CARGO_TARGET_DIR):/, 'Runtime paths must be step scoped');
+  for (const id of ['prepare', 'gate']) {
+    const start = job.findIndex(line => line === `        id: ${id}`);
+    assert.notEqual(start, -1, `Missing step: ${id}`);
+    const end = job.findIndex((line, index) => index > start && /^      - /.test(line));
+    const stepEnv = block(job.slice(start, end < 0 ? undefined : end), 'env:', 8);
+    const paths = Object.fromEntries(stepEnv.map(line => /^          ([A-Z_]+): (.*)$/.exec(line)).filter(match => match && Object.hasOwn(RUNTIME_ENV, match[1])).map(([, key, value]) => [key, value]));
+    assert.deepEqual(paths, RUNTIME_ENV, `Missing or inconsistent runtime paths in step.env: ${id}`);
+  }
+}
 const startedAt = '2026-11-11T01:00:00.000Z', finishedAt = '2026-11-11T01:00:01.000Z';
 const push = (before = A, after = B) => ({ repository: { full_name: REPO }, ref: 'refs/heads/main', before, after, deleted: false });
 const pr = () => ({ repository: { full_name: REPO }, action: 'synchronize', number: 7, pull_request: { base: { sha: A, ref: 'main', repo: { full_name: REPO } }, head: { sha: C, repo: { full_name: 'fork/project' } } } });
@@ -218,4 +254,22 @@ test('workflow safety contract: exact commits, read-only hosted Windows and no g
   assert.doesNotMatch(workflow, /pull_request_target|workflow_run|self-hosted|continue-on-error|secrets[.[]|id-token:|contents: write|pull-requests: write|paths-ignore:|--only|--skip|workflow_dispatch/);
   assert.doesNotMatch(workflow, /run:.*\$\{\{/); // No event values interpolated into shell code.
   assert.match(workflow, /!cancelled\(\)/);
+});
+
+test('workflow context availability: runner runtime paths belong to prepare/gate step.env', async () => {
+  assertRuntimeEnvironmentScopes(await readFile(new URL('../.github/workflows/quality.yml', import.meta.url), 'utf8'));
+});
+
+test('workflow context regression rejects unavailable job contexts and inconsistent runtime paths', async () => {
+  const workflow = (await readFile(new URL('../.github/workflows/quality.yml', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
+  for (const expression of ['runner.temp', "runner['temp']", 'steps.context.outputs.output', 'env.RUNNER_TEMP', 'job.status']) {
+    const invalid = workflow.replace("      CI: 'true'", "      CI: 'true'\n      INVALID_CONTEXT: " + '${{ ' + expression + ' }}');
+    assert.throws(() => assertRuntimeEnvironmentScopes(invalid), /unavailable at job.env/);
+  }
+  const missing = workflow.replace(`          PLAYWRIGHT_BROWSERS_PATH: ${RUNTIME_ENV.PLAYWRIGHT_BROWSERS_PATH}\n`, '');
+  assert.notEqual(missing, workflow);
+  assert.throws(() => assertRuntimeEnvironmentScopes(missing), /runtime paths/);
+  const mismatched = workflow.replace(`          CARGO_TARGET_DIR: ${RUNTIME_ENV.CARGO_TARGET_DIR}`, '          CARGO_TARGET_DIR: another-run-directory');
+  assert.notEqual(mismatched, workflow);
+  assert.throws(() => assertRuntimeEnvironmentScopes(mismatched), /runtime paths/);
 });
