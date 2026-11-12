@@ -986,27 +986,78 @@ test('offline read expiry clears only the expired room, its draft and open detai
 });
 
 test('read deadline clears all cached scopes even while session polling is stalled', async ({ page }) => {
-  for (const grant of demo.engine.state.config.grants.filter(g => g.memberId === 'demo-owner')) grant.expiresAt = Date.now() + 4500;
+  // Observe the actual browser fetch invocation, without changing its promise,
+  // arguments or the client's timeout. Node route callbacks can be dispatched late.
+  await page.addInitScript(() => {
+    const fetch = window.fetch;
+    window.fetch = function(input, ...args) {
+      const url = input instanceof Request ? input.url : String(input);
+      if (new URL(url, location.href).pathname === '/session') window.__readDeadlineSessionStartedAt = Date.now();
+      return Reflect.apply(fetch, this, [input, ...args]);
+    };
+  });
   await connect(page); await send(page, '阅读到期清理');
-  // Retain a response sampled before expiry; it must not revive expired scopes.
+  await expect(page.locator('#expiry')).toBeHidden();
   let release;
   const held = new Promise(resolve => { release = resolve; });
-  let sampled;
-  const sampling = new Promise(resolve => { sampled = resolve; });
+  let deadline, heldRequest, heldStartedAt, sampled, routeError, terminal, fulfillment;
+  const completed = (request, outcome) => { if (request === heldRequest) terminal = outcome; };
+  page.on('requestfinished', request => completed(request, 'finished'));
+  page.on('requestfailed', request => completed(request, 'failed'));
   await page.route('**/session', async route => {
-    const response = await forward(route); sampled(); await held;
-    await route.fulfill({ response }).catch(() => {});
+    try {
+      // Arm only after setup and interception are ready. Deliver this deadline
+      // first, then stall the next serial poll while its response is still valid.
+      const announce = deadline === undefined;
+      if (announce) {
+        deadline = Date.now() + 4500;
+        for (const grant of demo.engine.state.config.grants.filter(g => g.memberId === 'demo-owner')) grant.expiresAt = deadline;
+      }
+      const response = await forward(route);
+      const session = await response.json();
+      expect(response.status()).toBe(200);
+      expect(session.scopes.length).toBe(2);
+      expect(session.serverTime).toBeLessThan(deadline);
+      for (const scope of session.scopes) expect(scope.permissions.read).toBe(deadline);
+      if (announce) { await route.fulfill({ response }); return; }
+      heldRequest = route.request();
+      heldStartedAt = await page.evaluate(() => window.__readDeadlineSessionStartedAt);
+      expect(Number.isFinite(heldStartedAt)).toBe(true);
+      sampled = true;
+      await held;
+      try { await route.fulfill({ response }); fulfillment = 'fulfilled'; }
+      catch { fulfillment = 'cancelled'; }
+    } catch (error) {
+      routeError = error;
+      await route.abort().catch(() => {});
+    }
   });
   try {
-    await sampling;
+    // The visible warning proves the browser actually applied the short grant.
+    await expect(page.locator('#expiry')).toBeVisible({ timeout: 8000 });
+    await expect.poll(() => Boolean(sampled || routeError), { timeout: 8000, message: 'sample a valid pre-expiry session after announcing its deadline' }).toBe(true);
+    if (routeError) throw routeError;
+    await expect(page.locator('.room')).toHaveCount(2);
+    // A held fetch times out at 5s. Observe cleanup strictly before that, without
+    // releasing the route, so timeout recovery cannot satisfy this assertion.
+    const clearedAt = await page.waitForFunction(() => !document.querySelector('#connect').hidden && Date.now(), undefined, { timeout: 4000 });
+    expect(await clearedAt.jsonValue() - heldStartedAt).toBeLessThan(4000);
     await expect(page.locator('#connect')).toBeVisible();
     await expect(page.locator('#messages')).toBeEmpty();
     await expect(page.locator('#rooms')).toBeEmpty();
     await expect(page.locator('#connect-error')).toContainText('授权已到期');
-  } finally { release(); }
-  await page.waitForTimeout(200);
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+  if (routeError) throw routeError;
+  // invalidate() may abort the stalled request. Wait for its actual completion,
+  // rather than assuming fulfill succeeded or sleeping for an arbitrary 200ms.
+  await expect.poll(() => Boolean(terminal), { timeout: 3000 }).toBe(true);
+  expect(['fulfilled', 'cancelled']).toContain(fulfillment);
   await expect(page.locator('#connect')).toBeVisible();
   await expect(page.locator('#messages')).toBeEmpty();
+  await expect(page.locator('#rooms')).toBeEmpty();
 });
 
 test('a delayed session response cannot revive an expired background room', async ({ page }) => {
