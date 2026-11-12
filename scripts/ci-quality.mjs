@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { lstatSync, realpathSync } from 'node:fs';
 import { appendFile, copyFile, lstat, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 // VIT-134: CI adapter for the VIT-133 gate, not another implementation of it.
@@ -15,6 +16,21 @@ const digest = value => createHash('sha256').update(value).digest('hex');
 const insist = (condition, message) => { if (!condition) throw new Error(message); };
 const date = value => typeof value === 'string' && value.length > 0 && Number.isFinite(Date.parse(value));
 const samePath = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+
+// Resolve the existing ancestor physically, then append only the future tail.
+// A broken link or unreadable ancestor fails closed rather than looking absent.
+function canonicalFuturePath(path) {
+  let current = resolve(path);
+  const tail = [];
+  for (;;) {
+    try { lstatSync(current); }
+    catch (error) {
+      if (error.code !== 'ENOENT' || dirname(current) === current) throw error;
+      tail.unshift(basename(current)); current = dirname(current); continue;
+    }
+    return resolve(realpathSync.native(current), ...tail);
+  }
+}
 
 export function git(root, args) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false, windowsHide: true, timeout: 15_000, maxBuffer: 4 * 1024 * 1024 });
@@ -41,7 +57,9 @@ export function eventIdentity(eventName, event, githubSha, repository, ref) {
 }
 
 export function checkoutIdentity(root, identity) {
-  insist(samePath(resolve(git(root, ['rev-parse', '--show-toplevel'])), resolve(root)), 'Expected the repository root');
+  const gitRoot = realpathSync.native(git(root, ['rev-parse', '--show-toplevel']));
+  const requestedRoot = realpathSync.native(root);
+  insist(samePath(gitRoot, requestedRoot), `Expected the repository root; Git=${gitRoot}; requested=${requestedRoot}`);
   for (const commit of [identity.base, identity.head]) {
     insist(sha(commit) && git(root, ['rev-parse', '--verify', `${commit}^{commit}`]) === commit, 'Pinned commit is unavailable or mismatched');
   }
@@ -59,7 +77,7 @@ export function ciPaths(env = process.env) {
   insist(isAbsolute(env.RUNNER_TEMP ?? '') && isAbsolute(env.GITHUB_WORKSPACE ?? ''), 'Absolute runner temp and workspace paths are required');
   insist(/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ID ?? '') && /^[1-9][0-9]*$/.test(env.GITHUB_RUN_ATTEMPT ?? ''), 'Expected numeric run ID and attempt');
   const root = resolve(env.RUNNER_TEMP, `coseat-quality-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}`);
-  const inside = relative(resolve(env.GITHUB_WORKSPACE), root);
+  const inside = relative(canonicalFuturePath(env.GITHUB_WORKSPACE), canonicalFuturePath(root));
   insist(inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside), 'Evidence must be outside the checkout');
   return { root, context: join(root, 'context.json'), gate: join(root, 'gate'), artifact: join(root, 'artifact') };
 }
@@ -86,7 +104,10 @@ export async function writeContext(env = process.env) {
   const paths = ciPaths(env);
   const event = JSON.parse(await regularFile(env.GITHUB_EVENT_PATH, 2 * 1024 * 1024));
   const identity = checkoutIdentity(env.GITHUB_WORKSPACE, eventIdentity(env.GITHUB_EVENT_NAME, event, env.GITHUB_SHA, env.GITHUB_REPOSITORY, env.GITHUB_REF));
+  const plannedRoot = canonicalFuturePath(paths.root);
   await mkdir(paths.root); // A rerun gets a new attempt; existing evidence is never reused.
+  ciPaths(env); // Recheck actual physical containment before writing context.
+  insist(samePath(realpathSync.native(paths.root), plannedRoot), 'Evidence directory changed physical location');
   await writeFile(paths.context, `${JSON.stringify(identity, null, 2)}\n`, { flag: 'wx' });
   await appendFile(env.GITHUB_OUTPUT, `base=${identity.base}\nhead=${identity.head}\noutput=${paths.gate}\n`);
   return identity;

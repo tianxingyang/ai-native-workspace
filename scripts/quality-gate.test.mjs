@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
@@ -43,6 +44,43 @@ async function fixture(t, { body = "console.log('synthetic evaluation fixture');
   const args = parseArgs(['--base', head, '--head', head, '--only', 'eval', '--output', output]);
   return { root, output, args, head };
 }
+
+function windowsShortPath(path) {
+  const command = String.raw`$ErrorActionPreference='Stop'; Add-Type 'using System.Text; using System.Runtime.InteropServices; public static class CoSeatGatePathTest { [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern uint GetShortPathName(string path, StringBuilder output, uint length); }'; $b=New-Object System.Text.StringBuilder 8192; if([CoSeatGatePathTest]::GetShortPathName($env:COSEAT_PATH_TEST,$b,8192) -eq 0){throw 'GetShortPathName failed'}; [Console]::Write('__SHORT_PATH__'+$b.ToString())`;
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { env: { ...process.env, COSEAT_PATH_TEST: path }, encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  const marker = result.stdout.lastIndexOf('__SHORT_PATH__');
+  assert.ok(marker >= 0, result.stdout);
+  const alias = result.stdout.slice(marker + '__SHORT_PATH__'.length).trim();
+  assert.notEqual(alias.toLowerCase(), path.toLowerCase(), 'A genuine Windows short-name alias is required for this regression');
+  return alias;
+}
+
+test('Windows short-name root runs checks with final identity; a nested directory still fails closed', { skip: process.platform !== 'win32' }, async t => {
+  const f = await fixture(t), alias = windowsShortPath(realpathSync.native(f.root));
+  assert.equal(realpathSync.native(alias), realpathSync.native(f.root));
+  const { manifest } = await runGate(f.args, alias);
+  assert.equal(manifest.checks.find(check => check.id === 'eval').status, 'PASS');
+  assert.equal(manifest.source.verifiedAtEnd, true);
+  assert.equal(manifest.overallStatus, 'NOT-RUN'); // Only eval was requested, never a full PASS.
+  const nested = await runGate({ ...f.args, output: join(f.output, '..', 'nested-evidence') }, join(alias, 'eval'));
+  assert.equal(nested.manifest.overallStatus, 'SETUP-ERROR');
+  assert.match(nested.manifest.setupErrors.join('\n'), /repository root, not a nested directory/);
+});
+
+test('Windows output aliases inside the checkout reject before writing; external nested outputs still work', { skip: process.platform !== 'win32' }, async t => {
+  const f = await fixture(t), alias = windowsShortPath(realpathSync.native(f.root));
+  await mkdir(join(f.root, 'node_modules'));
+  const output = join(alias, 'node_modules/not-created/nested/evidence');
+  let error;
+  try { await runGate({ ...f.args, output }, realpathSync.native(f.root)); } catch (caught) { error = caught; }
+  assert.equal(existsSync(join(f.root, 'node_modules/not-created')), false, 'No output ancestors may be created inside the checkout');
+  assert.match(error?.message ?? '', /outside/);
+  const external = await runGate({ ...f.args, output: join(f.output, 'new/nested/run') }, f.root);
+  assert.equal(external.manifest.checks.find(check => check.id === 'eval').status, 'PASS');
+  assert.equal(external.manifest.source.verifiedAtEnd, true);
+  assert.equal(external.manifest.overallStatus, 'NOT-RUN');
+});
 
 test('catalog is fixed and includes every existing verification family', () => {
   assert.deepEqual(CHECKS.map(check => check.id), ['unit', 'web', 'eval', 'browser', 'rust-fmt', 'rust-test', 'rust-clippy']);

@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { existsSync, realpathSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -63,6 +65,17 @@ async function temp(t) {
   return root;
 }
 
+function windowsShortPath(path) {
+  const command = String.raw`$ErrorActionPreference='Stop'; Add-Type 'using System.Text; using System.Runtime.InteropServices; public static class CoSeatPathTest { [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern uint GetShortPathName(string path, StringBuilder output, uint length); }'; $b=New-Object System.Text.StringBuilder 8192; if([CoSeatPathTest]::GetShortPathName($env:COSEAT_PATH_TEST,$b,8192) -eq 0){throw 'GetShortPathName failed'}; [Console]::Write('__SHORT_PATH__'+$b.ToString())`;
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { env: { ...process.env, COSEAT_PATH_TEST: path }, encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  const marker = result.stdout.lastIndexOf('__SHORT_PATH__');
+  assert.ok(marker >= 0, result.stdout);
+  const alias = result.stdout.slice(marker + '__SHORT_PATH__'.length).trim();
+  assert.notEqual(alias.toLowerCase(), path.toLowerCase(), 'A genuine Windows short-name alias is required for this regression');
+  return alias;
+}
+
 function commit(root, message) {
   git(root, ['add', '.']);
   git(root, ['-c', 'core.hooksPath=NUL', '-c', 'commit.gpgsign=false', '-c', 'user.name=CI fixture', '-c', 'user.email=ci@example.invalid', 'commit', '-m', message]);
@@ -112,6 +125,52 @@ test('real Git: multi-commit ancestry, exact merge parents, wrong head and dirty
   assert.throws(() => checkoutIdentity(root, { base: main, head: merge, eventName: 'pull_request', pullRequestHead: main }), /parents/);
   await writeFile(join(root, 'untracked.txt'), 'dirty');
   assert.throws(() => checkoutIdentity(root, { base: main, head: merge, eventName: 'push' }), /clean/);
+});
+
+test('Windows short-name root is the same physical repository; nested/other repo/HEAD/dirty still reject', { skip: process.platform !== 'win32' }, async t => {
+  const root = await temp(t);
+  git(root, ['init', '--initial-branch', 'main']);
+  await writeFile(join(root, 'proof.txt'), 'canonical root\n');
+  const first = commit(root, 'canonical root');
+  const canonical = realpathSync.native(root), alias = windowsShortPath(canonical);
+  assert.equal(realpathSync.native(alias), canonical);
+  assert.equal(checkoutIdentity(alias, { base: first, head: first, eventName: 'push' }).head, first);
+  await mkdir(join(root, 'nested'));
+  assert.throws(() => checkoutIdentity(join(alias, 'nested'), { base: first, head: first, eventName: 'push' }), /Expected the repository root/);
+  const other = await temp(t);
+  git(other, ['init', '--initial-branch', 'main']);
+  await writeFile(join(other, 'other.txt'), 'different physical repository\n'); commit(other, 'other repository');
+  assert.throws(() => checkoutIdentity(other, { base: first, head: first, eventName: 'push' }), /git rev-parse|Pinned commit/);
+  await writeFile(join(root, 'proof.txt'), 'next version\n');
+  const second = commit(root, 'next version');
+  assert.throws(() => checkoutIdentity(alias, { base: first, head: first, eventName: 'push' }), /Checkout differs/);
+  assert.equal(checkoutIdentity(alias, { base: first, head: second, eventName: 'push' }).head, second);
+  await writeFile(join(root, 'dirty.txt'), 'untracked\n');
+  assert.throws(() => checkoutIdentity(alias, { base: first, head: second, eventName: 'push' }), /not clean/);
+});
+
+test('Windows output aliases inside the checkout reject before writing; outside contexts still work', { skip: process.platform !== 'win32' }, async t => {
+  const home = await temp(t), repo = join(home, 'repo'); await mkdir(repo);
+  git(repo, ['init', '--initial-branch', 'main']);
+  await writeFile(join(repo, '.gitignore'), 'ignored-evidence/\n');
+  const head = commit(repo, 'output boundary fixture');
+  await mkdir(join(repo, 'ignored-evidence'));
+  const canonical = realpathSync.native(repo), alias = windowsShortPath(canonical);
+  const env = { GITHUB_WORKSPACE: canonical, GITHUB_RUN_ID: '134', GITHUB_RUN_ATTEMPT: '1', GITHUB_SHA: head, GITHUB_REPOSITORY: REPO, GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'push', GITHUB_EVENT_PATH: join(home, 'event.json'), GITHUB_OUTPUT: join(home, 'outputs') };
+  await writeFile(env.GITHUB_EVENT_PATH, JSON.stringify(push(head, head)));
+  for (const suffix of ['', 'not-created/nested']) {
+    const invalid = { ...env, RUNNER_TEMP: join(alias, 'ignored-evidence', suffix) };
+    let error;
+    try { await writeContext(invalid); } catch (caught) { error = caught; }
+    assert.equal(existsSync(join(invalid.RUNNER_TEMP, 'coseat-quality-134-1')), false, 'No context directory may be created inside the checkout');
+    assert.match(error?.message ?? '', /outside/);
+    assert.throws(() => ciPaths(invalid), /outside/);
+  }
+  assert.equal(existsSync(join(repo, 'ignored-evidence/not-created')), false);
+  assert.doesNotThrow(() => ciPaths({ ...env, RUNNER_TEMP: join(home, 'future/external/nested') }));
+  const external = { ...env, RUNNER_TEMP: home };
+  assert.equal((await writeContext(external)).head, head);
+  assert.ok(existsSync(ciPaths(external).context));
 });
 
 test('complete manifest: all non-PASS, missing, unfinished and mismatched states reject', () => {
