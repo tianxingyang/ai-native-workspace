@@ -1358,7 +1358,12 @@ $('connect-form').addEventListener('submit', async event => {
     if (desktop) void desktop.core.invoke('desktop_connected', { connected: true });
     sessionReceived(session); $('connect').hidden = true; $('app').hidden = false;
     $('message').value = current()?.draft ?? ''; renderMessages(true); renderOutbox(); await sync();
-    if (state.client) (current() ? $('message') : $('create-conversation').hidden ? $('manage-conversation') : $('create-conversation')).focus();
+    // The app is already usable while its initial sync is pending. Default
+    // focus still belongs to this connection only if the member has not moved it.
+    const focused = document.activeElement;
+    if (state.client === client && (focused === document.body || $('connect').contains(focused))) {
+      (current() ? $('message') : $('create-conversation').hidden ? $('manage-conversation') : $('create-conversation')).focus();
+    }
   } catch (error) { client.close(); invalidate(error); }
 });
 $('composer').addEventListener('submit', event => {

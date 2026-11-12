@@ -14,8 +14,9 @@ test.beforeEach(async () => {
     initialGrants: ['demo-owner', 'demo-researcher'].map(targetMemberId => ({ targetMemberId, actions: ['read', 'send', 'manage_resource'], expiresAt: Date.now() + 120000 })) })).conversation;
 });
 test.afterEach(async ({ page }) => { await page.close(); await demo.stop(); });
-async function connect(page) {
-  await page.goto(demo.url); await page.locator('#token').fill(demo.ownerToken); await page.locator('#connect-button').click();
+async function connect(page, navigate = true) {
+  if (navigate) await page.goto(demo.url);
+  await page.locator('#token').fill(demo.ownerToken); await page.locator('#connect-button').click();
   await expect(page.locator('#connect')).toBeHidden();
 }
 async function openRename(page) {
@@ -24,6 +25,35 @@ async function openRename(page) {
 }
 function otherRename(title, version = 1, id = 'other-rename') {
   return demo.engine.commit(() => demo.engine.state.renameConversation('demo-researcher', scope, title, version, 'initial', id));
+}
+async function holdInitialSyncSession(page, sessionNumber = 2) {
+  let sessions = 0, release, arrived;
+  const held = new Promise(resolve => { release = resolve; });
+  const entered = new Promise(resolve => { arrived = resolve; });
+  await page.route(url => url.pathname === '/session', async route => {
+    // Authentication reveals the app before its second session request starts
+    // the initial sync. Control that boundary without sleeps or retrying a test.
+    if (++sessions === sessionNumber) { arrived(); await held; }
+    await route.continue();
+  });
+  return { entered, release };
+}
+async function holdInitialSnapshotRestore(page) {
+  await page.goto(demo.url);
+  await page.evaluate(async () => {
+    const { SyncStore } = await import('/sync-store.js'), load = SyncStore.prototype.load;
+    let release;
+    const held = new Promise(resolve => { release = resolve; }), pending = [];
+    window.initialSnapshotGate = {
+      entered: false,
+      stopIntercepting: () => { SyncStore.prototype.load = load; },
+      release: async () => { release(); await Promise.allSettled(pending); },
+    };
+    SyncStore.prototype.load = function(...args) {
+      window.initialSnapshotGate.entered = true;
+      const result = held.then(() => load.apply(this, args)); pending.push(result); return result;
+    };
+  });
 }
 
 for (const width of [1280, 390]) test(`rename group updates list and header as text, preserves draft and keyboard focus at ${width}px`, async ({ page }) => {
@@ -102,6 +132,63 @@ test('remote title discovery updates focused navigation in place', async ({ page
   await expect(page.locator('.room-name').filter({ hasText: '远端更新' })).toBeVisible();
   expect(await element.evaluate(e => e === document.activeElement && e.isConnected)).toBe(true);
   await expect(page.getByRole('button', { name: '远端更新 main', exact: true })).toBeFocused();
+});
+
+test('finishing initial sync preserves navigation focus during remote title discovery', async ({ page }) => {
+  const initial = await holdInitialSyncSession(page);
+  try {
+    await connect(page); await initial.entered;
+    const item = page.getByRole('button', { name: '原来的群名 main', exact: true });
+    await item.focus(); const element = await item.elementHandle();
+    otherRename('远端更新'); initial.release();
+    await expect(page.locator('#connection-status')).toHaveText('已连接');
+    await expect(page.locator('.room-name').filter({ hasText: '远端更新' })).toBeVisible();
+    const focus = await element.evaluate(e => ({ connected: e.isConnected, active: e === document.activeElement, activeId: document.activeElement.id }));
+    expect(focus, 'The late initial sync must not take focus from an existing navigation button').toEqual({ connected: true, active: true, activeId: '' });
+    await expect(page.getByRole('button', { name: '远端更新 main', exact: true })).toBeFocused();
+  } finally { initial.release(); }
+});
+
+test('initial sync still focuses the composer when the member has not chosen another control', async ({ page }) => {
+  const initial = await holdInitialSyncSession(page);
+  try {
+    await connect(page); await initial.entered; initial.release();
+    await expect(page.locator('#connection-status')).toHaveText('已连接');
+    await expect(page.locator('#message')).toBeFocused();
+  } finally { initial.release(); }
+});
+
+for (const reconnect of [false, true]) test(`a late initial sync cannot take focus from ${reconnect ? 'a replacement connection' : 'the logged-out credential field'}`, async ({ page }) => {
+  // HTTP requests abort on logout. Hold the non-network restore instead so the
+  // old connect continuation really remains pending across invalidation.
+  const replacement = reconnect ? await holdInitialSyncSession(page, 4) : undefined;
+  await holdInitialSnapshotRestore(page);
+  try {
+    await connect(page, false);
+    await page.waitForFunction(() => window.initialSnapshotGate.entered);
+    await page.evaluate(() => window.initialSnapshotGate.stopIntercepting());
+    await page.locator('#logout').click();
+    await expect(page.locator('#token')).toBeFocused();
+    if (reconnect) {
+      await connect(page, false); await replacement.entered;
+      // The new login still owns its default focus. The old client must not
+      // supply it early while this connection's own initial sync is held.
+      expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+    }
+    await page.evaluate(() => window.initialSnapshotGate.release());
+    if (reconnect) {
+      expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+      replacement.release();
+      await expect(page.locator('#connection-status')).toHaveText('已连接');
+      await expect(page.locator('#message')).toBeFocused();
+    } else {
+      await expect(page.locator('#connect')).toBeVisible();
+      await expect(page.locator('#token')).toBeFocused();
+    }
+  } finally {
+    replacement?.release();
+    await page.evaluate(() => window.initialSnapshotGate?.release()).catch(() => {});
+  }
 });
 
 test('blank title cannot submit and cancel clears the draft', async ({ page }) => {
