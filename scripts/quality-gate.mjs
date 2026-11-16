@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { createWriteStream, existsSync, readFileSync, watch } from 'node:fs';
+import { createWriteStream, existsSync, lstatSync, readFileSync, realpathSync, watch } from 'node:fs';
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { finished } from 'node:stream/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -24,6 +24,27 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const now = () => new Date().toISOString();
 const exists = path => access(path).then(() => true, () => false);
 const message = error => error instanceof Error ? error.message : String(error);
+const samePath = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+
+function canonicalFuturePath(path) {
+  let current = resolve(path);
+  const tail = [];
+  for (;;) {
+    try { lstatSync(current); }
+    catch (error) {
+      if (error.code !== 'ENOENT' || dirname(current) === current) throw error;
+      tail.unshift(basename(current)); current = dirname(current); continue;
+    }
+    return resolve(realpathSync.native(current), ...tail);
+  }
+}
+
+function assertOutsideSource(root, output) {
+  const physicalOutput = canonicalFuturePath(output);
+  const inside = relative(canonicalFuturePath(root), physicalOutput);
+  if (!inside || (!(inside === '..' || inside.startsWith(`..${sep}`)) && !isAbsolute(inside))) throw new Error('Evidence output must be outside the repository');
+  return physicalOutput;
+}
 
 export function parseArgs(args) {
   const options = { only: [...IDS], skip: {} };
@@ -112,7 +133,9 @@ function git(root, args) {
 }
 
 async function sourceIdentity(root, base, head) {
-  if (git(root, ['rev-parse', '--show-toplevel']).replaceAll('\\', '/').toLowerCase() !== root.replaceAll('\\', '/').toLowerCase()) throw new Error('Run from the repository root, not a nested directory');
+  const gitRoot = realpathSync.native(git(root, ['rev-parse', '--show-toplevel']));
+  const requestedRoot = realpathSync.native(root);
+  if (!samePath(gitRoot, requestedRoot)) throw new Error(`Run from the repository root, not a nested directory; Git=${gitRoot}; requested=${requestedRoot}`);
   if (git(root, ['rev-parse', '--verify', `${base}^{commit}`]) !== base || git(root, ['rev-parse', '--verify', `${head}^{commit}`]) !== head) throw new Error('Commit SHA mismatch');
   if (git(root, ['rev-parse', 'HEAD']) !== head) throw new Error('Checked-out HEAD differs from pinned --head');
   git(root, ['merge-base', '--is-ancestor', base, head]);
@@ -219,11 +242,11 @@ async function prepare(root, selected, output, tools) {
 export async function runGate(options, root = resolve(dirname(fileURLToPath(import.meta.url)), '..')) {
   root = resolve(root);
   const output = resolve(options.output ?? join(dirname(root), `${basename(root)}.quality-gate`, `${now().replaceAll(/[:.]/g, '-')}-${randomUUID()}`));
-  const inside = relative(root, output);
-  if (!inside || (!(inside === '..' || inside.startsWith(`..${sep}`)) && !isAbsolute(inside))) throw new Error('Evidence output must be outside the repository');
+  const plannedOutput = assertOutsideSource(root, output);
   // Never overwrite an earlier run, even an empty directory.
   await mkdir(dirname(output), { recursive: true });
   await mkdir(output);
+  if (!samePath(assertOutsideSource(root, output), plannedOutput)) throw new Error('Evidence directory changed physical location');
   const manifest = {
     schemaVersion: 1, startedAt: now(), finishedAt: null, source: { base: options.base, head: options.head },
     host: { platform: process.platform, arch: process.arch }, environmentPolicy: 'Reject nonempty NODE_OPTIONS/npm_config_node_options; children clear these and NODE_TEST_CONTEXT; npm uses --node-options=',
