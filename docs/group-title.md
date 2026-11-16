@@ -12,4 +12,6 @@ On a lost response the dialog freezes the submitted parameters and offers an exa
 
 Session polling updates visible names and initials without replacing focused room buttons or discarding conversation drafts. The rename modal confines keyboard focus and clears drafts when management authority or membership generation changes. Node and Rust desktop bridges allow only the exact POST route.
 
+The app becomes interactive before its initial synchronization finishes. Finishing that synchronization supplies the normal login focus only while focus still belongs to the login flow or document body; it does not take focus back from a navigation button or another control the member has already chosen. A controlled browser regression holds the initial sync session response, moves focus and discovers a remote title, then releases the response and checks both the original button identity and focus. A paired case keeps the ordinary default composer focus covered without sleeps or test retries.
+
 Validation covers private HTTP and SQLite concurrency, retry after restart, legacy snapshots, access denial and rejoin fencing, rollback, active worker continuity, Chromium desktop/narrow layouts, lost responses, conflicting edits, manage-only access and focus after revocation.
