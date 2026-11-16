@@ -85,25 +85,25 @@ export function privateService(engine: PrivateEngine, options: { web?: boolean }
     }
     const changeMatch = /^\/messages\/([^/]+)\/(edit|retract)$/.exec(url.pathname);
     if (changeMatch && body) {
-      const value = commit(() => engine.changeMessage(actor, changeMatch[1]!, changeMatch[2] as 'edit' | 'retract',
+      const value = commit(() => { const result = engine.changeMessage(actor, changeMatch[1]!, changeMatch[2] as 'edit' | 'retract',
         body.expectedRevision as number, stringValue(body.clientEventId, 'client_event_id', 128),
-        changeMatch[2] === 'edit' ? stringValue(body.text, 'text') : undefined, body.expectedMembershipGeneration));
+        changeMatch[2] === 'edit' ? stringValue(body.text, 'text') : undefined, body.expectedMembershipGeneration);
+        if (!result.duplicate && changeMatch[2] === 'edit' && state.config.participationSubscriptions !== undefined) state.claimChatWork(changeMatch[1]!);
+        return result; });
       respond(response, 200, value); return;
     }
     if (url.pathname === '/messages' && body) {
       const value = commit(() => {
         const result = state.createMessage(actor, scopeValue(body), stringValue(body.text, 'text'), stringValue(body.clientEventId, 'client_event_id', 128),
           body.replyToMessageId === undefined ? undefined : stringValue(body.replyToMessageId, 'replyToMessageId', 128), body.expectedMembershipGeneration, body.attachment, body.expectedSendEpoch);
-        if (!result.duplicate && state.evaluate(result.message)) {
-          // Missing execution permissions do not reject otherwise valid chat.
-          try { state.claim(state.config.researchMemberId, result.message.id); } catch { /* audit retains the denial */ }
-        }
+        if (!result.duplicate) state.claimChatWork(result.message.id);
         return result;
       });
       respond(response, value.duplicate ? 200 : 201, value); return;
     }
     if (url.pathname === '/messages' && request.method === 'GET') {
       const runId = url.searchParams.get('runId') ?? undefined;
+      requireCondition(runId || (!request.headers['x-coseat-instance'] && !request.headers['x-coseat-lease']), 400, 'run_required');
       const value = commit(() => {
         if (runId) guard(runId);
         const scope = scopeValue(Object.fromEntries(url.searchParams));

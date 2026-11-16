@@ -140,6 +140,8 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
         }
       }
       if (options.autoDispatch !== false) for (const replacement of state.rebuildInvalidated()) dispatch(replacement);
+      if (!result.duplicate && changeMatch[2] === 'edit' && options.autoDispatch !== false && state.config.participationSubscriptions !== undefined)
+        for (const run of state.claimChatWork(changeMatch[1]!, [state.config.researchMemberId])) dispatch(run);
       respond(response, 200, result); return;
     }
     if (url.pathname === '/messages' && request.method === 'POST') {
@@ -150,10 +152,7 @@ export function controlService(state: ControlState, runtime: RuntimeClient, opti
       respond(response, result.duplicate ? 200 : 201, result);
       if (!result.duplicate && options.autoDispatch !== false) setImmediate(() => {
         try {
-          if (state.evaluate(state.messages.get(result.message.id)!)) {
-            const claimed = state.claim(state.config.researchMemberId, result.message.id);
-            if (!claimed.duplicate) dispatch(claimed.run);
-          }
+          for (const run of state.claimChatWork(result.message.id, [state.config.researchMemberId])) dispatch(run);
         } catch { /* Fail closed: visible chat remains accepted even if work is denied. */ }
       });
       return;
