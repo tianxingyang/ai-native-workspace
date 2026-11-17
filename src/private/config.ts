@@ -1,3 +1,4 @@
+import { participationSubscriptionsValue } from '../control/participation-prefilter.js';
 import { readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { objectValue, requireCondition, scopeValue, stringValue, type Grant, type Member } from '../contracts.js';
@@ -72,7 +73,9 @@ export function parseControlConfig(raw: unknown, env: NodeJS.ProcessEnv): Privat
   });
   requireCondition(new Set(grants.map(g => g.id)).size === grants.length, 400, 'duplicate_grant_id');
   const conversationCreation = c.conversationCreation === undefined ? undefined : creationRuleValue(c.conversationCreation);
-  return { port: Number(port), databasePath, control: { members, tokens, credentialExpiresAt, memberships, grants, researchMemberId, sources: fixtureSources, ...(policy ? { policy } : {}), ...(conversationCreation ? { conversationCreation } : {}) } };
+  const participationSubscriptions = c.participationSubscriptions === undefined ? undefined : participationSubscriptionsValue(c.participationSubscriptions);
+  requireCondition(!participationSubscriptions || participationSubscriptions.every(s => members.some(m => m.id === s.memberId && m.kind === 'agent')), 400, 'unknown_participation_member');
+  return { port: Number(port), databasePath, control: { members, tokens, credentialExpiresAt, memberships, grants, researchMemberId, sources: fixtureSources, ...(participationSubscriptions === undefined ? {} : { participationSubscriptions }), ...(policy ? { policy } : {}), ...(conversationCreation ? { conversationCreation } : {}) } };
 }
 export function parseWorkerConfig(raw: unknown, env: NodeJS.ProcessEnv): PrivateWorkerConfig {
   const c = objectValue(raw);

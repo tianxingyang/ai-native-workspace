@@ -1,3 +1,4 @@
+import { participationSubscriptionsValue, prefilterParticipation, type ParticipationSubscription, type PrefilterDecision } from './participation-prefilter.js';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { PROTOCOL_VERSION, objectValue, requireCondition, resultValue, stringValue, terminal, type Action, type AuthorizationPolicy, type Grant, type Member, type Message, type ResearchResult, type Run, type RuntimeEvent, type Scope, type Source, type WorkPackage } from '../contracts.js';
 import { decideParticipation } from '../participation.js';
@@ -16,6 +17,7 @@ export interface ControlConfig {
   // Private mode has one explicitly expiring credential per member. Dev fixtures omit this map.
   credentialExpiresAt?: Record<string, number>;
   memberships: Record<string, Scope[]>; researchMemberId: string; sources: Source[];
+  participationSubscriptions?: ParticipationSubscription[];
   policy?: AuthorizationPolicy;
   conversationCreation?: ConversationCreationRule;
 }
@@ -24,6 +26,8 @@ interface WorkClaim {
   blockedByCompletion?: true; blockedByInvalidation?: true; reconciliationRequired?: true; requestedWorkKey?: string;
 }
 export class ControlState {
+  readonly participationDecisions: PrefilterDecision[] = [];
+  private readonly participationBindings = new Map<string, { subscriptionDigest: string; history: { messageId: string; revision: number }[] }>();
   private storageEpoch = randomUUID();
   private readonly delivery = new DeliveryJournal();
   private readonly memberships = new MembershipRegistry();
@@ -39,13 +43,15 @@ export class ControlState {
   readonly tasks = new Map<string, Task>();
   private readonly pendingDispatches = new Map<string, PendingDispatch>();
   readonly approvals = new Map<string, { id: string; runId: string; memberId: string; action: string; reason: string; status: 'pending' }>();
-  readonly decisions: { messageId: string; participate: boolean; reason: string }[] = [];
+  readonly decisions: { messageId: string; participate: boolean; reason: string; memberId?: string; sourceRevision?: number; ruleVersion?: string }[] = [];
   readonly audit: { actorId: string; action: string; allowed: boolean; resource: Scope; at: number; reason?: AuthorizationDecision['reason'] | 'policy_revision_changed' | 'grant_revision_changed' | 'grant_expired'; policyVersion?: number; policyDigest?: string; grantIds?: string[]; grantRevisions?: { id: string; revision: number }[] }[] = [];
   private readonly messageKeys = new Map<string, { fingerprint: string; messageId: string }>();
   private readonly claims = new Map<string, string>();
   private readonly resultKeys = new Map<string, { fingerprint: string; messageId: string; receiptId: string }>();
   private readonly toolCalls = new Map<string, number>();
-  constructor(readonly config: ControlConfig, private readonly now = Date.now) {}
+  constructor(readonly config: ControlConfig, private readonly now = Date.now) {
+    if (config.participationSubscriptions !== undefined) config.participationSubscriptions = participationSubscriptionsValue(config.participationSubscriptions);
+  }
 
   snapshot() {
     // A stopped/invalidated assignment is not eligible for a new dispatch.
@@ -53,7 +59,7 @@ export class ControlState {
       const run = this.runs.get(id);
       if (!run || run.status !== 'queued' || run.invalidatedBy) this.pendingDispatches.delete(id);
     }
-    return structuredClone({ storageEpoch: this.storageEpoch, messages: [...this.messages], attachments: [...this.attachments], runs: [...this.runs], approvals: [...this.approvals],
+    return structuredClone({ participationDecisions: this.participationDecisions, participationBindings: [...this.participationBindings], storageEpoch: this.storageEpoch, messages: [...this.messages], attachments: [...this.attachments], runs: [...this.runs], approvals: [...this.approvals],
       decisions: this.decisions, audit: this.audit.slice(-1000), messageKeys: [...this.messageKeys],
       claims: [...this.claims], tasks: [...this.tasks], pendingDispatches: [...this.pendingDispatches], resultKeys: [...this.resultKeys], toolCalls: [...this.toolCalls],
       changes: [...this.changes], changeKeys: [...this.changeKeys], contextRevisions: [...this.contextRevisions], readPositions: [...this.readPositions], delivery: this.delivery.snapshot(), memberships: this.memberships.snapshot(), conversations: this.conversations.snapshot(), threads: this.threads.snapshot() });
@@ -81,6 +87,8 @@ export class ControlState {
     this.threads.restore(data.threads);
     this.decisions.splice(0, this.decisions.length, ...data.decisions);
     this.restoreAudit(data.audit);
+    this.participationDecisions.splice(0, this.participationDecisions.length, ...(data.participationDecisions ?? []));
+    restoreMap(this.participationBindings, data.participationBindings ?? []);
   }
   private migrateLegacyTasks(): void {
     const groups = new Map<string, Run[]>();
@@ -387,6 +395,7 @@ export class ControlState {
       const run = this.currentRun(actorId, runId, 'read');
       requireCondition(run.work.route.conversationId === scope.conversationId && run.work.route.threadId === scope.threadId, 403, 'run_scope_denied');
       this.useTool(run);
+      if (this.participationBindings.has(runId)) return this.participationContext(actorId, this.messages.get(run.sourceMessageId)!).messages;
     }
     return [...this.messages.values()].filter(m => m.conversationId === scope.conversationId && m.threadId === scope.threadId);
   }
@@ -396,6 +405,7 @@ export class ControlState {
     if (runId) {
       const run = this.currentRun(actorId, runId, 'read');
       requireCondition(run.work.route.conversationId === scope.conversationId && run.work.route.threadId === scope.threadId, 403, 'run_scope_denied');
+      requireCondition(!this.participationBindings.has(runId), 403, 'participation_attachment_unavailable');
       this.useTool(run);
     }
     const message = this.messages.get(messageId), text = this.attachments.get(messageId);
@@ -515,13 +525,53 @@ export class ControlState {
     }
     return created;
   }
+  private participationContext(memberId: string, message: Message) {
+    const member = this.config.members.find(m => m.id === memberId);
+    requireCondition(member, 403, 'unknown_member');
+    const subscription = this.config.participationSubscriptions?.find(s => s.memberId === memberId
+      && s.conversationId === message.conversationId && s.threadId === message.threadId);
+    return prefilterParticipation({ member, source: message, subscription,
+      authorKind: this.config.members.find(m => m.id === message.authorId)?.kind,
+      canRead: this.visible(memberId, message), membershipGeneration: this.membershipGeneration(memberId, message),
+      messages: [...this.messages.values()] });
+  }
+  // Explicit ingress recording only. Revalidation must not write unrelated decisions.
+  participationContexts(messageId: string) {
+    const message = this.messages.get(messageId); requireCondition(message, 404, 'source_not_found');
+    return this.config.members.filter(m => m.kind === 'agent').map(member => {
+      const context = this.participationContext(member.id, message);
+      const key = digest(context.decision);
+      if (!this.participationDecisions.some(d => digest(d) === key)) this.participationDecisions.push(context.decision);
+      if (this.participationDecisions.length > 1000) this.participationDecisions.splice(0, this.participationDecisions.length - 1000);
+      return context;
+    });
+  }
+  claimChatWork(messageId: string, dispatchMembers?: string[]): Run[] {
+    const source = this.messages.get(messageId); requireCondition(source, 404, 'source_not_found');
+    const optedIn = this.config.participationSubscriptions !== undefined;
+    if (optedIn) this.participationContexts(messageId);
+    const candidates = optedIn ? this.config.members.filter(m => m.kind === 'agent').map(m => m.id) : [this.config.researchMemberId];
+    const runs: Run[] = [];
+    for (const member of candidates) {
+      if (dispatchMembers && !dispatchMembers.includes(member)) continue;
+      if (!this.evaluate(source, member)) continue;
+      const slots = optedIn ? this.participationContext(member, source).subscription!.responsibilities : ['research'] as const;
+      for (const slot of slots) {
+        try { const claim = this.claimWork(member, messageId, source.revision, slot); if (!claim.duplicate) runs.push(claim.run); }
+        catch { /* Valid chat survives missing execution grants; later candidates remain eligible. */ }
+      }
+    }
+    return runs;
+  }
   evaluate(message: Message, memberId = this.config.researchMemberId): boolean {
     if (message.retracted) return false;
+    if (this.config.participationSubscriptions !== undefined && !this.participationContext(memberId, message).decision.candidate) return false;
     // Inaccessible contents never enter the participation policy or worker queue.
     if (!this.visible(memberId, message)) return false;
     const author = this.config.members.find(m => m.id === message.authorId)!;
     const decision = decideParticipation(message, author.kind);
-    this.decisions.push({ messageId: message.id, ...decision });
+    const record = { messageId: message.id, ...decision, ...(this.config.participationSubscriptions === undefined ? {} : { memberId, sourceRevision: message.revision, ruleVersion: 'coseat.participation-keywords.v1' }) };
+    if (this.config.participationSubscriptions === undefined || digest(this.decisions.at(-1) ?? null) !== digest(record)) this.decisions.push(record);
     return decision.participate;
   }
   claim(actorId: string, messageId: string, options: { sourceRevision?: number; slot?: ResearchSlot } = {}) {
@@ -530,6 +580,8 @@ export class ControlState {
   private claimWork(actorId: string, messageId: string, sourceRevision: number | undefined, slot: ResearchSlot, replacesRunId?: string): WorkClaim {
     const source = this.messages.get(messageId);
     requireCondition(source, 404, 'source_not_found');
+    const participation = this.config.participationSubscriptions === undefined ? undefined : this.participationContext(actorId, source);
+    requireCondition(!participation || (participation.decision.candidate && participation.subscription?.responsibilities.includes(slot)), 403, 'participation_denied');
     const readGrant = this.authorize(actorId, 'read', source);
     const grant = this.authorize(actorId, 'claim', source);
     const sendGrant = this.authorize(actorId, 'send', source);
@@ -584,6 +636,7 @@ export class ControlState {
     };
     const run: Run = { id: runId, taskId, memberId: actorId, sourceMessageId: messageId, intent: 'research', work, status: 'queued', events: [] };
     this.runs.set(runId, run);
+    if (participation) this.participationBindings.set(runId, { subscriptionDigest: digest(participation.subscription), history: participation.decision.history });
     const logicalTask: Task = task ?? { id: taskId, workKey: identity.key, workKeys: [], source: { ...work.source }, intent: 'research', slot, ownerId: actorId,
       createdAt: this.now(), currentRunId: runId, runIds: [] };
     logicalTask.currentRunId = runId; logicalTask.runIds.push(runId);
@@ -609,6 +662,13 @@ export class ControlState {
     this.authorizeRunGrant(actorId, run, [action, 'read']);
     const source = this.messages.get(run.sourceMessageId);
     requireCondition(source?.revision === run.work.source.revision, 409, 'source_revision_changed');
+    const binding = this.participationBindings.get(runId);
+    if (this.config.participationSubscriptions !== undefined || binding) {
+      requireCondition(binding, 409, 'participation_binding_required');
+      const context = this.participationContext(actorId, source);
+      requireCondition(context.decision.candidate && digest(context.subscription) === binding.subscriptionDigest
+        && digest(context.decision.history) === digest(binding.history), 409, 'participation_changed');
+    }
     requireCondition(!source.retracted && !run.invalidatedBy && run.work.contextRevision === this.contextRevision(run.work.route), 409, 'context_revision_changed');
     requireCondition(!this.contextBlocked(run), 409, 'context_rebuild_waiting');
     requireCondition(run.status === 'queued' || run.status === 'running' || (allowCompleted && run.status === 'completed'), 409, 'run_not_active');
