@@ -41,3 +41,13 @@ This is configuration-based opt-in, not a subscription lifecycle UI/API. Durable
 catch-up, semantic participation, multi-controller arbitration, and live research
 remain out of scope. Fake/pi-mock execution, synthetic-only sources and publication
 validation are unchanged. No production/provider switch is enabled here.
+
+## Synthetic Agent reconnect coverage
+
+The private-engine regression suite verifies an opted-in Agent, not generic IM synchronization:
+- Queued work survives control restart and exposes only the configured two-message source-bounded window, excluding older, later, and foreign-scope text.
+- The same live worker resends an event batch after a lost acknowledgement without reapplying input. Assertions count actual tool calls, task/run identities, event IDs, publication receipts and ledger entries.
+- Subscription or read-grant revocation while offline prevents queued execution and run-bound reads/publication.
+- An in-flight worker disconnected before subscription revocation receives cancellation on reconnect; both lease-bearing HTTP calls and subsequent runtime tool calls are rejected, with no publication.
+
+All provider output is synthetic. This does not promise provider-process crash replay, historical resubscription catch-up, generic IM sync, or process/token isolation.
